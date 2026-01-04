@@ -187,8 +187,8 @@ export class Editor implements Component {
 		const bottomRight = this.borderColor("─╯");
 		const horizontal = this.borderColor("─");
 
-		// Layout the text - content area is width minus 4 for borders (2 left + 2 right)
-		const contentAreaWidth = width - 4;
+		// Layout the text - content area is width minus 6 for borders (3 left + 3 right)
+		const contentAreaWidth = width - 6;
 		const layoutLines = this.layoutText(contentAreaWidth);
 
 		const result: string[] = [];
@@ -214,11 +214,11 @@ export class Editor implements Component {
 		}
 
 		// Render each layout line
-		// Content area is width - 4 (for prefix and suffix borders)
-		const lineContentWidth = width - 4;
+		// Content area is width - 6 (for "│  " prefix and "  │" suffix borders)
+		const lineContentWidth = width - 6;
 		for (const layoutLine of layoutLines) {
 			let displayText = layoutLine.text;
-			let lineVisibleWidth = visibleWidth(layoutLine.text);
+			let displayWidth = visibleWidth(layoutLine.text);
 
 			// Add cursor if this line has it
 			if (layoutLine.hasCursor && layoutLine.cursorPos !== undefined) {
@@ -233,17 +233,14 @@ export class Editor implements Component {
 					const restAfter = after.slice(firstGrapheme.length);
 					const cursor = `\x1b[7m${firstGrapheme}\x1b[0m`;
 					displayText = before + cursor + restAfter;
-					// lineVisibleWidth stays the same - we're replacing, not adding
+					// displayWidth stays the same - we're replacing, not adding
 				} else {
-					// Cursor is at the end - check if we have room for the cursor
-					if (lineVisibleWidth < lineContentWidth) {
-						// We have room - add thin bar cursor (▏) with blink
-						// \x1b[5m = slow blink, no reverse video so it's a thin line
-						const cursor = "\x1b[5m▏\x1b[0m";
-						displayText = before + cursor;
-						// lineVisibleWidth increases by 1 - we're adding a space
-						lineVisibleWidth = lineVisibleWidth + 1;
-					} else {
+					// Cursor is at the end - add thin blinking bar cursor
+					// The ▏ character has width 1
+					const cursor = "\x1b[5m▏\x1b[0m";
+					displayText = before + cursor;
+					displayWidth += 1; // Account for cursor width
+					if (displayWidth > lineContentWidth) {
 						// Line is at full width - use reverse video on last grapheme if possible
 						// or just show cursor at the end without adding space
 						const beforeGraphemes = [...segmenter.segment(before)];
@@ -256,17 +253,18 @@ export class Editor implements Component {
 								.map((g) => g.segment)
 								.join("");
 							displayText = beforeWithoutLast + cursor;
+							displayWidth -= 1; // Back to original width (reverse video replaces, doesn't add)
 						}
-						// lineVisibleWidth stays the same
 					}
 				}
 			}
 
-			// All lines get 1 char padding on each side for consistent alignment
+			// All lines have consistent 6-char borders (3 left + 3 right)
 			const isLastLine = layoutLine === layoutLines[layoutLines.length - 1];
-			const padding = " ".repeat(Math.max(0, lineContentWidth - lineVisibleWidth - 2));
+			const padding = " ".repeat(Math.max(0, lineContentWidth - displayWidth));
 
 			if (isLastLine) {
+				// Last line: "╰─ " (3) + content + padding + " ─╯" (3) = 6 chars border
 				result.push(`${bottomLeft} ${displayText}${padding} ${bottomRight}`);
 			} else {
 				const leftBorder = this.borderColor("│  ");

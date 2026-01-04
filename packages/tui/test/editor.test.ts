@@ -510,22 +510,29 @@ describe("Editor component", () => {
 
 		it("wraps CJK characters correctly (each is 2 columns wide)", () => {
 			const editor = new Editor(defaultEditorTheme);
-			const width = 10;
+			const width = 16; // 6 chars for borders, 10 for content
 
 			// Each CJK char is 2 columns. "日本語テスト" = 6 chars = 12 columns
 			editor.setText("日本語テスト");
 			const lines = editor.render(width);
 
-			for (let i = 1; i < lines.length - 1; i++) {
+			// All content lines (including last which has bottom border) should be correct width
+			for (let i = 1; i < lines.length; i++) {
 				const lineWidth = visibleWidth(lines[i]!);
 				expect(lineWidth).toBe(width);
 			}
 
-			// Verify content split correctly
-			const contentLines = lines.slice(1, -1).map((l) => stripVTControlCharacters(l).trim());
+			// Verify content split correctly - extract content between borders
+			// Middle lines use "│  " and "  │", last line uses "╰─ " and " ─╯"
+			const contentLines = lines.slice(1).map((l) => {
+				const stripped = stripVTControlCharacters(l);
+				// Both border styles use 3 chars on each side
+				return stripped.slice(3, -3).trim();
+			});
 			expect(contentLines.length).toBe(2);
 			expect(contentLines[0]).toBe("日本語テス"); // 5 chars = 10 columns
-			expect(contentLines[1]).toBe("ト"); // 1 char = 2 columns (+ padding)
+			// Last line has cursor (▏) which we need to strip
+			expect(contentLines[1]?.replace("▏", "")).toBe("ト"); // 1 char = 2 columns (+ cursor + padding)
 		});
 
 		it("handles mixed ASCII and wide characters in wrapping", () => {
@@ -552,9 +559,9 @@ describe("Editor component", () => {
 			// Cursor should be at end (after B)
 			const lines = editor.render(width);
 
-			// The cursor (reverse video space) should be visible
+			// The cursor (blinking thin bar) should be visible
 			const contentLine = lines[1]!;
-			expect(contentLine.includes("\x1b[7m")).toBeTruthy();
+			expect(contentLine.includes("\x1b[5m▏")).toBeTruthy();
 
 			// Line should still be correct width
 			expect(visibleWidth(contentLine)).toBe(width);

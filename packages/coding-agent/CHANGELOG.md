@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.9.1337] - 2026-01-04
+
 ### Changed
 
 - Changed default for `lsp.formatOnWrite` setting from `true` to `false`

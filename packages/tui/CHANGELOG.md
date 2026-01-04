@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [3.9.1337] - 2026-01-04
 ### Added
 
 - Added `setTopBorder()` method to Editor component for displaying custom status content in the top border
