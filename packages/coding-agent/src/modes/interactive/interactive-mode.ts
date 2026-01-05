@@ -968,7 +968,7 @@ export class InteractiveMode {
 					this.ui,
 					(spinner) => theme.fg("accent", spinner),
 					(text) => theme.fg("muted", text),
-					"Working... (esc to interrupt)",
+					`Working${theme.format.ellipsis} (esc to interrupt)`,
 					getSymbolTheme().spinnerFrames,
 				);
 				this.statusContainer.addChild(this.loadingAnimation);
