@@ -221,22 +221,22 @@ function renderDiagnostics(
 		let output = `${icon} ${theme.fg("toolTitle", "Diagnostics")} ${theme.fg("dim", meta.join(", "))}`;
 		const items: DiagnosticItem[] = parsedDiagnostics.length > 0 ? parsedDiagnostics : fallbackDiagnostics;
 		for (let i = 0; i < items.length; i++) {
+			const item = items[i];
 			const isLast = i === items.length - 1;
 			const branch = isLast ? theme.tree.last : theme.tree.branch;
 			const detailPrefix = isLast ? "   " : `${theme.tree.vertical}  `;
-			if ("raw" in items[i]) {
-				output += `\n ${theme.fg("dim", branch)} ${theme.fg("muted", items[i].raw)}`;
+			if ("raw" in item) {
+				output += `\n ${theme.fg("dim", branch)} ${theme.fg("muted", item.raw)}`;
 				continue;
 			}
-			const diag = items[i];
-			const severityColor = severityToColor(diag.severity);
-			const location = `${diag.file}:${diag.line}:${diag.col}`;
+			const severityColor = severityToColor(item.severity);
+			const location = `${item.file}:${item.line}:${item.col}`;
 			output += `\n ${theme.fg("dim", branch)} ${theme.fg(severityColor, location)} ${theme.fg(
 				"dim",
-				`[${diag.severity}]`,
+				`[${item.severity}]`,
 			)}`;
-			if (diag.message) {
-				output += `\n ${theme.fg("dim", detailPrefix)}${theme.fg("muted", trimTo(diag.message, 120, theme))}`;
+			if (item.message) {
+				output += `\n ${theme.fg("dim", detailPrefix)}${theme.fg("muted", trimTo(item.message, 120, theme))}`;
 			}
 		}
 		return new Text(output, 0, 0);
@@ -251,16 +251,16 @@ function renderDiagnostics(
 	const remaining =
 		(parsedDiagnostics.length > 0 ? parsedDiagnostics.length : fallbackDiagnostics.length) - previewItems.length;
 	for (let i = 0; i < previewItems.length; i++) {
+		const item = previewItems[i];
 		const isLast = i === previewItems.length - 1 && remaining <= 0;
 		const branch = isLast ? theme.tree.last : theme.tree.branch;
-		if ("raw" in previewItems[i]) {
-			output += `\n ${theme.fg("dim", branch)} ${theme.fg("muted", previewItems[i].raw)}`;
+		if ("raw" in item) {
+			output += `\n ${theme.fg("dim", branch)} ${theme.fg("muted", item.raw)}`;
 			continue;
 		}
-		const diag = previewItems[i];
-		const severityColor = severityToColor(diag.severity);
-		const location = `${diag.file}:${diag.line}:${diag.col}`;
-		const message = diag.message ? ` ${theme.fg("muted", trimTo(diag.message, 80, theme))}` : "";
+		const severityColor = severityToColor(item.severity);
+		const location = `${item.file}:${item.line}:${item.col}`;
+		const message = item.message ? ` ${theme.fg("muted", trimTo(item.message, 80, theme))}` : "";
 		output += `\n ${theme.fg("dim", branch)} ${theme.fg(severityColor, location)}${message}`;
 	}
 	if (remaining > 0) {
