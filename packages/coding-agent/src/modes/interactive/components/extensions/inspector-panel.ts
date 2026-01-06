@@ -68,7 +68,7 @@ export class InspectorPanel implements Component {
 
 		switch (ext.kind) {
 			case "context-file":
-				content = this.renderFilePreview(ext.path, width);
+				content = this.renderFilePreview(ext.raw, width);
 				break;
 			case "tool":
 				content = this.renderToolArgs(ext.raw, width);
@@ -91,35 +91,38 @@ export class InspectorPanel implements Component {
 		return lines;
 	}
 
-	private renderFilePreview(path: string, width: number): string[] {
+	private renderFilePreview(raw: unknown, width: number): string[] {
 		const lines: string[] = [];
 		lines.push(theme.fg("muted", "Preview:"));
 		lines.push(theme.fg("dim", theme.boxSharp.horizontal.repeat(Math.min(width - 2, 40))));
 
-		try {
-			const content = Bun.file(path).text();
-			// Note: async call to sync context - will show empty on first render
-			// This is acceptable for preview which can populate on next render
-			if (typeof content === "object" && "then" in content) {
-				content.then((text: string) => {
-					const fileLines = text.split("\n").slice(0, 20);
+		const content = this.getContextFileContent(raw);
+		if (!content) {
+			lines.push(theme.fg("dim", "  (no content)"));
+			lines.push("");
+			return lines;
+		}
 
-					for (const line of fileLines) {
-						const highlighted = this.highlightMarkdown(line);
-						lines.push(truncateToWidth(highlighted, width - 2));
-					}
+		const fileLines = content.split("\n");
+		for (const line of fileLines.slice(0, 20)) {
+			const highlighted = this.highlightMarkdown(line);
+			lines.push(truncateToWidth(highlighted, width - 2));
+		}
 
-					if (text.split("\n").length > 20) {
-						lines.push(theme.fg("dim", "(truncated at line 20)"));
-					}
-				});
-			}
-		} catch (err) {
-			lines.push(theme.fg("error", `Failed to read file: ${err instanceof Error ? err.message : String(err)}`));
+		if (fileLines.length > 20) {
+			lines.push(theme.fg("dim", "(truncated at line 20)"));
 		}
 
 		lines.push("");
 		return lines;
+	}
+
+	private getContextFileContent(raw: unknown): string | null {
+		if (raw && typeof raw === "object" && "content" in raw) {
+			const content = (raw as { content?: unknown }).content;
+			return typeof content === "string" ? content : null;
+		}
+		return null;
 	}
 
 	private highlightMarkdown(line: string): string {

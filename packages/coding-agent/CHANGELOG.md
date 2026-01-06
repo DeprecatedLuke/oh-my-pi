@@ -1,8 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added slash commands to the extensions inspector panel for visibility and management
 - Added support for file-based slash commands from `commands/` directories
 - Added `$ARGUMENTS` placeholder for slash command argument substitution, aligning with Claude and Codex conventions
 
@@ -12,6 +14,7 @@
 
 ### Fixed
 
+- Fixed context file preview in inspector panel to display content correctly instead of attempting async file reads
 - Fixed Linux ARM64 installs failing on fresh Debian when the `sharp` module is unavailable during session image compression
 
 ## [3.20.1] - 2026-01-06

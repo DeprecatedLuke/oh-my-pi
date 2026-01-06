@@ -10,6 +10,7 @@ import type { MCPServer } from "../../../../capability/mcp";
 import type { Prompt } from "../../../../capability/prompt";
 import type { Rule } from "../../../../capability/rule";
 import type { Skill } from "../../../../capability/skill";
+import type { SlashCommand } from "../../../../capability/slash-command";
 import type { CustomTool } from "../../../../capability/tool";
 import type { SourceMeta } from "../../../../capability/types";
 import {
@@ -187,6 +188,17 @@ export function loadAllExtensions(cwd?: string, disabledIds?: string[]): Extensi
 		addItems(prompts.all, "prompt", {
 			getDescription: () => undefined,
 			getTrigger: (p) => `/prompts:${p.name}`,
+		});
+	} catch {
+		// Capability may not be registered
+	}
+
+	// Load slash commands
+	try {
+		const commands = loadSync<SlashCommand>("slash-commands", loadOpts);
+		addItems(commands.all, "slash-command", {
+			getDescription: () => undefined,
+			getTrigger: (c) => `/${c.name}`,
 		});
 	} catch {
 		// Capability may not be registered
