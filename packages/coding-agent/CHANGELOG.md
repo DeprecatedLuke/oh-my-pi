@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [3.20.1] - 2026-01-06
 ### Fixed
 
 - Fixed find tool failing to match patterns with path separators (e.g., `reports/**`) by enabling full-path matching in fd
