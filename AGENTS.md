@@ -24,19 +24,20 @@ This project uses Bun as its runtime. Always prefer Bun APIs over Node.js equiva
 // GOOD: Bun.spawn with ReadableStream API
 import type { Subprocess } from "bun";
 
-const child: Subprocess = Bun.spawn(["cmd", ...args], {
+const proc: Subprocess = Bun.spawn(["cmd", ...args], {
    stdin: "ignore",
    stdout: "pipe",
    stderr: "pipe",
 });
 
-const reader = (child.stdout as ReadableStream<Uint8Array>).getReader();
+// Read stdout
+const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
 while (true) {
    const { done, value } = await reader.read();
    if (done) break;
    // process Buffer.from(value)
 }
-const exitCode = await child.exited;
+const exitCode = await proc.exited;
 
 // BAD: Node child_process
 import { spawn } from "node:child_process";
@@ -262,16 +263,15 @@ npx vitest
 npx mocha
 ```
 
-See `docs/bun-migration-guide.md` for full migration reference.
 
 ## Commands
 
-- After code changes: `bun run check` (get full output, no tail)
+- After code changes: `bun run check` (runs biome + tsc, get full output, no tail)
 - For auto-fixable lint issues: `bun run fix` (includes unsafe fixes)
-- NEVER run: `bun run dev`, `bun run build`, `bun test`
+- NEVER run: `bun run dev`, `bun test` unless user instructs
 - Only run specific tests if user instructs: `bun test test/specific.test.ts`
 - NEVER commit unless user asks
-- Do NOT use `tsc` or `npx tsc` - always use `bun run check` which runs the correct type checker
+- Do NOT use `tsc` or `npx tsc` - always use `bun run check`
 
 ## GitHub Issues
 
@@ -281,9 +281,8 @@ When reading issues:
 
 When creating issues:
 
-- Add `pkg:*` labels to indicate which package(s) the issue affects
-  - Available labels: `pkg:agent`, `pkg:ai`, `pkg:coding-agent`, `pkg:mom`, `pkg:tui`, `pkg:web-ui`
-- If an issue spans multiple packages, add all relevant labels
+- Use standard GitHub labels (bug, enhancement, documentation, etc.)
+- If an issue affects a specific package, mention it in the issue title or description
 
 When closing issues via commit:
 
@@ -293,7 +292,6 @@ When closing issues via commit:
 ## Tools
 
 - GitHub CLI for issues/PRs
-- Add package labels to issues/PRs: pkg:agent, pkg:ai, pkg:coding-agent, pkg:mom, pkg:tui, pkg:web-ui
 - TUI interaction: use tmux
 
 ## Style
@@ -311,11 +309,11 @@ Location: `packages/*/CHANGELOG.md` (each package has its own)
 
 Use these sections under `## [Unreleased]`:
 
-- `### Breaking Changes` - API changes requiring migration
 - `### Added` - New features
 - `### Changed` - Changes to existing functionality
 - `### Fixed` - Bug fixes
 - `### Removed` - Removed features
+- `### Breaking Changes` - API changes requiring migration (appears first if present)
 
 ### Rules
 
@@ -325,8 +323,8 @@ Use these sections under `## [Unreleased]`:
 
 ### Attribution
 
-- **Internal changes (from issues)**: `Fixed foo bar ([#123](https://github.com/badlogic/pi-mono/issues/123))`
-- **External contributions**: `Added feature X ([#456](https://github.com/badlogic/pi-mono/pull/456) by [@username](https://github.com/username))`
+- **Internal changes (from issues)**: `Fixed foo bar ([#123](https://github.com/can1357/oh-my-pi/issues/123))`
+- **External contributions**: `Added feature X ([#456](https://github.com/can1357/oh-my-pi/pull/456) by [@username](https://github.com/username))`
 
 ## Releasing
 
@@ -334,9 +332,7 @@ Use these sections under `## [Unreleased]`:
 
 2. **Run release script**:
    ```bash
-   npm run release:patch    # Bug fixes
-   npm run release:minor    # New features
-   npm run release:major    # Breaking changes
+   bun run release
    ```
 
 The script handles: version bump, CHANGELOG finalization, commit, tag, publish, and adding new `[Unreleased]` sections.

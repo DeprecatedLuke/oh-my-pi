@@ -250,72 +250,12 @@ Handles whitespace and indentation variance automatically:
 
 ## Packages
 
-| Package                                                | Description                                                      |
-| ------------------------------------------------------ | ---------------------------------------------------------------- |
-| **[@mariozechner/pi-ai](packages/ai)**                 | Unified multi-provider LLM API (OpenAI, Anthropic, Google, etc.) |
-| **[@oh-my-pi/pi-agent-core](packages/agent)**          | Agent runtime with tool calling and state management             |
-| **[@oh-my-pi/pi-coding-agent](packages/coding-agent)** | Interactive coding agent CLI                                     |
-| **[@oh-my-pi/pi-mom](packages/mom)**                   | Slack bot that delegates messages to the pi coding agent         |
-| **[@oh-my-pi/pi-tui](packages/tui)**                   | Terminal UI library with differential rendering                  |
-| **[@oh-my-pi/pi-web-ui](packages/web-ui)**             | Web components for AI chat interfaces                            |
-
----
-
-## Development
-
-### Setup
-
-```bash
-bun run install:dev   # Install deps and link all packages
-bun run build         # Build all packages
-bun run check         # Lint, format, and type check
-```
-
-> **Note:** `bun run check` requires `bun run build` first. The web-ui package uses `tsc` which needs compiled `.d.ts` files from dependencies.
-
-### Watch Mode
-
-```bash
-bun run dev
-```
-
-Then run directly:
-
-```bash
-cd packages/coding-agent && bunx tsx src/cli.ts
-```
-
-### CI
-
-GitHub Actions runs on push to `main` and on pull requests. The workflow runs `bun run check` and `bun test` for each package in parallel.
-
-**Do not add LLM API keys as secrets.** Tests requiring LLM access use `describe.skipIf()` and run locally.
-
----
-
-## Versioning
-
-All packages use lockstep versioning:
-
-```bash
-bun run version:patch    # 0.7.5 -> 0.7.6
-bun run version:minor    # 0.7.5 -> 0.8.0
-bun run version:major    # 0.7.5 -> 1.0.0
-```
-
-**Never manually edit version numbers.**
-
----
-
-## Publishing
-
-```bash
-bun run release:patch    # Bug fixes
-bun run release:minor    # New features
-bun run release:major    # Breaking changes
-```
-
-Requires an npm token with "Bypass 2FA on publish" enabled.
+| Package                                                | Description                                             |
+| ------------------------------------------------------ | ------------------------------------------------------- |
+| **[@oh-my-pi/pi-agent-core](packages/agent)**          | Agent runtime with tool calling and state management    |
+| **[@oh-my-pi/pi-coding-agent](packages/coding-agent)** | Interactive coding agent CLI                            |
+| **[@oh-my-pi/pi-git-tool](packages/git-tool)**         | Structured Git tool with safety guards and typed output |
+| **[@oh-my-pi/pi-tui](packages/tui)**                   | Terminal UI library with differential rendering         |
 
 ---
 

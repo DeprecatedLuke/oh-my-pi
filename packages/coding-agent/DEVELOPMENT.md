@@ -21,16 +21,17 @@ The coding-agent is structured into distinct layers:
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                       Core Layer                            │
-│  core/agent-session.ts (central abstraction)               │
-│  core/session-manager.ts, core/model-config.ts, etc.       │
+│  core/agent-session.ts, core/sdk.ts (SDK wrapper)          │
+│  core/session-manager.ts, core/model-resolver.ts, etc.     │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                   External Dependencies                     │
-│  @oh-my-pi/pi-agent (Agent, tools)                     │
+│  @oh-my-pi/pi-agent-core (Agent core)                      │
 │  @mariozechner/pi-ai (models, providers)                   │
-│  @oh-my-pi/pi-tui (TUI components)                     │
+│  @oh-my-pi/pi-tui (TUI components)                         │
+│  @oh-my-pi/pi-git-tool (Git tool)                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -40,32 +41,99 @@ The coding-agent is structured into distinct layers:
 src/
 ├── cli.ts                    # CLI entry point (shebang, calls main)
 ├── main.ts                   # Main orchestration, argument handling, mode routing
-├── index.ts                  # Public API exports
+├── index.ts                  # Public API exports (SDK)
 ├── config.ts                 # APP_NAME, VERSION, paths (getAgentDir, etc.)
+├── migrations.ts             # Session/config migration logic
 
 ├── cli/                      # CLI-specific utilities
 │   ├── args.ts               # parseArgs(), printHelp(), Args interface
 │   ├── file-processor.ts     # processFileArguments() for @file args
 │   ├── list-models.ts        # --list-models implementation
-│   └── session-picker.ts     # selectSession() TUI for --resume
+│   ├── plugin-cli.ts         # Plugin management CLI
+│   ├── session-picker.ts     # selectSession() TUI for --resume
+│   └── update-cli.ts         # Self-update CLI
+
+├── capability/               # Capability system (extension types)
+│   ├── index.ts              # Main capability registry and discovery
+│   ├── context-file.ts       # Context file capability
+│   ├── extension.ts          # Extension capability
+│   ├── hook.ts               # Hook capability
+│   ├── instruction.ts        # Instruction capability
+│   ├── mcp.ts                # MCP capability
+│   ├── prompt.ts             # Prompt capability
+│   ├── rule.ts               # Rulebook rule capability
+│   ├── skill.ts              # Skill capability
+│   ├── slash-command.ts      # Slash command capability
+│   ├── system-prompt.ts      # System prompt capability
+│   └── tool.ts               # Tool capability
+
+├── discovery/                # Extension discovery from multiple sources
+│   ├── index.ts              # Main discovery orchestration
+│   ├── builtin.ts            # Built-in extensions
+│   ├── claude.ts             # Claude.md discovery
+│   ├── cline.ts              # Cline .mcp.json discovery
+│   ├── codex.ts              # .codex discovery
+│   ├── cursor.ts             # Cursor .cursorrules discovery
+│   ├── gemini.ts             # Gemini .config discovery
+│   ├── github.ts             # GitHub extension discovery
+│   ├── mcp-json.ts           # MCP JSON discovery
+│   ├── vscode.ts             # VSCode extension discovery
+│   ├── windsurf.ts           # Windsurf discovery
+│   └── helpers.ts            # Discovery helper functions
+
+├── prompts/                  # Prompt templates
+│   ├── system-prompt.md      # Main system prompt
+│   ├── task.md               # Task agent prompt
+│   ├── init.md               # Initialization prompt
+│   ├── compaction-*.md       # Compaction prompts
+│   └── tools/                # Tool-specific prompts
 
 ├── core/                     # Core business logic (mode-agnostic)
 │   ├── index.ts              # Core exports
 │   ├── agent-session.ts      # AgentSession class - THE central abstraction
+│   ├── sdk.ts                # SDK wrapper for programmatic usage
+│   ├── auth-storage.ts       # AuthStorage class - API keys and OAuth tokens
 │   ├── bash-executor.ts      # executeBash() with streaming, abort
-│   ├── compaction.ts         # Context compaction logic
-│   ├── export-html.ts        # exportSession(), exportFromFile()
+│   ├── event-bus.ts          # Event bus for tool communication
+│   ├── exec.ts               # Process execution utilities
+│   ├── file-mentions.ts      # File mention detection
+│   ├── keybindings.ts        # Keybinding configuration
+│   ├── logger.ts             # Winston-based logging
 │   ├── messages.ts           # BashExecutionMessage, messageTransformer
-│   ├── model-config.ts       # findModel(), getAvailableModels(), getApiKeyForModel()
+│   ├── model-registry.ts     # Model registry and configuration
 │   ├── model-resolver.ts     # resolveModelScope(), restoreModelFromSession()
+│   ├── prompt-templates.ts   # Prompt template loading and rendering
 │   ├── session-manager.ts    # SessionManager class - JSONL persistence
 │   ├── settings-manager.ts   # SettingsManager class - user preferences
 │   ├── skills.ts             # loadSkills(), skill discovery from multiple locations
 │   ├── slash-commands.ts     # loadSlashCommands() from ~/.omp/agent/commands/
 │   ├── system-prompt.ts      # buildSystemPrompt(), loadProjectContextFiles()
+│   ├── terminal-notify.ts    # Terminal notification utilities
+│   ├── timings.ts            # Performance timing utilities
+│   ├── title-generator.ts    # Session title generation
+│   ├── ttsr.ts               # Text-to-speech/speech-to-text utilities
+│   ├── utils.ts              # Generic utilities
+│   ├── voice.ts              # Voice input handling
+│   ├── voice-controller.ts   # Voice control logic
+│   ├── voice-supervisor.ts   # Voice supervision logic
 │   │
-│   ├── oauth/                # OAuth authentication (thin wrapper)
-│   │   └── index.ts          # Re-exports from @mariozechner/pi-ai with convenience wrappers
+│   ├── compaction/           # Context compaction system
+│   │   └── index.ts          # Compaction logic, summary generation
+│   │
+│   ├── custom-commands/      # Custom command loading system
+│   │   └── types.ts          # CustomCommand types
+│   │
+│   ├── custom-tools/         # Custom tool loading system
+│   │   ├── index.ts          # Custom tool exports
+│   │   ├── types.ts          # CustomToolFactory, CustomToolDefinition
+│   │   ├── loader.ts         # loadCustomTools() from multiple locations
+│   │   └── wrapper.ts        # Tool wrapper utilities
+│   │
+│   ├── export-html/          # Session export to HTML
+│   │   └── (export logic)
+│   │
+│   ├── extensions/           # Extension system
+│   │   └── (extension loading and execution)
 │   │
 │   ├── hooks/                # Hook system for extending behavior
 │   │   ├── index.ts          # Hook exports
@@ -74,21 +142,39 @@ src/
 │   │   ├── runner.ts         # runHook() event dispatch
 │   │   └── tool-wrapper.ts   # wrapToolsWithHooks() for tool_call events
 │   │
-│   ├── custom-tools/         # Custom tool loading system
-│   │   ├── index.ts          # Custom tool exports
-│   │   ├── types.ts          # CustomToolFactory, CustomToolDefinition
-│   │   └── loader.ts         # loadCustomTools() from multiple locations
+│   ├── mcp/                  # MCP (Model Context Protocol) integration
+│   │   └── (MCP client/server logic)
+│   │
+│   ├── plugins/              # Plugin system
+│   │   └── (plugin loading and management)
 │   │
 │   └── tools/                # Built-in tool implementations
 │       ├── index.ts          # Tool exports, BUILTIN_TOOLS, createTools
+│       ├── ask.ts            # User input tool
 │       ├── bash.ts           # Bash command execution
+│       ├── bash-interceptor.ts # Bash command interception
+│       ├── context.ts        # Tool context utilities
 │       ├── edit.ts           # Surgical file editing
+│       ├── edit-diff.ts      # Diff-based editing
 │       ├── find.ts           # File search by glob
+│       ├── gemini-image.ts   # Gemini image generation
+│       ├── git.ts            # Git operations
 │       ├── grep.ts           # Content search (regex/literal)
 │       ├── ls.ts             # Directory listing
+│       ├── notebook.ts       # Jupyter notebook editing
+│       ├── output.ts         # Output/logging tool
 │       ├── read.ts           # File reading (text and images)
+│       ├── review.ts         # Code review tools
+│       ├── rulebook.ts       # Rulebook tool
 │       ├── write.ts          # File writing
+│       ├── web-fetch.ts      # Web content fetching
+│       ├── exa/              # Exa MCP tools (22 tools)
+│       ├── lsp/              # LSP integration tools
+│       ├── task/             # Task/subagent spawning
+│       ├── web-search/       # Web search tools
 │       ├── path-utils.ts     # Path resolution utilities
+│       ├── renderers.ts      # Tool output renderers
+│       ├── render-utils.ts   # Rendering utilities
 │       └── truncate.ts       # Output truncation utilities
 
 ├── modes/                    # Run mode implementations
@@ -133,8 +219,12 @@ src/
     ├── changelog.ts          # parseChangelog(), getNewEntries()
     ├── clipboard.ts          # copyToClipboard()
     ├── fuzzy.ts              # Fuzzy string matching
+    ├── image-convert.ts      # Image format conversion
+    ├── image-magick.ts       # ImageMagick integration
+    ├── image-resize.ts       # Image resizing utilities
     ├── mime.ts               # MIME type detection
     ├── shell.ts              # getShellConfig()
+    ├── shell-snapshot.ts     # Shell state snapshotting
     └── tools-manager.ts      # ensureTool() - download fd, etc.
 ```
 
@@ -142,7 +232,7 @@ src/
 
 ### AgentSession (core/agent-session.ts)
 
-The central abstraction that wraps the low-level `Agent` with:
+The central abstraction that wraps the SDK Agent with:
 
 - Session persistence (via SessionManager)
 - Settings persistence (via SettingsManager)
@@ -152,8 +242,13 @@ The central abstraction that wraps the low-level `Agent` with:
 - Message queuing
 - Hook integration
 - Custom tool loading
+- Extension/capability system integration
 
 All three modes (interactive, print, rpc) use AgentSession.
+
+### SDK (core/sdk.ts)
+
+Wrapper around `@oh-my-pi/pi-agent-core` that provides a simplified interface for creating and managing agents programmatically. Used by AgentSession and available as a public API through index.ts exports.
 
 ### InteractiveMode (modes/interactive/interactive-mode.ts)
 
@@ -224,49 +319,68 @@ On-demand capability packages:
 
 See [docs/skills.md](docs/skills.md) for full documentation.
 
+### Capability System (capability/)
+
+Unified extension system that discovers and loads capabilities from multiple sources:
+
+- **Extension Discovery** (discovery/): Discovers extensions from Claude.md, .cursorrules, .codex, MCP servers, etc.
+- **Capability Types**: Hooks, tools, context files, rules, skills, slash commands, system prompts, etc.
+- **Multi-source**: Global (~/.omp/), project (.omp/), and built-in capabilities
+
+See [docs/extensions.md](docs/extensions.md) for full documentation.
+
 ## Development Workflow
 
 ### Running in Development
 
-Start the watch build in the monorepo root to continuously rebuild all packages:
+Run the CLI directly with bun (this is a bun-based project):
 
 ```bash
-# Terminal 1: Watch build (from monorepo root)
-npm run dev
-```
+# From monorepo root
+bun run dev
 
-Then run the CLI with tsx in a separate terminal:
-
-```bash
-# Terminal 2: Run CLI (from monorepo root)
-npx tsx packages/coding-agent/src/cli.ts
+# Or run directly
+bun packages/coding-agent/src/cli.ts
 
 # With arguments
-npx tsx packages/coding-agent/src/cli.ts --help
-npx tsx packages/coding-agent/src/cli.ts -p "Hello"
+bun packages/coding-agent/src/cli.ts --help
+bun packages/coding-agent/src/cli.ts -p "Hello"
 
 # RPC mode
-npx tsx packages/coding-agent/src/cli.ts --mode rpc --no-session
+bun packages/coding-agent/src/cli.ts --mode rpc --no-session
 ```
-
-The watch build ensures changes to dependent packages (`pi-agent`, `pi-ai`, `pi-tui`) are automatically rebuilt.
 
 ### Type Checking
 
 ```bash
-# From monorepo root
-npm run check
+# From monorepo root (runs biome + tsgo type check)
+bun run check
+
+# From packages/coding-agent
+bun run check
 ```
 
 ### Building
 
 ```bash
-# Build all packages
-npm run build
+# Type check and build (from packages/coding-agent)
+bun run build
 
 # Build standalone binary
-cd packages/coding-agent
-npm run build:binary
+bun run build:binary
+```
+
+### Testing
+
+```bash
+# Run tests (from packages/coding-agent)
+bun test
+
+# Run specific test pattern
+bun test --testNamePattern="RPC"
+
+# Run RPC example interactively
+bun test/rpc-example.ts
 ```
 
 ## Adding New Features
@@ -279,23 +393,24 @@ npm run build:binary
 ### Adding a New Tool
 
 1. Create tool factory in `core/tools/` following existing patterns (e.g., `createMyTool(session: ToolSession)`)
-2. Export factory from `core/tools/index.ts`
+2. Export factory and types from `core/tools/index.ts`
 3. Add to `BUILTIN_TOOLS` map in `core/tools/index.ts`
-4. Add description to `toolDescriptions` in `core/system-prompt.ts`
+4. Add tool prompt template to `prompts/tools/` if needed
+5. Tool will automatically be included in system prompt
 
 ### Adding a New Hook Event
 
-1. Add event type to `HookEvent` union in `core/hooks/types.ts`
+1. Add event type to hook event types in `core/hooks/types.ts`
 2. Add emission point in relevant code (AgentSession, tool wrapper, etc.)
-3. Document in `docs/hooks.md`
+3. Update `docs/hooks.md` with the new event type
 
 ### Adding a New RPC Command
 
-1. Add command type to `RpcCommand` union in `rpc-types.ts`
-2. Add response type to `RpcResponse` union in `rpc-types.ts`
-3. Add handler case in `handleCommand()` switch in `rpc-mode.ts`
-4. Add client method in `RpcClient` class in `rpc-client.ts`
-5. Document in `docs/rpc.md`
+1. Add command type to `RpcCommand` union in `modes/rpc/rpc-types.ts`
+2. Add response type to `RpcResponse` union in `modes/rpc/rpc-types.ts`
+3. Add handler case in `handleCommand()` switch in `modes/rpc/rpc-mode.ts`
+4. Add client method in `RpcClient` class in `modes/rpc/rpc-client.ts`
+5. Update `docs/rpc.md` with the new command
 
 ### Adding a New Selector
 
@@ -322,25 +437,51 @@ private showMySelector(): void {
 }
 ```
 
-## Testing
+### Adding a New Extension Source
 
-The package uses E2E tests only (no unit tests by design). Tests are in `test/`:
+1. Create discovery module in `discovery/` (e.g., `my-source.ts`)
+2. Implement discovery functions that return capability objects
+3. Add to discovery chain in `discovery/index.ts`
+4. Update `docs/extension-loading.md` with the new source
 
-```bash
-# Run all tests
-npm test
+### Adding a New Capability Type
 
-# Run specific test pattern
-npm test -- --testNamePattern="RPC"
-
-# Run RPC example interactively
-npx tsx test/rpc-example.ts
-```
+1. Create capability module in `capability/` (e.g., `my-capability.ts`)
+2. Define capability type and schema
+3. Add to capability registry in `capability/index.ts`
+4. Add loader/handler in relevant core module
+5. Update `docs/extensions.md` with the new capability type
 
 ## Code Style
 
+- TypeScript with strict type checking (tsgo)
 - No `any` types unless absolutely necessary
 - No inline dynamic imports
-- Use `showStatus()` for dim status messages
-- Use `showError()` / `showWarning()` for errors/warnings
+- Formatting via Biome (`bun run check` or `bun run fix`)
 - Keep InteractiveMode focused on UI, delegate logic to AgentSession
+- Use event bus for tool/extension communication
+
+## Package Structure
+
+This is part of a monorepo with the following packages:
+
+- `@oh-my-pi/pi-coding-agent` (this package) - Main CLI and TUI
+- `@oh-my-pi/pi-agent-core` - Core agent implementation
+- `@oh-my-pi/pi-tui` - TUI components
+- `@oh-my-pi/pi-git-tool` - Git tool integration
+- `@mariozechner/pi-ai` - External AI provider library
+
+## Documentation
+
+See the `docs/` directory for detailed documentation:
+
+- `docs/sdk.md` - SDK usage and examples
+- `docs/rpc.md` - RPC protocol documentation
+- `docs/hooks.md` - Hook system documentation
+- `docs/extensions.md` - Extension system documentation
+- `docs/custom-tools.md` - Custom tool development
+- `docs/skills.md` - Skill system documentation
+- `docs/compaction.md` - Context compaction system
+- `docs/session.md` - Session management
+- `docs/theme.md` - Theme customization
+- `docs/tui.md` - TUI architecture
