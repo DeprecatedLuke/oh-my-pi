@@ -10,7 +10,11 @@ interface GoModuleInfo {
 /**
  * Handle pkg.go.dev URLs via proxy API and page parsing
  */
-export const handleGoPkg: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleGoPkg: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "pkg.go.dev") return null;
@@ -58,7 +62,7 @@ export const handleGoPkg: SpecialHandler = async (url: string, timeout: number):
 		if (version === "latest") {
 			try {
 				const proxyUrl = `https://proxy.golang.org/${encodeURIComponent(modulePath)}/@latest`;
-				const proxyResult = await loadPage(proxyUrl, { timeout });
+				const proxyResult = await loadPage(proxyUrl, { timeout, signal });
 
 				if (proxyResult.ok) {
 					moduleInfo = JSON.parse(proxyResult.content) as GoModuleInfo;
@@ -70,7 +74,7 @@ export const handleGoPkg: SpecialHandler = async (url: string, timeout: number):
 		} else {
 			try {
 				const proxyUrl = `https://proxy.golang.org/${encodeURIComponent(modulePath)}/@v/${encodeURIComponent(version)}.info`;
-				const proxyResult = await loadPage(proxyUrl, { timeout });
+				const proxyResult = await loadPage(proxyUrl, { timeout, signal });
 
 				if (proxyResult.ok) {
 					moduleInfo = JSON.parse(proxyResult.content) as GoModuleInfo;
@@ -81,7 +85,7 @@ export const handleGoPkg: SpecialHandler = async (url: string, timeout: number):
 		}
 
 		// Fetch the pkg.go.dev page
-		const pageResult = await loadPage(url, { timeout });
+		const pageResult = await loadPage(url, { timeout, signal });
 		if (!pageResult.ok) {
 			return {
 				url,

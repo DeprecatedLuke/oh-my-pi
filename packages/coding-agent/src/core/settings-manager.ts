@@ -70,8 +70,17 @@ export interface ProviderSettings {
 	image?: ImageProviderOption; // default: "auto" (openrouter > gemini)
 }
 
+export interface BashInterceptorRule {
+	pattern: string;
+	flags?: string;
+	tool: string;
+	message: string;
+}
+
 export interface BashInterceptorSettings {
 	enabled?: boolean; // default: false (blocks shell commands that have dedicated tools)
+	simpleLs?: boolean; // default: true (intercept bare ls commands)
+	patterns?: BashInterceptorRule[]; // default: built-in rules
 }
 
 export interface GitSettings {
@@ -191,6 +200,140 @@ export interface Settings {
 	statusLine?: StatusLineSettings; // Status line configuration
 }
 
+export const DEFAULT_BASH_INTERCEPTOR_RULES: BashInterceptorRule[] = [
+	{
+		pattern: "^\\s*(cat|head|tail|less|more)\\s+",
+		tool: "read",
+		message: "Use the `read` tool instead of cat/head/tail. It provides better context and handles binary files.",
+	},
+	{
+		pattern: "^\\s*(grep|rg|ripgrep|ag|ack)\\s+",
+		tool: "grep",
+		message: "Use the `grep` tool instead of grep/rg. It respects .gitignore and provides structured output.",
+	},
+	{
+		pattern: "^\\s*git(\\s+|$)",
+		tool: "git",
+		message:
+			"Use the `git` tool instead of running git in bash. It provides structured output and safety confirmations.",
+	},
+	{
+		pattern: "^\\s*(find|fd|locate)\\s+.*(-name|-iname|-type|--type|-glob)",
+		tool: "find",
+		message: "Use the `find` tool instead of find/fd. It respects .gitignore and is faster for glob patterns.",
+	},
+	{
+		pattern: "^\\s*sed\\s+(-i|--in-place)",
+		tool: "edit",
+		message: "Use the `edit` tool instead of sed -i. It provides diff preview and fuzzy matching.",
+	},
+	{
+		pattern: "^\\s*perl\\s+.*-[pn]?i",
+		tool: "edit",
+		message: "Use the `edit` tool instead of perl -i. It provides diff preview and fuzzy matching.",
+	},
+	{
+		pattern: "^\\s*awk\\s+.*-i\\s+inplace",
+		tool: "edit",
+		message: "Use the `edit` tool instead of awk -i inplace. It provides diff preview and fuzzy matching.",
+	},
+	{
+		pattern: "^\\s*(echo|printf|cat\\s*<<)\\s+.*[^|]>\\s*\\S",
+		tool: "write",
+		message: "Use the `write` tool instead of echo/cat redirection. It handles encoding and provides confirmation.",
+	},
+];
+
+const DEFAULT_BASH_INTERCEPTOR_SETTINGS: Required<BashInterceptorSettings> = {
+	enabled: false,
+	simpleLs: true,
+	patterns: DEFAULT_BASH_INTERCEPTOR_RULES,
+};
+
+const DEFAULT_SETTINGS: Settings = {
+	compaction: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 },
+	branchSummary: { enabled: false, reserveTokens: 16384 },
+	retry: { enabled: true, maxRetries: 3, baseDelayMs: 2000 },
+	skills: {
+		enabled: true,
+		enableCodexUser: true,
+		enableClaudeUser: true,
+		enableClaudeProject: true,
+		enablePiUser: true,
+		enablePiProject: true,
+		customDirectories: [],
+		ignoredSkills: [],
+		includeSkills: [],
+	},
+	commands: { enableClaudeUser: true, enableClaudeProject: true },
+	terminal: { showImages: true },
+	images: { autoResize: true },
+	notifications: { onComplete: "auto" },
+	exa: {
+		enabled: true,
+		enableSearch: true,
+		enableLinkedin: false,
+		enableCompany: false,
+		enableResearcher: false,
+		enableWebsets: false,
+	},
+	bashInterceptor: DEFAULT_BASH_INTERCEPTOR_SETTINGS,
+	git: { enabled: false },
+	mcp: { enableProjectConfig: true },
+	lsp: { formatOnWrite: false, diagnosticsOnWrite: true, diagnosticsOnEdit: false },
+	edit: { fuzzyMatch: true },
+	ttsr: { enabled: true, contextMode: "discard", repeatMode: "once", repeatGap: 10 },
+	voice: {
+		enabled: false,
+		transcriptionModel: "whisper-1",
+		ttsModel: "gpt-4o-mini-tts",
+		ttsVoice: "alloy",
+		ttsFormat: "wav",
+	},
+	providers: { webSearch: "auto", image: "auto" },
+} satisfies Settings;
+
+function normalizeBashInterceptorRule(rule: unknown): BashInterceptorRule | null {
+	if (!rule || typeof rule !== "object" || Array.isArray(rule)) return null;
+
+	const candidate = rule as Record<string, unknown>;
+	const pattern = typeof candidate.pattern === "string" ? candidate.pattern : "";
+	const tool = typeof candidate.tool === "string" ? candidate.tool : "";
+	const message = typeof candidate.message === "string" ? candidate.message : "";
+	const flags = typeof candidate.flags === "string" && candidate.flags.length > 0 ? candidate.flags : undefined;
+
+	if (!pattern || !tool || !message) return null;
+	return { pattern, flags, tool, message };
+}
+
+function normalizeBashInterceptorSettings(
+	settings: BashInterceptorSettings | undefined,
+): Required<BashInterceptorSettings> {
+	const enabled = settings?.enabled ?? DEFAULT_BASH_INTERCEPTOR_SETTINGS.enabled;
+	const simpleLs = settings?.simpleLs ?? DEFAULT_BASH_INTERCEPTOR_SETTINGS.simpleLs;
+	const rawPatterns = settings?.patterns;
+	let patterns: BashInterceptorRule[];
+	if (rawPatterns === undefined) {
+		patterns = DEFAULT_BASH_INTERCEPTOR_RULES;
+	} else if (Array.isArray(rawPatterns)) {
+		patterns = rawPatterns
+			.map((rule) => normalizeBashInterceptorRule(rule))
+			.filter((rule): rule is BashInterceptorRule => rule !== null);
+	} else {
+		patterns = DEFAULT_BASH_INTERCEPTOR_RULES;
+	}
+
+	return { enabled, simpleLs, patterns };
+}
+
+function normalizeSettings(settings: Settings): Settings {
+	const merged = deepMergeSettings(DEFAULT_SETTINGS, settings);
+	return {
+		...merged,
+		bashInterceptor: normalizeBashInterceptorSettings(merged.bashInterceptor),
+	};
+}
+
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
 function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 	const result: Settings = { ...base };
@@ -235,7 +378,7 @@ export class SettingsManager {
 		this.persist = persist;
 		this.globalSettings = initialSettings;
 		const projectSettings = this.loadProjectSettings();
-		this.settings = deepMergeSettings(this.globalSettings, projectSettings);
+		this.settings = normalizeSettings(deepMergeSettings(this.globalSettings, projectSettings));
 	}
 
 	/** Create a SettingsManager that loads from files */
@@ -308,7 +451,7 @@ export class SettingsManager {
 
 	/** Apply additional overrides on top of current settings */
 	applyOverrides(overrides: Partial<Settings>): void {
-		this.settings = deepMergeSettings(this.settings, overrides);
+		this.settings = normalizeSettings(deepMergeSettings(this.settings, overrides));
 	}
 
 	private save(): void {
@@ -325,7 +468,7 @@ export class SettingsManager {
 
 			// Re-merge project settings into active settings
 			const projectSettings = this.loadProjectSettings();
-			this.settings = deepMergeSettings(this.globalSettings, projectSettings);
+			this.settings = normalizeSettings(deepMergeSettings(this.globalSettings, projectSettings));
 		} catch (error) {
 			console.error(`Warning: Could not save settings file: ${error}`);
 		}
@@ -680,7 +823,15 @@ export class SettingsManager {
 	}
 
 	getBashInterceptorEnabled(): boolean {
-		return this.settings.bashInterceptor?.enabled ?? false;
+		return this.settings.bashInterceptor?.enabled ?? DEFAULT_BASH_INTERCEPTOR_SETTINGS.enabled;
+	}
+
+	getBashInterceptorSimpleLsEnabled(): boolean {
+		return this.settings.bashInterceptor?.simpleLs ?? DEFAULT_BASH_INTERCEPTOR_SETTINGS.simpleLs;
+	}
+
+	getBashInterceptorRules(): BashInterceptorRule[] {
+		return [...(this.settings.bashInterceptor?.patterns ?? DEFAULT_BASH_INTERCEPTOR_RULES)];
 	}
 
 	setBashInterceptorEnabled(enabled: boolean): void {

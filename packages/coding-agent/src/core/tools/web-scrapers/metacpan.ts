@@ -39,7 +39,11 @@ interface ReleaseResponse {
 /**
  * Handle MetaCPAN URLs via fastapi.metacpan.org
  */
-export const handleMetaCPAN: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleMetaCPAN: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "metacpan.org" && parsed.hostname !== "www.metacpan.org") return null;
@@ -50,21 +54,21 @@ export const handleMetaCPAN: SpecialHandler = async (url: string, timeout: numbe
 		const podMatch = parsed.pathname.match(/^\/pod\/(.+?)(?:\/|$)/);
 		if (podMatch) {
 			const moduleName = decodeURIComponent(podMatch[1]);
-			return await fetchModule(url, moduleName, timeout, fetchedAt);
+			return await fetchModule(url, moduleName, timeout, fetchedAt, signal);
 		}
 
 		// Match /release/AUTHOR/Distribution pattern
 		const releaseMatch = parsed.pathname.match(/^\/release\/([^/]+)\/([^/]+)/);
 		if (releaseMatch) {
 			const distribution = decodeURIComponent(releaseMatch[2]);
-			return await fetchRelease(url, distribution, timeout, fetchedAt);
+			return await fetchRelease(url, distribution, timeout, fetchedAt, signal);
 		}
 
 		// Match /release/Distribution pattern (without author)
 		const simpleReleaseMatch = parsed.pathname.match(/^\/release\/([^/]+)$/);
 		if (simpleReleaseMatch) {
 			const distribution = decodeURIComponent(simpleReleaseMatch[1]);
-			return await fetchRelease(url, distribution, timeout, fetchedAt);
+			return await fetchRelease(url, distribution, timeout, fetchedAt, signal);
 		}
 
 		return null;
@@ -78,9 +82,10 @@ async function fetchModule(
 	moduleName: string,
 	timeout: number,
 	fetchedAt: string,
+	signal?: AbortSignal,
 ): Promise<RenderResult | null> {
 	const apiUrl = `https://fastapi.metacpan.org/v1/module/${moduleName}`;
-	const result = await loadPage(apiUrl, { timeout });
+	const result = await loadPage(apiUrl, { timeout, signal });
 
 	if (!result.ok) return null;
 
@@ -93,7 +98,7 @@ async function fetchModule(
 
 	// Fetch additional release info for dependencies and metadata
 	const releaseUrl = `https://fastapi.metacpan.org/v1/release/${module.distribution}`;
-	const releaseResult = await loadPage(releaseUrl, { timeout: Math.min(timeout, 5) });
+	const releaseResult = await loadPage(releaseUrl, { timeout: Math.min(timeout, 5), signal });
 
 	let release: ReleaseResponse | null = null;
 	if (releaseResult.ok) {
@@ -122,9 +127,10 @@ async function fetchRelease(
 	distribution: string,
 	timeout: number,
 	fetchedAt: string,
+	signal?: AbortSignal,
 ): Promise<RenderResult | null> {
 	const apiUrl = `https://fastapi.metacpan.org/v1/release/${distribution}`;
-	const result = await loadPage(apiUrl, { timeout });
+	const result = await loadPage(apiUrl, { timeout, signal });
 
 	if (!result.ok) return null;
 

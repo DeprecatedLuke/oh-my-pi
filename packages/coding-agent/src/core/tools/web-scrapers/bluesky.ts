@@ -54,11 +54,12 @@ interface ThreadViewPost {
 /**
  * Resolve a handle to DID using the profile API
  */
-async function resolveHandle(handle: string, timeout: number): Promise<string | null> {
+async function resolveHandle(handle: string, timeout: number, signal?: AbortSignal): Promise<string | null> {
 	const url = `${API_BASE}/app.bsky.actor.getProfile?actor=${encodeURIComponent(handle)}`;
 	const result = await loadPage(url, {
 		timeout,
 		headers: { Accept: "application/json" },
+		signal,
 	});
 
 	if (!result.ok) return null;
@@ -148,7 +149,11 @@ function formatPost(post: BlueskyPost, isQuote = false): string {
 /**
  * Handle Bluesky post URLs
  */
-export const handleBluesky: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleBluesky: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (!["bsky.app", "www.bsky.app"].includes(parsed.hostname)) {
@@ -167,7 +172,7 @@ export const handleBluesky: SpecialHandler = async (url: string, timeout: number
 				const rkey = pathParts[3];
 
 				// First resolve handle to DID
-				const did = await resolveHandle(handle, timeout);
+				const did = await resolveHandle(handle, timeout, signal);
 				if (!did) return null;
 
 				// Construct AT URI and fetch thread
@@ -177,6 +182,7 @@ export const handleBluesky: SpecialHandler = async (url: string, timeout: number
 				const result = await loadPage(threadUrl, {
 					timeout,
 					headers: { Accept: "application/json" },
+					signal,
 				});
 
 				if (!result.ok) return null;
@@ -230,6 +236,7 @@ export const handleBluesky: SpecialHandler = async (url: string, timeout: number
 			const result = await loadPage(profileUrl, {
 				timeout,
 				headers: { Accept: "application/json" },
+				signal,
 			});
 
 			if (!result.ok) return null;

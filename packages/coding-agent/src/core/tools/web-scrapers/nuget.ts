@@ -37,7 +37,11 @@ interface NuGetRegistrationIndex {
 /**
  * Handle NuGet URLs via API
  */
-export const handleNuGet: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleNuGet: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "www.nuget.org" && parsed.hostname !== "nuget.org") return null;
@@ -52,7 +56,7 @@ export const handleNuGet: SpecialHandler = async (url: string, timeout: number):
 
 		// Fetch from NuGet registration API (package name must be lowercase)
 		const apiUrl = `https://api.nuget.org/v3/registration5-gz-semver2/${packageName.toLowerCase()}/index.json`;
-		const result = await loadPage(apiUrl, { timeout });
+		const result = await loadPage(apiUrl, { timeout, signal });
 
 		if (!result.ok) return null;
 
@@ -70,7 +74,7 @@ export const handleNuGet: SpecialHandler = async (url: string, timeout: number):
 
 		// If items are not inlined, fetch the page
 		if (!latestPage.items && latestPage["@id"]) {
-			const pageResult = await loadPage(latestPage["@id"], { timeout });
+			const pageResult = await loadPage(latestPage["@id"], { timeout, signal });
 			if (!pageResult.ok) return null;
 			try {
 				latestPage = JSON.parse(pageResult.content);
@@ -91,7 +95,7 @@ export const handleNuGet: SpecialHandler = async (url: string, timeout: number):
 
 				// Fetch page if items not inlined
 				if (!pageItems && page["@id"]) {
-					const pageResult = await loadPage(page["@id"], { timeout: Math.min(timeout, 5) });
+					const pageResult = await loadPage(page["@id"], { timeout: Math.min(timeout, 5), signal });
 					if (pageResult.ok) {
 						try {
 							const fetchedPage = JSON.parse(pageResult.content) as NuGetRegistrationPage;
@@ -121,7 +125,7 @@ export const handleNuGet: SpecialHandler = async (url: string, timeout: number):
 		// Fetch download stats via search API
 		let totalDownloads: number | null = null;
 		const searchUrl = `https://api.nuget.org/v3/query?q=packageid:${encodeURIComponent(packageName)}&prerelease=true&take=1`;
-		const searchResult = await loadPage(searchUrl, { timeout: Math.min(timeout, 5) });
+		const searchResult = await loadPage(searchUrl, { timeout: Math.min(timeout, 5), signal });
 
 		if (searchResult.ok) {
 			try {

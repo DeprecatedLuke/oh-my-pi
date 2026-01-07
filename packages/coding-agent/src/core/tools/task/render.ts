@@ -58,12 +58,20 @@ function formatFindingSummary(findings: ReportFindingDetails[], theme: Theme): s
 		counts.set(finding.priority, (counts.get(finding.priority) ?? 0) + 1);
 	}
 
+	const priorityMeta: Record<number, { icon: string; color: "error" | "warning" | "muted" | "accent" }> = {
+		0: { icon: theme.styledSymbol("status.error", "error"), color: "error" },
+		1: { icon: theme.styledSymbol("status.warning", "warning"), color: "warning" },
+		2: { icon: theme.styledSymbol("status.warning", "muted"), color: "muted" },
+		3: { icon: theme.styledSymbol("status.info", "accent"), color: "accent" },
+	};
+
 	const parts: string[] = [];
 	for (const priority of [0, 1, 2, 3]) {
 		const label = PRIORITY_LABELS[priority] ?? "P?";
-		const color = priority === 0 ? "error" : priority === 1 ? "warning" : "muted";
+		const meta = priorityMeta[priority] ?? { icon: "", color: "muted" as const };
 		const count = counts.get(priority) ?? 0;
-		parts.push(theme.fg(color, `${label}:${count}`));
+		const text = theme.fg(meta.color, `${label}:${count}`);
+		parts.push(meta.icon ? `${meta.icon} ${text}` : text);
 	}
 
 	return `${theme.fg("dim", "Findings:")} ${parts.join(theme.sep.dot)}`;
@@ -123,13 +131,19 @@ function renderJsonTreeLines(
 			pushLine(`${prefix}${iconArray} ${header}`);
 			if (val.length === 0) {
 				pushLine(
-					`${buildTreePrefix([...ancestors, !isLast], theme)}${theme.fg("dim", theme.tree.hook)} ${theme.fg("dim", "[]")}`,
+					`${buildTreePrefix([...ancestors, !isLast], theme)}${theme.fg("dim", theme.tree.hook)} ${theme.fg(
+						"dim",
+						"[]",
+					)}`,
 				);
 				return;
 			}
 			if (depth >= maxDepth) {
 				pushLine(
-					`${buildTreePrefix([...ancestors, !isLast], theme)}${theme.fg("dim", theme.tree.hook)} ${theme.fg("dim", theme.format.ellipsis)}`,
+					`${buildTreePrefix([...ancestors, !isLast], theme)}${theme.fg("dim", theme.tree.hook)} ${theme.fg(
+						"dim",
+						theme.format.ellipsis,
+					)}`,
 				);
 				return;
 			}
@@ -150,13 +164,19 @@ function renderJsonTreeLines(
 			const entries = Object.entries(val as Record<string, unknown>);
 			if (entries.length === 0) {
 				pushLine(
-					`${buildTreePrefix([...ancestors, !isLast], theme)}${theme.fg("dim", theme.tree.hook)} ${theme.fg("dim", "{}")}`,
+					`${buildTreePrefix([...ancestors, !isLast], theme)}${theme.fg("dim", theme.tree.hook)} ${theme.fg(
+						"dim",
+						"{}",
+					)}`,
 				);
 				return;
 			}
 			if (depth >= maxDepth) {
 				pushLine(
-					`${buildTreePrefix([...ancestors, !isLast], theme)}${theme.fg("dim", theme.tree.hook)} ${theme.fg("dim", theme.format.ellipsis)}`,
+					`${buildTreePrefix([...ancestors, !isLast], theme)}${theme.fg("dim", theme.tree.hook)} ${theme.fg(
+						"dim",
+						theme.format.ellipsis,
+					)}`,
 				);
 				return;
 			}
@@ -233,19 +253,25 @@ function renderOutputSection(
  */
 export function renderCall(args: TaskParams, theme: Theme): Component {
 	const label = theme.fg("toolTitle", theme.bold("Task"));
+	const agentTag = theme.italic(
+		theme.fg("dim", `${theme.format.bracketLeft}${args.agent}${theme.format.bracketRight}`),
+	);
 
 	if (args.tasks.length === 1) {
-		// Single task - show agent and task preview
+		// Single task - show description preview
 		const task = args.tasks[0];
-		const summary = task.description?.trim() || task.task;
-		const taskPreview = truncate(summary, 60, theme.format.ellipsis);
-		return new Text(`${label} ${theme.fg("accent", task.agent)}: ${theme.fg("muted", taskPreview)}`, 0, 0);
+		const summary = task.description.trim() || task.task;
+		const taskPreview = truncate(summary, 50, theme.format.ellipsis);
+		return new Text(`${label} ${agentTag} ${theme.fg("muted", taskPreview)}`, 0, 0);
 	}
 
-	// Multiple tasks - show count and descriptions (or agent names as fallback)
-	const agents = args.tasks.map((t) => t.description?.trim() || t.agent).join(", ");
+	// Multiple tasks - show count and descriptions
+	const descriptions = args.tasks.map((t) => t.description.trim()).join(", ");
 	return new Text(
-		`${label} ${theme.fg("muted", `${args.tasks.length} agents: ${truncate(agents, 50, theme.format.ellipsis)}`)}`,
+		`${label} ${agentTag} ${args.tasks.length} agents: ${theme.fg(
+			"muted",
+			truncate(descriptions, 50, theme.format.ellipsis),
+		)}`,
 		0,
 		0,
 	);
@@ -275,23 +301,14 @@ function renderAgentProgress(
 				? "error"
 				: "accent";
 
-	// Main status line - use taskId for Output tool
-	let statusLine = `${prefix} ${theme.fg(iconColor, icon)} ${theme.fg("accent", progress.taskId)}`;
+	// Main status line: taskId: description [status] · stats · ⟨agent⟩
 	const description = progress.description?.trim();
-	if (description) {
-		statusLine += ` ${theme.fg("muted", truncate(description, 40, theme.format.ellipsis))}`;
-	}
+	const titlePart = description ? `${theme.bold(progress.taskId)}: ${description}` : progress.taskId;
+	let statusLine = `${prefix} ${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)}`;
 
 	// Only show badge for non-running states (spinner already indicates running)
-	if (progress.status !== "running") {
-		const statusLabel =
-			progress.status === "completed"
-				? "done"
-				: progress.status === "failed"
-					? "failed"
-					: progress.status === "aborted"
-						? "aborted"
-						: "pending";
+	if (progress.status === "failed" || progress.status === "aborted") {
+		const statusLabel = progress.status === "failed" ? "failed" : "aborted";
 		statusLine += ` ${formatBadge(statusLabel, iconColor, theme)}`;
 	}
 
@@ -338,6 +355,21 @@ function renderAgentProgress(
 
 	// Render extracted tool data inline (e.g., review findings)
 	if (progress.extractedToolData) {
+		// For completed tasks, check for review verdict from complete tool
+		if (progress.status === "completed") {
+			const completeData = progress.extractedToolData.complete as Array<{ data: unknown }> | undefined;
+			const reportFindingData = progress.extractedToolData.report_finding as ReportFindingDetails[] | undefined;
+			const reviewData = completeData
+				?.map((c) => c.data as SubmitReviewDetails)
+				.filter((d) => d && typeof d === "object" && "overall_correctness" in d);
+			if (reviewData && reviewData.length > 0) {
+				const summary = reviewData[reviewData.length - 1];
+				const findings = reportFindingData ?? [];
+				lines.push(...renderReviewResult(summary, findings, continuePrefix, expanded, theme));
+				return lines; // Review result handles its own rendering
+			}
+		}
+
 		for (const [toolName, dataArray] of Object.entries(progress.extractedToolData)) {
 			const handler = subprocessToolRegistry.getHandler(toolName);
 			if (handler?.renderInline) {
@@ -381,7 +413,10 @@ function renderReviewResult(
 	const verdictColor = summary.overall_correctness === "correct" ? "success" : "error";
 	const verdictIcon = summary.overall_correctness === "correct" ? theme.status.success : theme.status.error;
 	lines.push(
-		`${continuePrefix}${theme.fg(verdictColor, verdictIcon)} Patch is ${theme.fg(verdictColor, summary.overall_correctness)} ${theme.fg("dim", `(${(summary.confidence * 100).toFixed(0)}% confidence)`)}`,
+		`${continuePrefix} Patch is ${theme.fg(verdictColor, summary.overall_correctness)} ${theme.fg(
+			verdictColor,
+			verdictIcon,
+		)} ${theme.fg("dim", `(${(summary.confidence * 100).toFixed(0)}% confidence)`)}`,
 	);
 
 	// Explanation preview (first ~80 chars when collapsed, full when expanded)
@@ -411,7 +446,7 @@ function renderReviewResult(
 }
 
 /**
- * Render review findings list (used with and without submit_review).
+ * Render review findings list.
  */
 function renderFindings(
 	findings: ReportFindingDetails[],
@@ -472,12 +507,14 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 	const iconColor = success ? "success" : "error";
 	const statusText = aborted ? "aborted" : success ? "done" : "failed";
 
-	// Main status line - use taskId for Output tool
-	let statusLine = `${prefix} ${theme.fg(iconColor, icon)} ${theme.fg("accent", result.taskId)} ${formatBadge(statusText, iconColor, theme)}`;
+	// Main status line: taskId: description [status] · stats · ⟨agent⟩
 	const description = result.description?.trim();
-	if (description) {
-		statusLine += ` ${theme.fg("muted", truncate(description, 40, theme.format.ellipsis))}`;
-	}
+	const titlePart = description ? `${theme.bold(result.taskId)}: ${description}` : result.taskId;
+	let statusLine = `${prefix} ${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)} ${formatBadge(
+		statusText,
+		iconColor,
+		theme,
+	)}`;
 	if (result.tokens > 0) {
 		statusLine += `${theme.sep.dot}${theme.fg("dim", `${formatTokens(result.tokens)} tokens`)}`;
 	}
@@ -489,9 +526,15 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 
 	lines.push(statusLine);
 
-	// Check for review result (submit_review + report_finding)
-	const submitReviewData = result.extractedToolData?.submit_review as SubmitReviewDetails[] | undefined;
+	// Check for review result (complete with review schema + report_finding)
+	const completeData = result.extractedToolData?.complete as Array<{ data: unknown }> | undefined;
 	const reportFindingData = result.extractedToolData?.report_finding as ReportFindingDetails[] | undefined;
+
+	// Extract review verdict from complete tool's data field if it matches SubmitReviewDetails
+	const reviewData = completeData
+		?.map((c) => c.data as SubmitReviewDetails)
+		.filter((d) => d && typeof d === "object" && "overall_correctness" in d);
+	const submitReviewData = reviewData && reviewData.length > 0 ? reviewData : undefined;
 
 	if (submitReviewData && submitReviewData.length > 0) {
 		// Use combined review renderer
@@ -502,7 +545,10 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 	}
 	if (reportFindingData && reportFindingData.length > 0) {
 		lines.push(
-			`${continuePrefix}${theme.fg("warning", theme.status.warning)} ${theme.fg("dim", "Review summary missing (submit_review not called)")}`,
+			`${continuePrefix}${theme.fg("warning", theme.status.warning)} ${theme.fg(
+				"dim",
+				"Review summary missing (complete not called)",
+			)}`,
 		);
 		lines.push(`${continuePrefix}${formatFindingSummary(reportFindingData, theme)}`);
 		lines.push(`${continuePrefix}`); // Spacing
@@ -515,7 +561,7 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 	if (result.extractedToolData) {
 		for (const [toolName, dataArray] of Object.entries(result.extractedToolData)) {
 			// Skip review tools - handled above
-			if (toolName === "submit_review" || toolName === "report_finding") continue;
+			if (toolName === "complete" || toolName === "report_finding") continue;
 
 			const handler = subprocessToolRegistry.getHandler(toolName);
 			if (handler?.renderFinal && (dataArray as unknown[]).length > 0) {

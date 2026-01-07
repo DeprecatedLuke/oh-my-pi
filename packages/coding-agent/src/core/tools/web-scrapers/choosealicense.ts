@@ -50,6 +50,7 @@ function formatSection(title: string, items: string[]): string {
 export const handleChooseALicense: SpecialHandler = async (
 	url: string,
 	timeout: number,
+	signal?: AbortSignal,
 ): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
@@ -65,7 +66,7 @@ export const handleChooseALicense: SpecialHandler = async (
 			: "https://raw.githubusercontent.com/github/choosealicense.com/gh-pages/_pages/appendix.md";
 
 		const fetchedAt = new Date().toISOString();
-		const result = await loadPage(rawUrl, { timeout, headers: { Accept: "text/plain" } });
+		const result = await loadPage(rawUrl, { timeout, headers: { Accept: "text/plain" }, signal });
 		if (!result.ok) return null;
 
 		const { frontmatter, body } = parseFrontmatter(result.content);

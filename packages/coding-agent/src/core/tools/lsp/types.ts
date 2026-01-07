@@ -403,6 +403,7 @@ export interface LspClient {
 	process: Subprocess;
 	requestId: number;
 	diagnostics: Map<string, Diagnostic[]>;
+	diagnosticsVersion: number;
 	openFiles: Map<string, OpenFile>;
 	pendingRequests: Map<number, PendingRequest>;
 	messageBuffer: Uint8Array;

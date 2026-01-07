@@ -1,5 +1,5 @@
 import type { RenderResult, SpecialHandler } from "./types";
-import { finalizeOutput, loadPage } from "./types";
+import { createRequestSignal, finalizeOutput, loadPage } from "./types";
 
 interface GitHubUrl {
 	type: "blob" | "tree" | "repo" | "issue" | "issues" | "pull" | "pulls" | "discussion" | "discussions" | "other";
@@ -70,9 +70,13 @@ function toRawGitHubUrl(gh: GitHubUrl): string {
 /**
  * Fetch from GitHub API
  */
-export async function fetchGitHubApi(endpoint: string, timeout: number): Promise<{ data: unknown; ok: boolean }> {
+export async function fetchGitHubApi(
+	endpoint: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<{ data: unknown; ok: boolean }> {
 	try {
-		const timeoutSignal = AbortSignal.timeout(timeout * 1000);
+		const { signal: requestSignal, cleanup } = createRequestSignal(timeout * 1000, signal);
 
 		const headers: Record<string, string> = {
 			Accept: "application/vnd.github.v3+json",
@@ -85,16 +89,20 @@ export async function fetchGitHubApi(endpoint: string, timeout: number): Promise
 			headers.Authorization = `Bearer ${token}`;
 		}
 
-		const response = await fetch(`https://api.github.com${endpoint}`, {
-			signal: timeoutSignal,
-			headers,
-		});
+		try {
+			const response = await fetch(`https://api.github.com${endpoint}`, {
+				signal: requestSignal,
+				headers,
+			});
 
-		if (!response.ok) {
-			return { data: null, ok: false };
+			if (!response.ok) {
+				return { data: null, ok: false };
+			}
+
+			return { data: await response.json(), ok: true };
+		} finally {
+			cleanup();
 		}
-
-		return { data: await response.json(), ok: true };
 	} catch {
 		return { data: null, ok: false };
 	}
@@ -103,13 +111,17 @@ export async function fetchGitHubApi(endpoint: string, timeout: number): Promise
 /**
  * Render GitHub issue/PR to markdown
  */
-async function renderGitHubIssue(gh: GitHubUrl, timeout: number): Promise<{ content: string; ok: boolean }> {
+async function renderGitHubIssue(
+	gh: GitHubUrl,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<{ content: string; ok: boolean }> {
 	const endpoint =
 		gh.type === "pull"
 			? `/repos/${gh.owner}/${gh.repo}/pulls/${gh.number}`
 			: `/repos/${gh.owner}/${gh.repo}/issues/${gh.number}`;
 
-	const result = await fetchGitHubApi(endpoint, timeout);
+	const result = await fetchGitHubApi(endpoint, timeout, signal);
 	if (!result.ok || !result.data) return { content: "", ok: false };
 
 	const issue = result.data as {
@@ -140,6 +152,7 @@ async function renderGitHubIssue(gh: GitHubUrl, timeout: number): Promise<{ cont
 		const commentsResult = await fetchGitHubApi(
 			`/repos/${gh.owner}/${gh.repo}/issues/${gh.number}/comments?per_page=50`,
 			timeout,
+			signal,
 		);
 		if (commentsResult.ok && Array.isArray(commentsResult.data)) {
 			md += `## Comments (${issue.comments})\n\n`;
@@ -160,8 +173,12 @@ async function renderGitHubIssue(gh: GitHubUrl, timeout: number): Promise<{ cont
 /**
  * Render GitHub issues list to markdown
  */
-async function renderGitHubIssuesList(gh: GitHubUrl, timeout: number): Promise<{ content: string; ok: boolean }> {
-	const result = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}/issues?state=open&per_page=30`, timeout);
+async function renderGitHubIssuesList(
+	gh: GitHubUrl,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<{ content: string; ok: boolean }> {
+	const result = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}/issues?state=open&per_page=30`, timeout, signal);
 	if (!result.ok || !Array.isArray(result.data)) return { content: "", ok: false };
 
 	const issues = result.data as Array<{
@@ -190,9 +207,13 @@ async function renderGitHubIssuesList(gh: GitHubUrl, timeout: number): Promise<{
 /**
  * Render GitHub tree (directory) to markdown
  */
-async function renderGitHubTree(gh: GitHubUrl, timeout: number): Promise<{ content: string; ok: boolean }> {
+async function renderGitHubTree(
+	gh: GitHubUrl,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<{ content: string; ok: boolean }> {
 	// Fetch repo info first to get default branch if ref not specified
-	const repoResult = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}`, timeout);
+	const repoResult = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}`, timeout, signal);
 	if (!repoResult.ok) return { content: "", ok: false };
 
 	const repo = repoResult.data as {
@@ -207,7 +228,11 @@ async function renderGitHubTree(gh: GitHubUrl, timeout: number): Promise<{ conte
 	md += `**Branch:** ${ref}\n\n`;
 
 	// Fetch directory contents
-	const contentsResult = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}/contents/${dirPath}?ref=${ref}`, timeout);
+	const contentsResult = await fetchGitHubApi(
+		`/repos/${gh.owner}/${gh.repo}/contents/${dirPath}?ref=${ref}`,
+		timeout,
+		signal,
+	);
 
 	if (contentsResult.ok && Array.isArray(contentsResult.data)) {
 		const items = contentsResult.data as Array<{
@@ -238,7 +263,7 @@ async function renderGitHubTree(gh: GitHubUrl, timeout: number): Promise<{ conte
 		if (readmeFile) {
 			const readmePath = dirPath ? `${dirPath}/${readmeFile.name}` : readmeFile.name;
 			const rawUrl = `https://raw.githubusercontent.com/${gh.owner}/${gh.repo}/${ref}/${readmePath}`;
-			const readmeResult = await loadPage(rawUrl, { timeout });
+			const readmeResult = await loadPage(rawUrl, { timeout, signal });
 			if (readmeResult.ok) {
 				md += `---\n\n## README\n\n${readmeResult.content}`;
 			}
@@ -251,9 +276,13 @@ async function renderGitHubTree(gh: GitHubUrl, timeout: number): Promise<{ conte
 /**
  * Render GitHub repo to markdown (file list + README)
  */
-async function renderGitHubRepo(gh: GitHubUrl, timeout: number): Promise<{ content: string; ok: boolean }> {
+async function renderGitHubRepo(
+	gh: GitHubUrl,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<{ content: string; ok: boolean }> {
 	// Fetch repo info
-	const repoResult = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}`, timeout);
+	const repoResult = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}`, timeout, signal);
 	if (!repoResult.ok) return { content: "", ok: false };
 
 	const repo = repoResult.data as {
@@ -278,6 +307,7 @@ async function renderGitHubRepo(gh: GitHubUrl, timeout: number): Promise<{ conte
 	const treeResult = await fetchGitHubApi(
 		`/repos/${gh.owner}/${gh.repo}/git/trees/${repo.default_branch}?recursive=1`,
 		timeout,
+		signal,
 	);
 	if (treeResult.ok && treeResult.data) {
 		const tree = (treeResult.data as { tree: Array<{ path: string; type: string }> }).tree;
@@ -294,7 +324,7 @@ async function renderGitHubRepo(gh: GitHubUrl, timeout: number): Promise<{ conte
 	}
 
 	// Fetch README
-	const readmeResult = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}/readme`, timeout);
+	const readmeResult = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}/readme`, timeout, signal);
 	if (readmeResult.ok && readmeResult.data) {
 		const readme = readmeResult.data as { content: string; encoding: string };
 		if (readme.encoding === "base64") {
@@ -309,7 +339,11 @@ async function renderGitHubRepo(gh: GitHubUrl, timeout: number): Promise<{ conte
 /**
  * Handle GitHub URLs specially
  */
-export const handleGitHub: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleGitHub: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	const gh = parseGitHubUrl(url);
 	if (!gh) return null;
 
@@ -321,7 +355,7 @@ export const handleGitHub: SpecialHandler = async (url: string, timeout: number)
 			// Convert to raw URL and fetch
 			const rawUrl = toRawGitHubUrl(gh);
 			notes.push(`Fetched raw: ${rawUrl}`);
-			const result = await loadPage(rawUrl, { timeout });
+			const result = await loadPage(rawUrl, { timeout, signal });
 			if (result.ok) {
 				const output = finalizeOutput(result.content);
 				return {
@@ -340,7 +374,7 @@ export const handleGitHub: SpecialHandler = async (url: string, timeout: number)
 
 		case "tree": {
 			notes.push(`Fetched via GitHub API`);
-			const result = await renderGitHubTree(gh, timeout);
+			const result = await renderGitHubTree(gh, timeout, signal);
 			if (result.ok) {
 				const output = finalizeOutput(result.content);
 				return {
@@ -360,7 +394,7 @@ export const handleGitHub: SpecialHandler = async (url: string, timeout: number)
 		case "issue":
 		case "pull": {
 			notes.push(`Fetched via GitHub API`);
-			const result = await renderGitHubIssue(gh, timeout);
+			const result = await renderGitHubIssue(gh, timeout, signal);
 			if (result.ok) {
 				const output = finalizeOutput(result.content);
 				return {
@@ -379,7 +413,7 @@ export const handleGitHub: SpecialHandler = async (url: string, timeout: number)
 
 		case "issues": {
 			notes.push(`Fetched via GitHub API`);
-			const result = await renderGitHubIssuesList(gh, timeout);
+			const result = await renderGitHubIssuesList(gh, timeout, signal);
 			if (result.ok) {
 				const output = finalizeOutput(result.content);
 				return {
@@ -398,7 +432,7 @@ export const handleGitHub: SpecialHandler = async (url: string, timeout: number)
 
 		case "repo": {
 			notes.push(`Fetched via GitHub API`);
-			const result = await renderGitHubRepo(gh, timeout);
+			const result = await renderGitHubRepo(gh, timeout, signal);
 			if (result.ok) {
 				const output = finalizeOutput(result.content);
 				return {

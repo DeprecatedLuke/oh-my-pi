@@ -14,22 +14,6 @@ export interface ExecOptions {
 	timeout?: number;
 }
 
-async function readStream(stream: ReadableStream<Uint8Array> | undefined): Promise<string> {
-	if (!stream) return "";
-	const reader = stream.getReader();
-	const chunks: Uint8Array[] = [];
-	try {
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			chunks.push(value);
-		}
-	} finally {
-		reader.releaseLock();
-	}
-	return Buffer.concat(chunks).toString();
-}
-
 export async function exec(command: string, args: string[], options?: ExecOptions): Promise<ExecResult> {
 	const cwd = options?.cwd ?? process.cwd();
 	const proc: Subprocess = Bun.spawn([command, ...args], {
@@ -71,8 +55,8 @@ export async function exec(command: string, args: string[], options?: ExecOption
 	}
 
 	const [stdout, stderr, exitCode] = await Promise.all([
-		readStream(proc.stdout as ReadableStream<Uint8Array>),
-		readStream(proc.stderr as ReadableStream<Uint8Array>),
+		(proc.stdout as ReadableStream<Uint8Array>).text(),
+		(proc.stderr as ReadableStream<Uint8Array>).text(),
 		proc.exited,
 	]);
 

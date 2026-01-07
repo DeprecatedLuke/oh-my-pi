@@ -3,8 +3,6 @@
  * Used by both edit.ts (for execution) and tool-execution.ts (for preview rendering).
  */
 
-import { constants } from "node:fs";
-import { access, readFile } from "node:fs/promises";
 import * as Diff from "diff";
 import { resolveToCwd } from "./path-utils";
 
@@ -428,14 +426,23 @@ export async function computeEditDiff(
 
 	try {
 		// Check if file exists and is readable
+		const file = Bun.file(absolutePath);
 		try {
-			await access(absolutePath, constants.R_OK);
+			if (!(await file.exists())) {
+				return { error: `File not found: ${path}` };
+			}
 		} catch {
 			return { error: `File not found: ${path}` };
 		}
 
 		// Read the file
-		const rawContent = await readFile(absolutePath, "utf-8");
+		let rawContent: string;
+		try {
+			rawContent = await file.text();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return { error: message || `Unable to read ${path}` };
+		}
 
 		// Strip BOM before matching (LLM won't include invisible BOM in oldText)
 		const { text: content } = stripBom(rawContent);

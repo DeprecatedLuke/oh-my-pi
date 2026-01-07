@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { nanoid } from "nanoid";
 
 /**
  * Derive artifacts directory from session file path.
@@ -62,14 +63,14 @@ export async function writeArtifacts(
 	const paths = getArtifactPaths(dir, taskId);
 
 	// Write input
-	await fs.promises.writeFile(paths.inputPath, input, "utf-8");
+	await Bun.write(paths.inputPath, input);
 
 	// Write output
-	await fs.promises.writeFile(paths.outputPath, output, "utf-8");
+	await Bun.write(paths.outputPath, output);
 
 	// Write JSONL if events provided
 	if (jsonlEvents && jsonlEvents.length > 0) {
-		await fs.promises.writeFile(paths.jsonlPath, jsonlEvents.join("\n"), "utf-8");
+		await Bun.write(paths.jsonlPath, jsonlEvents.join("\n"));
 		return paths;
 	}
 
@@ -80,7 +81,7 @@ export async function writeArtifacts(
  * Create a temporary artifacts directory.
  */
 export function createTempArtifactsDir(runId?: string): string {
-	const id = runId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+	const id = runId || nanoid();
 	const dir = path.join(os.tmpdir(), `omp-task-${id}`);
 	ensureArtifactsDir(dir);
 	return dir;

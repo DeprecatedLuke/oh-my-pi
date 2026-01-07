@@ -2,6 +2,7 @@ import { unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { completeSimple, type Model } from "@mariozechner/pi-ai";
+import { nanoid } from "nanoid";
 import voiceSummaryPrompt from "../prompts/voice-summary.md" with { type: "text" };
 import { logger } from "./logger";
 import type { ModelRegistry } from "./model-registry";
@@ -99,7 +100,7 @@ function buildRecordingCommand(filePath: string, sampleRate: number, channels: n
 export async function startVoiceRecording(_settings: VoiceSettings): Promise<VoiceRecordingHandle> {
 	const sampleRate = DEFAULT_SAMPLE_RATE;
 	const channels = DEFAULT_CHANNELS;
-	const filePath = join(tmpdir(), `omp-voice-${Date.now()}.wav`);
+	const filePath = join(tmpdir(), `omp-voice-${nanoid()}.wav`);
 	const command = buildRecordingCommand(filePath, sampleRate, channels);
 	if (!command) {
 		throw new Error("No audio recorder found (install sox, arecord, or ffmpeg).");
@@ -233,7 +234,7 @@ function getPlayerCommand(filePath: string, format: VoiceSynthesisResult["format
 }
 
 export async function playAudio(audio: Uint8Array, format: VoiceSynthesisResult["format"]): Promise<void> {
-	const filePath = join(tmpdir(), `omp-voice-tts-${Date.now()}.${format}`);
+	const filePath = join(tmpdir(), `omp-tts-${nanoid()}.${format}`);
 	await Bun.write(filePath, audio);
 
 	const command = getPlayerCommand(filePath, format);

@@ -24,7 +24,11 @@ interface OpenVsxExtension {
 /**
  * Handle Open VSX URLs via their API
  */
-export const handleOpenVsx: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleOpenVsx: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "open-vsx.org" && parsed.hostname !== "www.open-vsx.org") return null;
@@ -40,7 +44,7 @@ export const handleOpenVsx: SpecialHandler = async (url: string, timeout: number
 		const baseUrl = `https://open-vsx.org/api/${encodeURIComponent(namespace)}/${encodeURIComponent(extension)}`;
 		const apiUrl = version ? `${baseUrl}/${encodeURIComponent(version)}` : baseUrl;
 
-		const result = await loadPage(apiUrl, { timeout });
+		const result = await loadPage(apiUrl, { timeout, signal });
 		if (!result.ok) return null;
 
 		let data: OpenVsxExtension;
@@ -54,7 +58,7 @@ export const handleOpenVsx: SpecialHandler = async (url: string, timeout: number
 		const readmeUrl = data.files?.readme;
 		if (readmeUrl) {
 			try {
-				const readmeResult = await loadPage(readmeUrl, { timeout: Math.min(timeout, 10) });
+				const readmeResult = await loadPage(readmeUrl, { timeout: Math.min(timeout, 10), signal });
 				if (readmeResult.ok) readme = readmeResult.content;
 			} catch {}
 		}

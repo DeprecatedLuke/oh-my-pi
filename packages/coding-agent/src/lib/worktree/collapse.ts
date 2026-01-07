@@ -1,3 +1,4 @@
+import { nanoid } from "nanoid";
 import { WorktreeError, WorktreeErrorCode } from "./errors";
 import { git, gitWithStdin } from "./git";
 import { find, remove, type Worktree } from "./operations";
@@ -89,7 +90,7 @@ async function collapseRebase(src: Worktree, dst: Worktree): Promise<string> {
 		throw new WorktreeError("Failed to resolve HEAD", WorktreeErrorCode.COLLAPSE_FAILED);
 	}
 	const originalHead = headResult.stdout.trim();
-	const tempBranch = `wt-collapse-${Date.now()}`;
+	const tempBranch = `wt-collapse-${nanoid()}`;
 
 	await requireGitSuccess(await git(["checkout", "-b", tempBranch], src.path), "Failed to create temp branch");
 

@@ -1,13 +1,6 @@
 import { sendNotification, sendRequest } from "./client";
 import type { Diagnostic, ExpandMacroResult, LspClient, RelatedTest, Runnable, WorkspaceEdit } from "./types";
-import { fileToUri } from "./utils";
-
-/**
- * Wait for specified milliseconds.
- */
-async function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
+import { fileToUri, sleep } from "./utils";
 
 /**
  * Run flycheck (cargo check) and collect diagnostics.
@@ -19,10 +12,56 @@ async function sleep(ms: number): Promise<void> {
  */
 export async function flycheck(client: LspClient, file?: string): Promise<Diagnostic[]> {
 	const textDocument = file ? { uri: fileToUri(file) } : null;
+
+	const countDiagnostics = (diagnostics: Map<string, Diagnostic[]>): number => {
+		let count = 0;
+		for (const diags of diagnostics.values()) {
+			count += diags.length;
+		}
+		return count;
+	};
+
+	// Capture current diagnostic version before triggering flycheck
+	const initialDiagnosticsVersion = client.diagnosticsVersion;
+	const initialDiagnosticsCount = countDiagnostics(client.diagnostics);
+
 	await sendNotification(client, "rust-analyzer/runFlycheck", { textDocument });
 
-	// Wait for diagnostics to accumulate (2 seconds as per reference)
-	await sleep(2000);
+	// Bounded polling: wait for diagnostics to stabilize or timeout
+	// Poll every 100ms for up to 8 seconds (80 iterations)
+	const pollIntervalMs = 100;
+	const maxPollIterations = 80;
+	const stabilityThreshold = 3; // Consider stable after 3 iterations without change
+	const minStableDurationMs = 2000; // Avoid early exit when diagnostics are re-published unchanged.
+	const startTime = Date.now();
+	let lastDiagnosticsVersion = initialDiagnosticsVersion;
+	let lastDiagnosticsCount = initialDiagnosticsCount;
+	let stableIterations = 0;
+
+	for (let i = 0; i < maxPollIterations; i++) {
+		await sleep(pollIntervalMs);
+
+		const currentDiagnosticsVersion = client.diagnosticsVersion;
+		const currentDiagnosticsCount = countDiagnostics(client.diagnostics);
+
+		// Check if diagnostics have stabilized
+		if (currentDiagnosticsVersion === lastDiagnosticsVersion && currentDiagnosticsCount === lastDiagnosticsCount) {
+			stableIterations++;
+			const elapsedMs = Date.now() - startTime;
+			const countChangedFromStart = currentDiagnosticsCount !== initialDiagnosticsCount;
+			if (
+				currentDiagnosticsVersion !== initialDiagnosticsVersion &&
+				stableIterations >= stabilityThreshold &&
+				(countChangedFromStart || elapsedMs >= minStableDurationMs)
+			) {
+				break;
+			}
+		} else {
+			stableIterations = 0;
+			lastDiagnosticsVersion = currentDiagnosticsVersion;
+			lastDiagnosticsCount = currentDiagnosticsCount;
+		}
+	}
 
 	// Collect all diagnostics from client
 	const allDiags: Diagnostic[] = [];

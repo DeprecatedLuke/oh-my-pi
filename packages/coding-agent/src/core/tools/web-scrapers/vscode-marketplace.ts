@@ -99,6 +99,7 @@ function extractRepoLink(properties: MarketplaceProperty[] | undefined): string 
 export const handleVscodeMarketplace: SpecialHandler = async (
 	url: string,
 	timeout: number,
+	signal?: AbortSignal,
 ): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
@@ -123,6 +124,7 @@ export const handleVscodeMarketplace: SpecialHandler = async (
 
 		const result = await loadPage(apiUrl, {
 			timeout,
+			signal,
 			method: "POST",
 			body: payload,
 			headers: {

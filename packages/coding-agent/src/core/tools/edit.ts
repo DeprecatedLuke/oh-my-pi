@@ -20,14 +20,7 @@ import {
 import type { ToolSession } from "./index";
 import { createLspWritethrough, type FileDiagnosticsResult } from "./lsp/index";
 import { resolveToCwd } from "./path-utils";
-import {
-	formatDiagnostics,
-	formatDiffStats,
-	getDiffStats,
-	shortenPath,
-	truncateDiffByHunk,
-	wrapBrackets,
-} from "./render-utils";
+import { createToolUIKit, getDiffStats, shortenPath, truncateDiffByHunk } from "./render-utils";
 
 const editSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
@@ -237,13 +230,14 @@ function formatMetadataLine(lineCount: number | null, language: string | undefin
 
 export const editToolRenderer = {
 	renderCall(args: EditRenderArgs, uiTheme: Theme): Component {
+		const ui = createToolUIKit(uiTheme);
 		const rawPath = args.file_path || args.path || "";
 		const filePath = shortenPath(rawPath);
 		const editLanguage = getLanguageFromPath(rawPath) ?? "text";
 		const editIcon = uiTheme.fg("muted", uiTheme.getLangIcon(editLanguage));
 		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", uiTheme.format.ellipsis);
 
-		const text = `${uiTheme.fg("toolTitle", uiTheme.bold("Edit"))} ${editIcon} ${pathDisplay}`;
+		const text = `${ui.title("Edit")} ${editIcon} ${pathDisplay}`;
 		return new Text(text, 0, 0);
 	},
 
@@ -253,6 +247,7 @@ export const editToolRenderer = {
 		uiTheme: Theme,
 		args?: EditRenderArgs,
 	): Component {
+		const ui = createToolUIKit(uiTheme);
 		const { expanded, renderContext } = options;
 		const rawPath = args?.file_path || args?.path || "";
 		const filePath = shortenPath(rawPath);
@@ -287,11 +282,10 @@ export const editToolRenderer = {
 				text += `\n\n${uiTheme.fg("error", editDiffPreview.error)}`;
 			} else if (editDiffPreview.diff) {
 				const diffStats = getDiffStats(editDiffPreview.diff);
-				text += `\n${uiTheme.fg("dim", uiTheme.format.bracketLeft)}${formatDiffStats(
+				text += `\n${uiTheme.fg("dim", uiTheme.format.bracketLeft)}${ui.formatDiffStats(
 					diffStats.added,
 					diffStats.removed,
 					diffStats.hunks,
-					uiTheme,
 				)}${uiTheme.fg("dim", uiTheme.format.bracketRight)}`;
 
 				const {
@@ -309,7 +303,7 @@ export const editToolRenderer = {
 					if (hiddenLines > 0) remainder.push(`${hiddenLines} more lines`);
 					text += uiTheme.fg(
 						"toolOutput",
-						`\n${uiTheme.format.ellipsis} (${remainder.join(", ")}) ${wrapBrackets("Ctrl+O to expand", uiTheme)}`,
+						`\n${uiTheme.format.ellipsis} (${remainder.join(", ")}) ${ui.wrapBrackets("Ctrl+O to expand")}`,
 					);
 				}
 			}
@@ -317,7 +311,7 @@ export const editToolRenderer = {
 
 		// Show LSP diagnostics if available
 		if (result.details?.diagnostics) {
-			text += formatDiagnostics(result.details.diagnostics, expanded, uiTheme, (fp) =>
+			text += ui.formatDiagnostics(result.details.diagnostics, expanded, (fp: string) =>
 				uiTheme.getLangIcon(getLanguageFromPath(fp)),
 			);
 		}

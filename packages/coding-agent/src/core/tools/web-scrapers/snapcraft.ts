@@ -95,7 +95,11 @@ function extractDownloads(snapInfo: SnapcraftSnap | SnapcraftResponse, data: Sna
 	return null;
 }
 
-export const handleSnapcraft: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleSnapcraft: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "snapcraft.io" && parsed.hostname !== "www.snapcraft.io") return null;
@@ -110,6 +114,7 @@ export const handleSnapcraft: SpecialHandler = async (url: string, timeout: numb
 		const apiUrl = `https://api.snapcraft.io/v2/snaps/info/${encodeURIComponent(snapName)}`;
 		const result = await loadPage(apiUrl, {
 			timeout,
+			signal,
 			headers: {
 				Accept: "application/json",
 				"Snap-Device-Series": "16",

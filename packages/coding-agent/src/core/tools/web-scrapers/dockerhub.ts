@@ -39,7 +39,11 @@ function formatSize(bytes: number): string {
 /**
  * Handle Docker Hub URLs via API
  */
-export const handleDockerHub: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleDockerHub: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (!parsed.hostname.includes("hub.docker.com")) return null;
@@ -67,8 +71,8 @@ export const handleDockerHub: SpecialHandler = async (url: string, timeout: numb
 		const tagsUrl = `https://hub.docker.com/v2/repositories/${namespace}/${repository}/tags/?page_size=10`;
 
 		const [repoResult, tagsResult] = await Promise.all([
-			loadPage(repoUrl, { timeout, headers: { Accept: "application/json" } }),
-			loadPage(tagsUrl, { timeout: Math.min(timeout, 10), headers: { Accept: "application/json" } }),
+			loadPage(repoUrl, { timeout, headers: { Accept: "application/json" }, signal }),
+			loadPage(tagsUrl, { timeout: Math.min(timeout, 10), headers: { Accept: "application/json" }, signal }),
 		]);
 
 		if (!repoResult.ok) return null;

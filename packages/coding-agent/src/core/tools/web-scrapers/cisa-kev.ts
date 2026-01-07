@@ -26,7 +26,11 @@ const KEV_FEED_URL = "https://www.cisa.gov/sites/default/files/feeds/known_explo
 /**
  * Handle CISA Known Exploited Vulnerabilities (KEV) URLs
  */
-export const handleCisaKev: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleCisaKev: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		const hostname = parsed.hostname.toLowerCase();
@@ -44,6 +48,7 @@ export const handleCisaKev: SpecialHandler = async (url: string, timeout: number
 		const result = await loadPage(KEV_FEED_URL, {
 			timeout,
 			headers: { Accept: "application/json" },
+			signal,
 		});
 
 		if (!result.ok) return null;

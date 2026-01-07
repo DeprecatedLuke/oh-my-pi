@@ -1,11 +1,9 @@
-import { existsSync } from "node:fs";
 import path from "node:path";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { globSync } from "glob";
 import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/interactive/theme/theme";
 import readDescription from "../../prompts/tools/read.md" with { type: "text" };
 import { formatDimensionNote, resizeImage } from "../../utils/image-resize";
@@ -13,7 +11,7 @@ import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime";
 import { ensureTool } from "../../utils/tools-manager";
 import type { RenderResultOptions } from "../custom-tools/types";
 import type { ToolSession } from "../sdk";
-import { untilAborted } from "../utils";
+import { ScopeSignal, untilAborted } from "../utils";
 import { createLsTool } from "./ls";
 import { resolveReadPath, resolveToCwd } from "./path-utils";
 import { replaceTabs, shortenPath, wrapBrackets } from "./render-utils";
@@ -55,20 +53,16 @@ function isPathWithin(basePath: string, targetPath: string): boolean {
 	return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }
 
-async function findExistingDirectory(startDir: string): Promise<string | null> {
+async function findExistingDirectory(startDir: string, signal?: AbortSignal): Promise<string | null> {
 	let current = startDir;
 	const root = path.parse(startDir).root;
 
 	while (true) {
+		signal?.throwIfAborted();
 		try {
-			if (existsSync(current)) {
-				// Check if directory by trying to read it as dir
-				try {
-					await Bun.$`test -d ${current}`.quiet();
-					return current;
-				} catch {
-					// Not a directory, continue
-				}
+			const stat = await Bun.file(current).stat();
+			if (stat.isDirectory()) {
+				return current;
 			}
 		} catch {
 			// Keep walking up.
@@ -149,8 +143,56 @@ function similarityScore(a: string, b: string): number {
 	return 1 - distance / maxLen;
 }
 
+async function captureCommandOutput(
+	command: string,
+	args: string[],
+	signal?: AbortSignal,
+): Promise<{ stdout: string; stderr: string; exitCode: number | null; aborted: boolean }> {
+	const child = Bun.spawn([command, ...args], {
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+
+	using scope = new ScopeSignal(signal ? { signal } : undefined);
+	scope.catch(() => {
+		child.kill();
+	});
+
+	const stdoutReader = (child.stdout as ReadableStream<Uint8Array>).getReader();
+	const stderrReader = (child.stderr as ReadableStream<Uint8Array>).getReader();
+	const stdoutDecoder = new TextDecoder();
+	const stderrDecoder = new TextDecoder();
+	let stdout = "";
+	let stderr = "";
+
+	await Promise.all([
+		(async () => {
+			while (true) {
+				const { done, value } = await stdoutReader.read();
+				if (done) break;
+				stdout += stdoutDecoder.decode(value, { stream: true });
+			}
+			stdout += stdoutDecoder.decode();
+		})(),
+		(async () => {
+			while (true) {
+				const { done, value } = await stderrReader.read();
+				if (done) break;
+				stderr += stderrDecoder.decode(value, { stream: true });
+			}
+			stderr += stderrDecoder.decode();
+		})(),
+	]);
+
+	const exitCode = await child.exited;
+
+	return { stdout, stderr, exitCode, aborted: scope.aborted };
+}
+
 async function listCandidateFiles(
 	searchRoot: string,
+	signal?: AbortSignal,
 ): Promise<{ files: string[]; truncated: boolean; error?: string }> {
 	let fdPath: string | undefined;
 	try {
@@ -167,22 +209,48 @@ async function listCandidateFiles(
 
 	const gitignoreFiles = new Set<string>();
 	const rootGitignore = path.join(searchRoot, ".gitignore");
-	if (existsSync(rootGitignore)) {
+	if (await Bun.file(rootGitignore).exists()) {
 		gitignoreFiles.add(rootGitignore);
 	}
 
 	try {
-		const nestedGitignores = globSync("**/.gitignore", {
-			cwd: searchRoot,
-			dot: true,
-			absolute: true,
-			ignore: ["**/node_modules/**", "**/.git/**"],
-		});
-		for (const file of nestedGitignores) {
-			gitignoreFiles.add(file);
+		const gitignoreArgs = [
+			"--type",
+			"f",
+			"--color=never",
+			"--hidden",
+			"--absolute-path",
+			"--glob",
+			".gitignore",
+			"--exclude",
+			"node_modules",
+			"--exclude",
+			".git",
+			searchRoot,
+		];
+		const { stdout, aborted } = await captureCommandOutput(fdPath, gitignoreArgs, signal);
+		if (aborted) {
+			throw new Error("Operation aborted");
 		}
-	} catch {
-		// Ignore glob errors.
+		const output = stdout.trim();
+		if (output) {
+			const nestedGitignores = output
+				.split("\n")
+				.map((line) => line.replace(/\r$/, "").trim())
+				.filter((line) => line.length > 0);
+			for (const file of nestedGitignores) {
+				const normalized = file.replace(/\\/g, "/");
+				if (normalized.includes("/node_modules/") || normalized.includes("/.git/")) {
+					continue;
+				}
+				gitignoreFiles.add(file);
+			}
+		}
+	} catch (error) {
+		if (error instanceof Error && error.message === "Operation aborted") {
+			throw error;
+		}
+		// Ignore gitignore scan errors.
 	}
 
 	for (const gitignorePath of gitignoreFiles) {
@@ -191,16 +259,16 @@ async function listCandidateFiles(
 
 	args.push(".", searchRoot);
 
-	const result = Bun.spawnSync([fdPath, ...args], {
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
-	});
+	const { stdout, stderr, exitCode, aborted } = await captureCommandOutput(fdPath, args, signal);
 
-	const output = result.stdout.toString().trim();
+	if (aborted) {
+		throw new Error("Operation aborted");
+	}
 
-	if (result.exitCode !== 0 && !output) {
-		const errorMsg = result.stderr.toString().trim() || `fd exited with code ${result.exitCode}`;
+	const output = stdout.trim();
+
+	if (exitCode !== 0 && !output) {
+		const errorMsg = stderr.trim() || `fd exited with code ${exitCode ?? -1}`;
 		return { files: [], truncated: false, error: errorMsg };
 	}
 
@@ -219,9 +287,10 @@ async function listCandidateFiles(
 async function findReadPathSuggestions(
 	rawPath: string,
 	cwd: string,
+	signal?: AbortSignal,
 ): Promise<{ suggestions: string[]; scopeLabel?: string; truncated?: boolean; error?: string } | null> {
 	const resolvedPath = resolveToCwd(rawPath, cwd);
-	const searchRoot = await findExistingDirectory(path.dirname(resolvedPath));
+	const searchRoot = await findExistingDirectory(path.dirname(resolvedPath), signal);
 	if (!searchRoot) {
 		return null;
 	}
@@ -233,7 +302,7 @@ async function findReadPathSuggestions(
 		}
 	}
 
-	const { files, truncated, error } = await listCandidateFiles(searchRoot);
+	const { files, truncated, error } = await listCandidateFiles(searchRoot, signal);
 	const scopeLabel = formatScopeLabel(searchRoot, cwd);
 
 	if (error && files.length === 0) {
@@ -259,6 +328,7 @@ async function findReadPathSuggestions(
 	const seen = new Set<string>();
 
 	for (const file of files) {
+		signal?.throwIfAborted();
 		const cleaned = file.replace(/\r$/, "").trim();
 		if (!cleaned) continue;
 
@@ -311,23 +381,26 @@ async function findReadPathSuggestions(
 	return { suggestions, scopeLabel, truncated };
 }
 
-async function convertWithMarkitdown(filePath: string): Promise<{ content: string; ok: boolean; error?: string }> {
+async function convertWithMarkitdown(
+	filePath: string,
+	signal?: AbortSignal,
+): Promise<{ content: string; ok: boolean; error?: string }> {
 	const cmd = await ensureTool("markitdown", true);
 	if (!cmd) {
 		return { content: "", ok: false, error: "markitdown not found (uv/pip unavailable)" };
 	}
 
-	const result = Bun.spawnSync([cmd, filePath], {
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
-	});
+	const { stdout, stderr, exitCode, aborted } = await captureCommandOutput(cmd, [filePath], signal);
 
-	if (result.exitCode === 0 && result.stdout && result.stdout.length > 0) {
-		return { content: result.stdout.toString(), ok: true };
+	if (aborted) {
+		throw new Error("Operation aborted");
 	}
 
-	return { content: "", ok: false, error: result.stderr.toString() || "Conversion failed" };
+	if (exitCode === 0 && stdout.length > 0) {
+		return { content: stdout, ok: true };
+	}
+
+	return { content: "", ok: false, error: stderr.trim() || "Conversion failed" };
 }
 
 const readSchema = Type.Object({
@@ -360,21 +433,12 @@ export function createReadTool(session: ToolSession): AgentTool<typeof readSchem
 				let isDirectory = false;
 				let fileSize = 0;
 				try {
-					if (!existsSync(absolutePath)) {
-						throw { code: "ENOENT" };
-					}
-					const file = Bun.file(absolutePath);
-					fileSize = file.size;
-					// Check if directory
-					try {
-						await Bun.$`test -d ${absolutePath}`.quiet();
-						isDirectory = true;
-					} catch {
-						isDirectory = false;
-					}
+					const stat = await Bun.file(absolutePath).stat();
+					fileSize = stat.size;
+					isDirectory = stat.isDirectory();
 				} catch (error) {
 					if (isNotFoundError(error)) {
-						const suggestions = await findReadPathSuggestions(readPath, session.cwd);
+						const suggestions = await findReadPathSuggestions(readPath, session.cwd, signal);
 						let message = `File not found: ${readPath}`;
 
 						if (suggestions?.suggestions.length) {
@@ -410,7 +474,6 @@ export function createReadTool(session: ToolSession): AgentTool<typeof readSchem
 				let details: ReadToolDetails | undefined;
 
 				if (mimeType) {
-					// Check image file size before reading to prevent OOM during serialization
 					if (fileSize > MAX_IMAGE_SIZE) {
 						const sizeStr = formatSize(fileSize);
 						const maxStr = formatSize(MAX_IMAGE_SIZE);
@@ -424,32 +487,45 @@ export function createReadTool(session: ToolSession): AgentTool<typeof readSchem
 						// Read as image (binary)
 						const file = Bun.file(absolutePath);
 						const buffer = await file.arrayBuffer();
-						const base64 = Buffer.from(buffer).toString("base64");
 
-						if (autoResizeImages) {
-							// Resize image if needed
-							const resized = await resizeImage({ type: "image", data: base64, mimeType });
-							const dimensionNote = formatDimensionNote(resized);
-
-							let textNote = `Read image file [${resized.mimeType}]`;
-							if (dimensionNote) {
-								textNote += `\n${dimensionNote}`;
-							}
-
+						// Check actual buffer size after reading to prevent OOM during serialization
+						if (buffer.byteLength > MAX_IMAGE_SIZE) {
+							const sizeStr = formatSize(buffer.byteLength);
+							const maxStr = formatSize(MAX_IMAGE_SIZE);
 							content = [
-								{ type: "text", text: textNote },
-								{ type: "image", data: resized.data, mimeType: resized.mimeType },
+								{
+									type: "text",
+									text: `[Image file too large: ${sizeStr} exceeds ${maxStr} limit. Use an image viewer or resize the image.]`,
+								},
 							];
 						} else {
-							content = [
-								{ type: "text", text: `Read image file [${mimeType}]` },
-								{ type: "image", data: base64, mimeType },
-							];
+							const base64 = Buffer.from(buffer).toString("base64");
+
+							if (autoResizeImages) {
+								// Resize image if needed
+								const resized = await resizeImage({ type: "image", data: base64, mimeType });
+								const dimensionNote = formatDimensionNote(resized);
+
+								let textNote = `Read image file [${resized.mimeType}]`;
+								if (dimensionNote) {
+									textNote += `\n${dimensionNote}`;
+								}
+
+								content = [
+									{ type: "text", text: textNote },
+									{ type: "image", data: resized.data, mimeType: resized.mimeType },
+								];
+							} else {
+								content = [
+									{ type: "text", text: `Read image file [${mimeType}]` },
+									{ type: "image", data: base64, mimeType },
+								];
+							}
 						}
 					}
 				} else if (CONVERTIBLE_EXTENSIONS.has(ext)) {
 					// Convert document via markitdown
-					const result = await convertWithMarkitdown(absolutePath);
+					const result = await convertWithMarkitdown(absolutePath, signal);
 					if (result.ok) {
 						// Apply truncation to converted content
 						const truncation = truncateHead(result.content);

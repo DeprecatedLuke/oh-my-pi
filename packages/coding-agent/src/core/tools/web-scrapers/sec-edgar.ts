@@ -153,7 +153,11 @@ function buildFilingUrl(cik: string, accessionNumber: string, document: string):
 /**
  * Handle SEC EDGAR URLs via data.sec.gov API
  */
-export const handleSecEdgar: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleSecEdgar: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 
@@ -171,6 +175,7 @@ export const handleSecEdgar: SpecialHandler = async (url: string, timeout: numbe
 		const apiUrl = `https://data.sec.gov/submissions/CIK${cik}.json`;
 		const result = await loadPage(apiUrl, {
 			timeout,
+			signal,
 			headers: {
 				"User-Agent": "CodingAgent/1.0 (research tool)",
 				Accept: "application/json",

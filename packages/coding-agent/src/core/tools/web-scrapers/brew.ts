@@ -58,7 +58,11 @@ function getInstallCount(analytics?: { install?: { "30d"?: Record<string, number
 /**
  * Handle Homebrew formulae and cask URLs via API
  */
-export const handleBrew: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleBrew: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "formulae.brew.sh") return null;
@@ -76,7 +80,7 @@ export const handleBrew: SpecialHandler = async (url: string, timeout: number): 
 			? `https://formulae.brew.sh/api/formula/${encodeURIComponent(name)}.json`
 			: `https://formulae.brew.sh/api/cask/${encodeURIComponent(name)}.json`;
 
-		const result = await loadPage(apiUrl, { timeout });
+		const result = await loadPage(apiUrl, { timeout, signal });
 		if (!result.ok) return null;
 
 		let md: string;

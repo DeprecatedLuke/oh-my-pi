@@ -74,7 +74,7 @@ function renderComments(comments: LobstersComment[], maxDepth = 5): string {
 /**
  * Handle Lobste.rs URLs via JSON API
  */
-export const handleLobsters: SpecialHandler = async (url: string, timeout: number) => {
+export const handleLobsters: SpecialHandler = async (url: string, timeout: number, signal?: AbortSignal) => {
 	try {
 		const parsed = new URL(url);
 		if (!parsed.hostname.includes("lobste.rs")) return null;
@@ -87,7 +87,7 @@ export const handleLobsters: SpecialHandler = async (url: string, timeout: numbe
 		const storyMatch = parsed.pathname.match(/^\/s\/([^/]+)/);
 		if (storyMatch) {
 			jsonUrl = `https://lobste.rs/s/${storyMatch[1]}.json`;
-			const result = await loadPage(jsonUrl, { timeout });
+			const result = await loadPage(jsonUrl, { timeout, signal });
 			if (!result.ok) return null;
 
 			const story = JSON.parse(result.content) as LobstersStoryResponse;
@@ -140,7 +140,7 @@ export const handleLobsters: SpecialHandler = async (url: string, timeout: numbe
 
 			if (!jsonUrl) return null;
 
-			const result = await loadPage(jsonUrl, { timeout });
+			const result = await loadPage(jsonUrl, { timeout, signal });
 			if (!result.ok) return null;
 
 			const stories = JSON.parse(result.content) as LobstersStory[];

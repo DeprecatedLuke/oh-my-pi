@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type AssistantMessage, type AssistantMessageEvent, EventStream, getModel } from "@mariozechner/pi-ai";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import { nanoid } from "nanoid";
 import { AgentSession } from "../src/core/agent-session";
 import { AuthStorage } from "../src/core/auth-storage";
 import { ModelRegistry } from "../src/core/model-registry";
@@ -53,7 +54,7 @@ describe("AgentSession concurrent prompt guard", () => {
 	let tempDir: string;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-concurrent-test-${Date.now()}`);
+		tempDir = join(tmpdir(), `pi-concurrent-test-${nanoid()}`);
 		mkdirSync(tempDir, { recursive: true });
 	});
 

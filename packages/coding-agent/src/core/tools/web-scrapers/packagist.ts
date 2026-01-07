@@ -4,7 +4,11 @@ import { finalizeOutput, formatCount, loadPage } from "./types";
 /**
  * Handle Packagist URLs via JSON API
  */
-export const handlePackagist: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handlePackagist: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "packagist.org" && parsed.hostname !== "www.packagist.org") return null;
@@ -19,7 +23,7 @@ export const handlePackagist: SpecialHandler = async (url: string, timeout: numb
 
 		// Fetch from Packagist JSON API
 		const apiUrl = `https://packagist.org/packages/${vendor}/${packageName}.json`;
-		const result = await loadPage(apiUrl, { timeout });
+		const result = await loadPage(apiUrl, { timeout, signal });
 
 		if (!result.ok) return null;
 

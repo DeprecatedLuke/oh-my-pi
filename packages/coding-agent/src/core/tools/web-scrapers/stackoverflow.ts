@@ -59,6 +59,7 @@ function getSiteParam(hostname: string): string | null {
 export const handleStackOverflow: SpecialHandler = async (
 	url: string,
 	timeout: number,
+	signal?: AbortSignal,
 ): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
@@ -74,7 +75,7 @@ export const handleStackOverflow: SpecialHandler = async (
 
 		// Fetch question with answers
 		const apiUrl = `https://api.stackexchange.com/2.3/questions/${questionId}?order=desc&sort=votes&site=${site}&filter=withbody`;
-		const qResult = await loadPage(apiUrl, { timeout });
+		const qResult = await loadPage(apiUrl, { timeout, signal });
 
 		if (!qResult.ok) return null;
 
@@ -92,7 +93,7 @@ export const handleStackOverflow: SpecialHandler = async (
 
 		// Fetch answers
 		const aUrl = `https://api.stackexchange.com/2.3/questions/${questionId}/answers?order=desc&sort=votes&site=${site}&filter=withbody`;
-		const aResult = await loadPage(aUrl, { timeout });
+		const aResult = await loadPage(aUrl, { timeout, signal });
 
 		if (aResult.ok) {
 			const aData = JSON.parse(aResult.content) as { items: SOAnswer[] };

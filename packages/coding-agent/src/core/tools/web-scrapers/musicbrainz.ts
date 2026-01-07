@@ -81,9 +81,10 @@ function parseEntity(url: URL): { entity: MusicBrainzEntity; mbid: string } | nu
 	return { entity, mbid };
 }
 
-async function fetchJson<T>(apiUrl: string, timeout: number): Promise<T | null> {
+async function fetchJson<T>(apiUrl: string, timeout: number, signal?: AbortSignal): Promise<T | null> {
 	const result = await loadPage(apiUrl, {
 		timeout,
+		signal,
 		headers: {
 			"User-Agent": USER_AGENT,
 			Accept: "application/json",
@@ -224,7 +225,11 @@ function buildRecordingMarkdown(recording: MusicBrainzRecording): string {
 	return md;
 }
 
-export const handleMusicBrainz: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleMusicBrainz: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		const parsedEntity = parseEntity(parsed);
@@ -236,17 +241,17 @@ export const handleMusicBrainz: SpecialHandler = async (url: string, timeout: nu
 
 		if (entity === "artist") {
 			const apiUrl = `https://musicbrainz.org/ws/2/artist/${mbid}?fmt=json&inc=url-rels`;
-			const artist = await fetchJson<MusicBrainzArtist>(apiUrl, timeout);
+			const artist = await fetchJson<MusicBrainzArtist>(apiUrl, timeout, signal);
 			if (!artist) return null;
 			md = buildArtistMarkdown(artist);
 		} else if (entity === "release") {
 			const apiUrl = `https://musicbrainz.org/ws/2/release/${mbid}?fmt=json&inc=recordings`;
-			const release = await fetchJson<MusicBrainzRelease>(apiUrl, timeout);
+			const release = await fetchJson<MusicBrainzRelease>(apiUrl, timeout, signal);
 			if (!release) return null;
 			md = buildReleaseMarkdown(release);
 		} else {
 			const apiUrl = `https://musicbrainz.org/ws/2/recording/${mbid}?fmt=json`;
-			const recording = await fetchJson<MusicBrainzRecording>(apiUrl, timeout);
+			const recording = await fetchJson<MusicBrainzRecording>(apiUrl, timeout, signal);
 			if (!recording) return null;
 			md = buildRecordingMarkdown(recording);
 		}

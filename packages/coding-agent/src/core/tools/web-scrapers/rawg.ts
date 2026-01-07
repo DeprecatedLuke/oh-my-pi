@@ -23,7 +23,11 @@ interface RawgGameResponse {
 	error?: string;
 }
 
-export const handleRawg: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleRawg: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (!isRawgHostname(parsed.hostname)) return null;
@@ -33,7 +37,7 @@ export const handleRawg: SpecialHandler = async (url: string, timeout: number): 
 
 		const fetchedAt = new Date().toISOString();
 		const apiUrl = `https://api.rawg.io/api/games/${encodeURIComponent(slug)}`;
-		const result = await loadPage(apiUrl, { timeout, headers: { Accept: "application/json" } });
+		const result = await loadPage(apiUrl, { timeout, signal, headers: { Accept: "application/json" } });
 
 		if (!result.ok) return null;
 

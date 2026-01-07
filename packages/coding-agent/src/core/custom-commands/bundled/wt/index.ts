@@ -300,7 +300,7 @@ async function handleSpawn(args: SpawnArgs, ctx: HookCommandContext): Promise<st
 async function handleParallel(args: ParallelTask[], ctx: HookCommandContext): Promise<string> {
 	validateDisjointScopes(args.map((t) => t.scope));
 
-	const sessionId = `parallel-${Date.now()}`;
+	const sessionId = `parallel-${nanoid()}`;
 	const agent = await pickAgent(ctx.cwd);
 
 	const worktrees: Array<{ task: ParallelTask; wt: worktree.Worktree; session: worktree.WorktreeSession }> = [];

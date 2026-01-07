@@ -1,5 +1,6 @@
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { nanoid } from "nanoid";
 import { ensureTool } from "../../../utils/tools-manager";
 import { createRequestSignal } from "./types";
 
@@ -62,7 +63,7 @@ export async function convertWithMarkitdown(
 	// Write to temp file with extension hint
 	const ext = extensionHint || ".bin";
 	const tmpDir = tmpdir();
-	const tmpFile = path.join(tmpDir, `omp-convert-${Date.now()}${ext}`);
+	const tmpFile = path.join(tmpDir, `omp-convert-${nanoid()}${ext}`);
 
 	if (content.length > MAX_BYTES) {
 		return { content: "", ok: false, error: `content exceeds ${MAX_BYTES} bytes` };

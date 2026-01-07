@@ -21,15 +21,15 @@ interface HNItem {
 
 const API_BASE = "https://hacker-news.firebaseio.com/v0";
 
-async function fetchItem(id: number, timeout: number): Promise<HNItem | null> {
+async function fetchItem(id: number, timeout: number, signal?: AbortSignal): Promise<HNItem | null> {
 	const url = `${API_BASE}/item/${id}.json`;
-	const { content, ok } = await loadPage(url, { timeout });
+	const { content, ok } = await loadPage(url, { timeout, signal });
 	if (!ok) return null;
 	return JSON.parse(content) as HNItem;
 }
 
-async function fetchItems(ids: number[], timeout: number, limit = 20): Promise<HNItem[]> {
-	const promises = ids.slice(0, limit).map((id) => fetchItem(id, timeout));
+async function fetchItems(ids: number[], timeout: number, limit = 20, signal?: AbortSignal): Promise<HNItem[]> {
+	const promises = ids.slice(0, limit).map((id) => fetchItem(id, timeout, signal));
 	const results = await Promise.all(promises);
 	return results.filter((item): item is HNItem => item !== null && !item.deleted && !item.dead);
 }
@@ -69,7 +69,7 @@ function formatTimestamp(unixTime: number): string {
 	return `${minutes}m ago`;
 }
 
-async function renderStory(item: HNItem, timeout: number, depth = 0): Promise<string> {
+async function renderStory(item: HNItem, timeout: number, depth = 0, signal?: AbortSignal): Promise<string> {
 	let output = "";
 
 	if (depth === 0) {
@@ -90,7 +90,7 @@ async function renderStory(item: HNItem, timeout: number, depth = 0): Promise<st
 
 	if (item.kids && item.kids.length > 0 && depth < 2) {
 		const topComments = item.kids.slice(0, depth === 0 ? 20 : 10);
-		const comments = await fetchItems(topComments, timeout, topComments.length);
+		const comments = await fetchItems(topComments, timeout, topComments.length, signal);
 
 		if (comments.length > 0) {
 			if (depth === 0) output += "---\n\n## Comments\n\n";
@@ -107,7 +107,7 @@ async function renderStory(item: HNItem, timeout: number, depth = 0): Promise<st
 				}
 
 				if (comment.kids && comment.kids.length > 0 && depth < 1) {
-					const childOutput = await renderStory(comment, timeout, depth + 1);
+					const childOutput = await renderStory(comment, timeout, depth + 1, signal);
 					output += childOutput;
 				}
 			}
@@ -117,9 +117,9 @@ async function renderStory(item: HNItem, timeout: number, depth = 0): Promise<st
 	return output;
 }
 
-async function renderListing(ids: number[], timeout: number, title: string): Promise<string> {
+async function renderListing(ids: number[], timeout: number, title: string, signal?: AbortSignal): Promise<string> {
 	let output = `# ${title}\n\n`;
-	const stories = await fetchItems(ids, timeout, 20);
+	const stories = await fetchItems(ids, timeout, 20, signal);
 
 	for (let i = 0; i < stories.length; i++) {
 		const story = stories[i];
@@ -137,7 +137,7 @@ async function renderListing(ids: number[], timeout: number, title: string): Pro
 	return output;
 }
 
-export const handleHackerNews: SpecialHandler = async (url, timeout) => {
+export const handleHackerNews: SpecialHandler = async (url, timeout, signal) => {
 	const parsed = new URL(url);
 	if (!parsed.hostname.includes("news.ycombinator.com")) return null;
 
@@ -149,28 +149,28 @@ export const handleHackerNews: SpecialHandler = async (url, timeout) => {
 		const itemId = parsed.searchParams.get("id");
 
 		if (itemId) {
-			const item = await fetchItem(parseInt(itemId, 10), timeout);
+			const item = await fetchItem(parseInt(itemId, 10), timeout, signal);
 			if (!item) throw new Error(`Failed to fetch item ${itemId}`);
 
-			content = await renderStory(item, timeout);
+			content = await renderStory(item, timeout, 0, signal);
 			notes.push(`Fetched HN item ${itemId} with top-level comments (depth 2)`);
 		} else if (parsed.pathname === "/" || parsed.pathname === "/news") {
-			const { content: raw, ok } = await loadPage(`${API_BASE}/topstories.json`, { timeout });
+			const { content: raw, ok } = await loadPage(`${API_BASE}/topstories.json`, { timeout, signal });
 			if (!ok) throw new Error("Failed to fetch top stories");
 			const ids = JSON.parse(raw) as number[];
-			content = await renderListing(ids, timeout, "Hacker News - Top Stories");
+			content = await renderListing(ids, timeout, "Hacker News - Top Stories", signal);
 			notes.push("Fetched top 20 stories from HN front page");
 		} else if (parsed.pathname === "/newest") {
-			const { content: raw, ok } = await loadPage(`${API_BASE}/newstories.json`, { timeout });
+			const { content: raw, ok } = await loadPage(`${API_BASE}/newstories.json`, { timeout, signal });
 			if (!ok) throw new Error("Failed to fetch new stories");
 			const ids = JSON.parse(raw) as number[];
-			content = await renderListing(ids, timeout, "Hacker News - New Stories");
+			content = await renderListing(ids, timeout, "Hacker News - New Stories", signal);
 			notes.push("Fetched top 20 new stories");
 		} else if (parsed.pathname === "/best") {
-			const { content: raw, ok } = await loadPage(`${API_BASE}/beststories.json`, { timeout });
+			const { content: raw, ok } = await loadPage(`${API_BASE}/beststories.json`, { timeout, signal });
 			if (!ok) throw new Error("Failed to fetch best stories");
 			const ids = JSON.parse(raw) as number[];
-			content = await renderListing(ids, timeout, "Hacker News - Best Stories");
+			content = await renderListing(ids, timeout, "Hacker News - Best Stories", signal);
 			notes.push("Fetched top 20 best stories");
 		} else {
 			return null;

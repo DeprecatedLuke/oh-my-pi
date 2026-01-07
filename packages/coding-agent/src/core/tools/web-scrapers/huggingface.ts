@@ -106,7 +106,7 @@ function parseHuggingFaceUrl(url: string): {
 	}
 }
 
-export const handleHuggingFace: SpecialHandler = async (url: string, timeout: number) => {
+export const handleHuggingFace: SpecialHandler = async (url: string, timeout: number, signal?: AbortSignal) => {
 	const parsed = parseHuggingFaceUrl(url);
 	if (!parsed) return null;
 
@@ -120,8 +120,8 @@ export const handleHuggingFace: SpecialHandler = async (url: string, timeout: nu
 				const readmeUrl = `https://huggingface.co/${parsed.id}/raw/main/README.md`;
 
 				const [apiResult, readmeResult] = await Promise.all([
-					loadPage(apiUrl, { timeout }),
-					loadPage(readmeUrl, { timeout: Math.min(timeout, 5) }),
+					loadPage(apiUrl, { timeout, signal }),
+					loadPage(readmeUrl, { timeout: Math.min(timeout, 5), signal }),
 				]);
 
 				if (!apiResult.ok) return null;
@@ -186,8 +186,8 @@ export const handleHuggingFace: SpecialHandler = async (url: string, timeout: nu
 				const readmeUrl = `https://huggingface.co/datasets/${parsed.id}/raw/main/README.md`;
 
 				const [apiResult, readmeResult] = await Promise.all([
-					loadPage(apiUrl, { timeout }),
-					loadPage(readmeUrl, { timeout: Math.min(timeout, 5) }),
+					loadPage(apiUrl, { timeout, signal }),
+					loadPage(readmeUrl, { timeout: Math.min(timeout, 5), signal }),
 				]);
 
 				if (!apiResult.ok) return null;
@@ -251,8 +251,8 @@ export const handleHuggingFace: SpecialHandler = async (url: string, timeout: nu
 				const readmeUrl = `https://huggingface.co/spaces/${parsed.id}/raw/main/README.md`;
 
 				const [apiResult, readmeResult] = await Promise.all([
-					loadPage(apiUrl, { timeout }),
-					loadPage(readmeUrl, { timeout: Math.min(timeout, 5) }),
+					loadPage(apiUrl, { timeout, signal }),
+					loadPage(readmeUrl, { timeout: Math.min(timeout, 5), signal }),
 				]);
 
 				if (!apiResult.ok) return null;
@@ -303,7 +303,7 @@ export const handleHuggingFace: SpecialHandler = async (url: string, timeout: nu
 			case "model_or_user": {
 				// Try model API first
 				const modelApiUrl = `https://huggingface.co/api/models/${parsed.id}`;
-				const modelResult = await loadPage(modelApiUrl, { timeout });
+				const modelResult = await loadPage(modelApiUrl, { timeout, signal });
 
 				if (modelResult.ok) {
 					let model: HfModelData | null = null;
@@ -314,7 +314,7 @@ export const handleHuggingFace: SpecialHandler = async (url: string, timeout: nu
 					}
 					if (model) {
 						const readmeUrl = `https://huggingface.co/${parsed.id}/raw/main/README.md`;
-						const readmeResult = await loadPage(readmeUrl, { timeout: Math.min(timeout, 5) });
+						const readmeResult = await loadPage(readmeUrl, { timeout: Math.min(timeout, 5), signal });
 
 						let md = `# ${model.modelId}\n\n`;
 						if (model.pipeline_tag) md += `**Task:** ${model.pipeline_tag}\n`;
@@ -343,7 +343,7 @@ export const handleHuggingFace: SpecialHandler = async (url: string, timeout: nu
 
 				// Fall back to user API
 				const userApiUrl = `https://huggingface.co/api/users/${parsed.id}`;
-				const userResult = await loadPage(userApiUrl, { timeout });
+				const userResult = await loadPage(userApiUrl, { timeout, signal });
 				if (!userResult.ok) return null;
 
 				let user: HfUserData;

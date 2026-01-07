@@ -110,6 +110,8 @@ describe("createTools", () => {
 				getEditFuzzyMatch: () => true,
 				getGitToolEnabled: () => false,
 				getBashInterceptorEnabled: () => true,
+				getBashInterceptorSimpleLsEnabled: () => true,
+				getBashInterceptorRules: () => [],
 			},
 		});
 		const tools = await createTools(session);
@@ -128,6 +130,8 @@ describe("createTools", () => {
 				getEditFuzzyMatch: () => true,
 				getGitToolEnabled: () => true,
 				getBashInterceptorEnabled: () => true,
+				getBashInterceptorSimpleLsEnabled: () => true,
+				getBashInterceptorRules: () => [],
 			},
 		});
 		const tools = await createTools(session);
@@ -183,6 +187,6 @@ describe("createTools", () => {
 	});
 
 	it("HIDDEN_TOOLS contains review tools", () => {
-		expect(Object.keys(HIDDEN_TOOLS).sort()).toEqual(["complete", "report_finding", "submit_review"]);
+		expect(Object.keys(HIDDEN_TOOLS).sort()).toEqual(["complete", "report_finding"]);
 	});
 });

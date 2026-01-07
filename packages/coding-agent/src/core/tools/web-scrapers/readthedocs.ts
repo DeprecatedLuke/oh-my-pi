@@ -6,7 +6,11 @@ import { parse as parseHtml } from "node-html-parser";
 import type { RenderResult, SpecialHandler } from "./types";
 import { finalizeOutput, htmlToBasicMarkdown, loadPage } from "./types";
 
-export const handleReadTheDocs: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleReadTheDocs: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	// Check if URL matches Read the Docs patterns
 	const urlObj = new URL(url);
 	const isReadTheDocs =
@@ -22,7 +26,7 @@ export const handleReadTheDocs: SpecialHandler = async (url: string, timeout: nu
 	const fetchedAt = new Date().toISOString();
 
 	// Fetch the page
-	const result = await loadPage(url, { timeout });
+	const result = await loadPage(url, { timeout, signal });
 	if (!result.ok) {
 		return {
 			url,
@@ -86,7 +90,7 @@ export const handleReadTheDocs: SpecialHandler = async (url: string, timeout: nu
 	// Try to fetch raw source if available
 	if (sourceUrl) {
 		try {
-			const sourceResult = await loadPage(sourceUrl, { timeout: Math.min(timeout, 10) });
+			const sourceResult = await loadPage(sourceUrl, { timeout: Math.min(timeout, 10), signal });
 			if (sourceResult.ok && sourceResult.content.length > 0 && sourceResult.content.length < 1_000_000) {
 				content = sourceResult.content;
 				notes.push(`Fetched raw source from ${sourceUrl}`);

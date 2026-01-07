@@ -1,28 +1,16 @@
-import { existsSync, type Stats, statSync } from "node:fs";
 import path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { globSync } from "glob";
 import { getLanguageFromPath, type Theme } from "../../modes/interactive/theme/theme";
 import findDescription from "../../prompts/tools/find.md" with { type: "text" };
 import { ensureTool } from "../../utils/tools-manager";
 import type { RenderResultOptions } from "../custom-tools/types";
-import { untilAborted } from "../utils";
+import { ScopeSignal, untilAborted } from "../utils";
 import type { ToolSession } from "./index";
 import { resolveToCwd } from "./path-utils";
-import {
-	formatCount,
-	formatEmptyMessage,
-	formatErrorMessage,
-	formatExpandHint,
-	formatMeta,
-	formatMoreItems,
-	formatScope,
-	formatTruncationSuffix,
-	PREVIEW_LIMITS,
-} from "./render-utils";
+import { createToolUIKit, PREVIEW_LIMITS } from "./render-utils";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate";
 
 const findSchema = Type.Object({
@@ -54,6 +42,53 @@ export interface FindToolDetails {
 	files?: string[];
 	truncated?: boolean;
 	error?: string;
+}
+
+async function captureCommandOutput(
+	command: string,
+	args: string[],
+	signal?: AbortSignal,
+): Promise<{ stdout: string; stderr: string; exitCode: number | null; aborted: boolean }> {
+	const child = Bun.spawn([command, ...args], {
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+
+	using scope = new ScopeSignal(signal ? { signal } : undefined);
+	scope.catch(() => {
+		child.kill();
+	});
+
+	const stdoutReader = (child.stdout as ReadableStream<Uint8Array>).getReader();
+	const stderrReader = (child.stderr as ReadableStream<Uint8Array>).getReader();
+	const stdoutDecoder = new TextDecoder();
+	const stderrDecoder = new TextDecoder();
+	let stdout = "";
+	let stderr = "";
+
+	await Promise.all([
+		(async () => {
+			while (true) {
+				const { done, value } = await stdoutReader.read();
+				if (done) break;
+				stdout += stdoutDecoder.decode(value, { stream: true });
+			}
+			stdout += stdoutDecoder.decode();
+		})(),
+		(async () => {
+			while (true) {
+				const { done, value } = await stderrReader.read();
+				if (done) break;
+				stderr += stderrDecoder.decode(value, { stream: true });
+			}
+			stderr += stderrDecoder.decode();
+		})(),
+	]);
+
+	const exitCode = await child.exited;
+
+	return { stdout, stderr, exitCode, aborted: scope.aborted };
 }
 
 export function createFindTool(session: ToolSession): AgentTool<typeof findSchema> {
@@ -126,18 +161,19 @@ export function createFindTool(session: ToolSession): AgentTool<typeof findSchem
 				// Include .gitignore files (root + nested) so fd respects them even outside git repos
 				const gitignoreFiles = new Set<string>();
 				const rootGitignore = path.join(searchPath, ".gitignore");
-				if (existsSync(rootGitignore)) {
+				if (await Bun.file(rootGitignore).exists()) {
 					gitignoreFiles.add(rootGitignore);
 				}
 
 				try {
-					const nestedGitignores = globSync("**/.gitignore", {
-						cwd: searchPath,
-						dot: true,
-						absolute: true,
-						ignore: ["**/node_modules/**", "**/.git/**"],
-					});
+					const nestedGitignores = await Array.fromAsync(
+						new Bun.Glob("**/.gitignore").scan({ cwd: searchPath, dot: true, absolute: true }),
+					);
 					for (const file of nestedGitignores) {
+						const normalized = file.replace(/\\/g, "/");
+						if (normalized.includes("/node_modules/") || normalized.includes("/.git/")) {
+							continue;
+						}
 						gitignoreFiles.add(file);
 					}
 				} catch {
@@ -152,16 +188,16 @@ export function createFindTool(session: ToolSession): AgentTool<typeof findSchem
 				args.push(effectivePattern, searchPath);
 
 				// Run fd
-				const result = Bun.spawnSync([fdPath, ...args], {
-					stdin: "ignore",
-					stdout: "pipe",
-					stderr: "pipe",
-				});
+				const { stdout, stderr, exitCode, aborted } = await captureCommandOutput(fdPath, args, signal);
 
-				const output = result.stdout.toString().trim();
+				if (aborted) {
+					throw new Error("Operation aborted");
+				}
 
-				if (result.exitCode !== 0) {
-					const errorMsg = result.stderr.toString().trim() || `fd exited with code ${result.exitCode}`;
+				const output = stdout.trim();
+
+				if (exitCode !== 0) {
+					const errorMsg = stderr.trim() || `fd exited with code ${exitCode ?? -1}`;
 					// fd returns non-zero for some errors but may still have partial output
 					if (!output) {
 						throw new Error(errorMsg);
@@ -180,6 +216,7 @@ export function createFindTool(session: ToolSession): AgentTool<typeof findSchem
 				const mtimes: number[] = [];
 
 				for (const rawLine of lines) {
+					signal?.throwIfAborted();
 					const line = rawLine.replace(/\r$/, "").trim();
 					if (!line) {
 						continue;
@@ -197,23 +234,25 @@ export function createFindTool(session: ToolSession): AgentTool<typeof findSchem
 						relativePath += "/";
 					}
 
-					relativized.push(relativePath);
-
-					// Collect mtime if sorting is requested
+					// When sorting by mtime, keep files that fail to stat with mtime 0
 					if (shouldSortByMtime) {
 						try {
 							const fullPath = path.join(searchPath, relativePath);
-							const stat: Stats = statSync(fullPath);
+							const stat = await Bun.file(fullPath).stat();
+							relativized.push(relativePath);
 							mtimes.push(stat.mtimeMs);
 						} catch {
+							relativized.push(relativePath);
 							mtimes.push(0);
 						}
+					} else {
+						relativized.push(relativePath);
 					}
 				}
 
 				// Sort by mtime if requested (most recent first)
 				if (shouldSortByMtime && relativized.length > 0) {
-					const indexed = relativized.map((path, idx) => ({ path, mtime: mtimes[idx] || 0 }));
+					const indexed = relativized.map((path, idx) => ({ path, mtime: mtimes[idx] }));
 					indexed.sort((a, b) => b.mtime - a.mtime);
 					relativized.length = 0;
 					relativized.push(...indexed.map((item) => item.path));
@@ -279,7 +318,8 @@ const COLLAPSED_LIST_LIMIT = PREVIEW_LIMITS.COLLAPSED_ITEMS;
 
 export const findToolRenderer = {
 	renderCall(args: FindRenderArgs, uiTheme: Theme): Component {
-		const label = uiTheme.fg("toolTitle", uiTheme.bold("Find"));
+		const ui = createToolUIKit(uiTheme);
+		const label = ui.title("Find");
 		let text = `${label} ${uiTheme.fg("accent", args.pattern || "*")}`;
 
 		const meta: string[] = [];
@@ -289,7 +329,7 @@ export const findToolRenderer = {
 		if (args.sortByMtime) meta.push("sort:mtime");
 		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
 
-		text += formatMeta(meta, uiTheme);
+		text += ui.meta(meta);
 
 		return new Text(text, 0, 0);
 	},
@@ -299,10 +339,11 @@ export const findToolRenderer = {
 		{ expanded }: RenderResultOptions,
 		uiTheme: Theme,
 	): Component {
+		const ui = createToolUIKit(uiTheme);
 		const details = result.details;
 
 		if (details?.error) {
-			return new Text(formatErrorMessage(details.error, uiTheme), 0, 0);
+			return new Text(ui.errorMessage(details.error), 0, 0);
 		}
 
 		const hasDetailedData = details?.fileCount !== undefined;
@@ -310,7 +351,7 @@ export const findToolRenderer = {
 
 		if (!hasDetailedData) {
 			if (!textContent || textContent.includes("No files matching") || textContent.trim() === "") {
-				return new Text(formatEmptyMessage("No files found", uiTheme), 0, 0);
+				return new Text(ui.emptyMessage("No files found"), 0, 0);
 			}
 
 			const lines = textContent.split("\n").filter((l) => l.trim());
@@ -320,8 +361,8 @@ export const findToolRenderer = {
 			const hasMore = remaining > 0;
 
 			const icon = uiTheme.styledSymbol("status.success", "success");
-			const summary = formatCount("file", lines.length);
-			const expandHint = formatExpandHint(expanded, hasMore, uiTheme);
+			const summary = ui.count("file", lines.length);
+			const expandHint = ui.expandHint(expanded, hasMore);
 			let text = `${icon} ${uiTheme.fg("dim", summary)}${expandHint}`;
 
 			for (let i = 0; i < displayLines.length; i++) {
@@ -330,7 +371,7 @@ export const findToolRenderer = {
 				text += `\n ${uiTheme.fg("dim", branch)} ${uiTheme.fg("accent", displayLines[i])}`;
 			}
 			if (remaining > 0) {
-				text += `\n ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.fg("muted", formatMoreItems(remaining, "file", uiTheme))}`;
+				text += `\n ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.fg("muted", ui.moreItems(remaining, "file"))}`;
 			}
 			return new Text(text, 0, 0);
 		}
@@ -340,17 +381,17 @@ export const findToolRenderer = {
 		const files = details?.files ?? [];
 
 		if (fileCount === 0) {
-			return new Text(formatEmptyMessage("No files found", uiTheme), 0, 0);
+			return new Text(ui.emptyMessage("No files found"), 0, 0);
 		}
 
 		const icon = uiTheme.styledSymbol("status.success", "success");
-		const summaryText = formatCount("file", fileCount);
-		const scopeLabel = formatScope(details?.scopePath, uiTheme);
+		const summaryText = ui.count("file", fileCount);
+		const scopeLabel = ui.scope(details?.scopePath);
 		const maxFiles = expanded ? files.length : Math.min(files.length, COLLAPSED_LIST_LIMIT);
 		const hasMoreFiles = files.length > maxFiles;
-		const expandHint = formatExpandHint(expanded, hasMoreFiles, uiTheme);
+		const expandHint = ui.expandHint(expanded, hasMoreFiles);
 
-		let text = `${icon} ${uiTheme.fg("dim", summaryText)}${formatTruncationSuffix(truncated, uiTheme)}${scopeLabel}${expandHint}`;
+		let text = `${icon} ${uiTheme.fg("dim", summaryText)}${ui.truncationSuffix(truncated)}${scopeLabel}${expandHint}`;
 
 		const truncationReasons: string[] = [];
 		if (details?.resultLimitReached) {
@@ -380,7 +421,7 @@ export const findToolRenderer = {
 				const moreFilesBranch = hasTruncation ? uiTheme.tree.branch : uiTheme.tree.last;
 				text += `\n ${uiTheme.fg("dim", moreFilesBranch)} ${uiTheme.fg(
 					"muted",
-					formatMoreItems(files.length - maxFiles, "file", uiTheme),
+					ui.moreItems(files.length - maxFiles, "file"),
 				)}`;
 			}
 		}

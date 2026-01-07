@@ -23,7 +23,7 @@ import { type Theme, theme } from "../../modes/interactive/theme/theme";
 import askDescription from "../../prompts/tools/ask.md" with { type: "text" };
 import type { RenderResultOptions } from "../custom-tools/types";
 import type { ToolSession } from "./index";
-import { formatErrorMessage, formatMeta } from "./render-utils";
+import { createToolUIKit } from "./render-utils";
 
 // =============================================================================
 // Types
@@ -218,17 +218,18 @@ interface AskRenderArgs {
 
 export const askToolRenderer = {
 	renderCall(args: AskRenderArgs, uiTheme: Theme): Component {
+		const ui = createToolUIKit(uiTheme);
 		if (!args.question) {
-			return new Text(formatErrorMessage("No question provided", uiTheme), 0, 0);
+			return new Text(ui.errorMessage("No question provided"), 0, 0);
 		}
 
-		const label = uiTheme.fg("toolTitle", uiTheme.bold("Ask"));
+		const label = ui.title("Ask");
 		let text = `${label} ${uiTheme.fg("accent", args.question)}`;
 
 		const meta: string[] = [];
 		if (args.multi) meta.push("multi");
 		if (args.options?.length) meta.push(`options:${args.options.length}`);
-		text += formatMeta(meta, uiTheme);
+		text += ui.meta(meta);
 
 		if (args.options?.length) {
 			for (let i = 0; i < args.options.length; i++) {

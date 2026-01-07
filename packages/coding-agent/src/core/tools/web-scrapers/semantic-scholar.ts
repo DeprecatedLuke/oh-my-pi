@@ -43,7 +43,7 @@ function extractPaperId(url: string): string | null {
 	return null;
 }
 
-export const handleSemanticScholar: SpecialHandler = async (url: string, timeout: number) => {
+export const handleSemanticScholar: SpecialHandler = async (url: string, timeout: number, signal?: AbortSignal) => {
 	if (!url.includes("semanticscholar.org")) return null;
 
 	const paperId = extractPaperId(url);
@@ -77,7 +77,7 @@ export const handleSemanticScholar: SpecialHandler = async (url: string, timeout
 
 	const apiUrl = `https://api.semanticscholar.org/graph/v1/paper/${paperId}?fields=${fields}`;
 
-	const { content, ok, finalUrl } = await loadPage(apiUrl, { timeout });
+	const { content, ok, finalUrl } = await loadPage(apiUrl, { timeout, signal });
 
 	if (!ok || !content) {
 		return {

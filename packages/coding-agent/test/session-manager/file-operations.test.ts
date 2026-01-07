@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { nanoid } from "nanoid";
 import { findMostRecentSession, loadEntriesFromFile } from "../../src/core/session-manager";
 
 describe("loadEntriesFromFile", () => {
 	let tempDir: string;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `session-test-${Date.now()}`);
+		tempDir = join(tmpdir(), `session-test-${nanoid()}`);
 		mkdirSync(tempDir, { recursive: true });
 	});
 
@@ -69,7 +70,7 @@ describe("findMostRecentSession", () => {
 	let tempDir: string;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `session-test-${Date.now()}`);
+		tempDir = join(tmpdir(), `session-test-${nanoid()}`);
 		mkdirSync(tempDir, { recursive: true });
 	});
 

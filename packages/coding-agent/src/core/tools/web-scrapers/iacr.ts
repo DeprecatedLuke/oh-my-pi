@@ -6,7 +6,11 @@ import { convertWithMarkitdown, fetchBinary } from "./utils";
 /**
  * Handle IACR ePrint Archive URLs
  */
-export const handleIacr: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleIacr: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "eprint.iacr.org") return null;
@@ -22,7 +26,7 @@ export const handleIacr: SpecialHandler = async (url: string, timeout: number): 
 
 		// Fetch the HTML page for metadata
 		const pageUrl = `https://eprint.iacr.org/${paperId}`;
-		const result = await loadPage(pageUrl, { timeout });
+		const result = await loadPage(pageUrl, { timeout, signal });
 
 		if (!result.ok) return null;
 
@@ -55,9 +59,9 @@ export const handleIacr: SpecialHandler = async (url: string, timeout: number): 
 		if (parsed.pathname.endsWith(".pdf")) {
 			const pdfUrl = `https://eprint.iacr.org/${paperId}.pdf`;
 			notes.push("Fetching PDF for full content...");
-			const pdfResult = await fetchBinary(pdfUrl, timeout);
+			const pdfResult = await fetchBinary(pdfUrl, timeout, signal);
 			if (pdfResult.ok) {
-				const converted = await convertWithMarkitdown(pdfResult.buffer, ".pdf", timeout);
+				const converted = await convertWithMarkitdown(pdfResult.buffer, ".pdf", timeout, signal);
 				if (converted.ok && converted.content.length > 500) {
 					md += `---\n\n## Full Paper\n\n${converted.content}\n`;
 					notes.push("PDF converted via markitdown");

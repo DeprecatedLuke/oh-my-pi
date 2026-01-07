@@ -6,6 +6,7 @@ import { getLanguageFromPath, highlightCode, type Theme } from "../../modes/inte
 import writeDescription from "../../prompts/tools/write.md" with { type: "text" };
 import type { RenderResultOptions } from "../custom-tools/types";
 import type { ToolSession } from "../sdk";
+import { untilAborted } from "../utils";
 import { createLspWritethrough, type FileDiagnosticsResult } from "./lsp/index";
 import { resolveToCwd } from "./path-utils";
 import { formatDiagnostics, replaceTabs, shortenPath } from "./render-utils";
@@ -34,27 +35,29 @@ export function createWriteTool(session: ToolSession): AgentTool<typeof writeSch
 			{ path, content }: { path: string; content: string },
 			signal?: AbortSignal,
 		) => {
-			const absolutePath = resolveToCwd(path, session.cwd);
+			return untilAborted(signal, async () => {
+				const absolutePath = resolveToCwd(path, session.cwd);
 
-			const diagnostics = await writethrough(absolutePath, content, signal);
+				const diagnostics = await writethrough(absolutePath, content, signal);
 
-			let resultText = `Successfully wrote ${content.length} bytes to ${path}`;
-			if (!diagnostics) {
+				let resultText = `Successfully wrote ${content.length} bytes to ${path}`;
+				if (!diagnostics) {
+					return {
+						content: [{ type: "text", text: resultText }],
+						details: {},
+					};
+				}
+
+				const messages = diagnostics?.messages;
+				if (messages && messages.length > 0) {
+					resultText += `\n\nLSP Diagnostics (${diagnostics.summary}):\n`;
+					resultText += messages.map((d) => `  ${d}`).join("\n");
+				}
 				return {
 					content: [{ type: "text", text: resultText }],
-					details: {},
+					details: { diagnostics },
 				};
-			}
-
-			const messages = diagnostics?.messages;
-			if (messages && messages.length > 0) {
-				resultText += `\n\nLSP Diagnostics (${diagnostics.summary}):\n`;
-				resultText += messages.map((d) => `  ${d}`).join("\n");
-			}
-			return {
-				content: [{ type: "text", text: resultText }],
-				details: { diagnostics },
-			};
+			});
 		},
 	};
 }

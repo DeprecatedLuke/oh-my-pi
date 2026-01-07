@@ -138,7 +138,11 @@ function formatReleaseDate(timestamp?: string | null): string | null {
 	return date.toISOString().split("T")[0] ?? null;
 }
 
-export const handleFlathub: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleFlathub: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "flathub.org" && parsed.hostname !== "www.flathub.org") return null;
@@ -147,7 +151,7 @@ export const handleFlathub: SpecialHandler = async (url: string, timeout: number
 		if (!appId) return null;
 
 		const apiUrl = `https://flathub.org/api/v2/appstream/${encodeURIComponent(appId)}`;
-		const result = await loadPage(apiUrl, { timeout, headers: { Accept: "application/json" } });
+		const result = await loadPage(apiUrl, { timeout, signal, headers: { Accept: "application/json" } });
 		if (!result.ok) return null;
 
 		let app: FlathubAppStream;

@@ -67,7 +67,11 @@ interface OpenLibraryBooksApiResponse {
 /**
  * Handle Open Library URLs via their API
  */
-export const handleOpenLibrary: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleOpenLibrary: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (!parsed.hostname.includes("openlibrary.org")) return null;
@@ -83,11 +87,11 @@ export const handleOpenLibrary: SpecialHandler = async (url: string, timeout: nu
 		let md: string | null = null;
 
 		if (workMatch) {
-			md = await fetchWork(workMatch[1], timeout);
+			md = await fetchWork(workMatch[1], timeout, signal);
 		} else if (editionMatch) {
-			md = await fetchEdition(editionMatch[1], timeout);
+			md = await fetchEdition(editionMatch[1], timeout, signal);
 		} else if (isbnMatch) {
-			md = await fetchByIsbn(isbnMatch[1], timeout);
+			md = await fetchByIsbn(isbnMatch[1], timeout, signal);
 		}
 
 		if (!md) return null;
@@ -108,9 +112,9 @@ export const handleOpenLibrary: SpecialHandler = async (url: string, timeout: nu
 	return null;
 };
 
-async function fetchWork(workId: string, timeout: number): Promise<string | null> {
+async function fetchWork(workId: string, timeout: number, signal?: AbortSignal): Promise<string | null> {
 	const apiUrl = `https://openlibrary.org/works/${workId}.json`;
-	const result = await loadPage(apiUrl, { timeout });
+	const result = await loadPage(apiUrl, { timeout, signal });
 	if (!result.ok) return null;
 
 	let work: OpenLibraryWork;
@@ -127,6 +131,7 @@ async function fetchWork(workId: string, timeout: number): Promise<string | null
 		const authorNames = await fetchAuthorNames(
 			work.authors.map((a) => a.author.key),
 			timeout,
+			signal,
 		);
 		if (authorNames.length) {
 			md += `**Authors:** ${authorNames.join(", ")}\n`;
@@ -157,9 +162,9 @@ async function fetchWork(workId: string, timeout: number): Promise<string | null
 	return md;
 }
 
-async function fetchEdition(editionId: string, timeout: number): Promise<string | null> {
+async function fetchEdition(editionId: string, timeout: number, signal?: AbortSignal): Promise<string | null> {
 	const apiUrl = `https://openlibrary.org/books/${editionId}.json`;
-	const result = await loadPage(apiUrl, { timeout });
+	const result = await loadPage(apiUrl, { timeout, signal });
 	if (!result.ok) return null;
 
 	let edition: OpenLibraryEdition;
@@ -176,6 +181,7 @@ async function fetchEdition(editionId: string, timeout: number): Promise<string 
 		const authorNames = await fetchAuthorNames(
 			edition.authors.map((a) => a.key),
 			timeout,
+			signal,
 		);
 		if (authorNames.length) {
 			md += `**Authors:** ${authorNames.join(", ")}\n`;
@@ -225,9 +231,9 @@ async function fetchEdition(editionId: string, timeout: number): Promise<string 
 	return md;
 }
 
-async function fetchByIsbn(isbn: string, timeout: number): Promise<string | null> {
+async function fetchByIsbn(isbn: string, timeout: number, signal?: AbortSignal): Promise<string | null> {
 	const apiUrl = `https://openlibrary.org/api/books?bibkeys=ISBN:${isbn}&format=json&jscmd=data`;
-	const result = await loadPage(apiUrl, { timeout });
+	const result = await loadPage(apiUrl, { timeout, signal });
 	if (!result.ok) return null;
 
 	let data: OpenLibraryBooksApiResponse;
@@ -281,7 +287,7 @@ async function fetchByIsbn(isbn: string, timeout: number): Promise<string | null
 	return md;
 }
 
-async function fetchAuthorNames(authorKeys: string[], timeout: number): Promise<string[]> {
+async function fetchAuthorNames(authorKeys: string[], timeout: number, signal?: AbortSignal): Promise<string[]> {
 	const names: string[] = [];
 
 	// Fetch authors in parallel (limit to first 5)
@@ -289,7 +295,7 @@ async function fetchAuthorNames(authorKeys: string[], timeout: number): Promise<
 		const authorKey = key.startsWith("/authors/") ? key : `/authors/${key}`;
 		const apiUrl = `https://openlibrary.org${authorKey}.json`;
 		try {
-			const result = await loadPage(apiUrl, { timeout: Math.min(timeout, 5) });
+			const result = await loadPage(apiUrl, { timeout: Math.min(timeout, 5), signal });
 			if (result.ok) {
 				const author = JSON.parse(result.content) as { name?: string };
 				return author.name || null;

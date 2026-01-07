@@ -17,22 +17,6 @@ type WritableLike = {
 
 const textEncoder = new TextEncoder();
 
-async function readStream(stream: ReadableStream<Uint8Array> | undefined): Promise<string> {
-	if (!stream) return "";
-	const reader = stream.getReader();
-	const chunks: Uint8Array[] = [];
-	try {
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			chunks.push(value);
-		}
-	} finally {
-		reader.releaseLock();
-	}
-	return Buffer.concat(chunks).toString();
-}
-
 async function writeStdin(handle: unknown, stdin: string): Promise<void> {
 	if (!handle || typeof handle === "number") return;
 	if (typeof (handle as WritableStream<Uint8Array>).getWriter === "function") {
@@ -77,8 +61,8 @@ export async function gitWithStdin(args: string[], stdin: string, cwd?: string):
 	await writeStdin(proc.stdin, stdin);
 
 	const [stdout, stderr, exitCode] = await Promise.all([
-		readStream(proc.stdout as ReadableStream<Uint8Array>),
-		readStream(proc.stderr as ReadableStream<Uint8Array>),
+		(proc.stdout as ReadableStream<Uint8Array>).text(),
+		(proc.stderr as ReadableStream<Uint8Array>).text(),
 		proc.exited,
 	]);
 

@@ -8,7 +8,7 @@ import { executeBash } from "../bash-executor";
 import type { RenderResultOptions } from "../custom-tools/types";
 import { checkBashInterception, checkSimpleLsInterception } from "./bash-interceptor";
 import type { ToolSession } from "./index";
-import { formatBytes, wrapBrackets } from "./render-utils";
+import { createToolUIKit } from "./render-utils";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateTail } from "./truncate";
 
 const bashSchema = Type.Object({
@@ -36,13 +36,16 @@ export function createBashTool(session: ToolSession): AgentTool<typeof bashSchem
 		) => {
 			// Check interception if enabled and available tools are known
 			if (session.settings?.getBashInterceptorEnabled()) {
-				const interception = checkBashInterception(command, ctx?.toolNames ?? []);
+				const rules = session.settings?.getBashInterceptorRules?.();
+				const interception = checkBashInterception(command, ctx?.toolNames ?? [], rules);
 				if (interception.block) {
 					throw new Error(interception.message);
 				}
-				const lsInterception = checkSimpleLsInterception(command, ctx?.toolNames ?? []);
-				if (lsInterception.block) {
-					throw new Error(lsInterception.message);
+				if (session.settings?.getBashInterceptorSimpleLsEnabled?.() !== false) {
+					const lsInterception = checkSimpleLsInterception(command, ctx?.toolNames ?? []);
+					if (lsInterception.block) {
+						throw new Error(lsInterception.message);
+					}
 				}
 			}
 
@@ -127,8 +130,9 @@ interface BashRenderContext {
 
 export const bashToolRenderer = {
 	renderCall(args: BashRenderArgs, uiTheme: Theme): Component {
+		const ui = createToolUIKit(uiTheme);
 		const command = args.command || uiTheme.format.ellipsis;
-		const text = uiTheme.fg("toolTitle", uiTheme.bold(`$ ${command}`));
+		const text = ui.title(`$ ${command}`);
 		return new Text(text, 0, 0);
 	},
 
@@ -140,6 +144,7 @@ export const bashToolRenderer = {
 		options: RenderResultOptions & { renderContext?: BashRenderContext },
 		uiTheme: Theme,
 	): Component {
+		const ui = createToolUIKit(uiTheme);
 		const { expanded, renderContext } = options;
 		const details = result.details;
 		const lines: string[] = [];
@@ -195,11 +200,11 @@ export const bashToolRenderer = {
 					warnings.push(`Truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines`);
 				} else {
 					warnings.push(
-						`Truncated: ${truncation.outputLines} lines shown (${formatBytes(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit)`,
+						`Truncated: ${truncation.outputLines} lines shown (${ui.formatBytes(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit)`,
 					);
 				}
 			}
-			lines.push(uiTheme.fg("warning", wrapBrackets(warnings.join(". "), uiTheme)));
+			lines.push(uiTheme.fg("warning", ui.wrapBrackets(warnings.join(". "))));
 		}
 
 		return new Text(lines.join("\n"), 0, 0);

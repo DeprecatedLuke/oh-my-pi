@@ -35,7 +35,11 @@ interface AurResponse {
 /**
  * Handle AUR (Arch User Repository) URLs via RPC API
  */
-export const handleAur: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleAur: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "aur.archlinux.org") return null;
@@ -49,7 +53,7 @@ export const handleAur: SpecialHandler = async (url: string, timeout: number): P
 
 		// Fetch from AUR RPC API
 		const apiUrl = `https://aur.archlinux.org/rpc/?v=5&type=info&arg=${encodeURIComponent(packageName)}`;
-		const result = await loadPage(apiUrl, { timeout });
+		const result = await loadPage(apiUrl, { timeout, signal });
 
 		if (!result.ok) return null;
 

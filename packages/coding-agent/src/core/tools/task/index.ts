@@ -21,7 +21,6 @@ import { formatDuration } from "../render-utils";
 import { cleanupTempDir, createTempArtifactsDir, getArtifactsDir } from "./artifacts";
 import { discoverAgents, getAgent } from "./discovery";
 import { runSubprocess } from "./executor";
-import { generateTaskName } from "./name-generator";
 import { mapWithConcurrencyLimit } from "./parallel";
 import { renderCall, renderResult } from "./render";
 import {
@@ -135,17 +134,34 @@ export async function createTaskTool(
 		execute: async (_toolCallId, params, signal, onUpdate) => {
 			const startTime = Date.now();
 			const { agents, projectAgentsDir } = await discoverAgents(session.cwd);
-			const context = params.context;
-			const outputSchema = params.output_schema;
+			const { agent: agentName, context, model, output: outputSchema } = params;
 
-			// Handle empty or missing tasks
-			if (!params.tasks || params.tasks.length === 0) {
+			// Validate agent exists
+			const agent = getAgent(agents, agentName);
+			if (!agent) {
 				const available = agents.map((a) => a.name).join(", ") || "none";
 				return {
 					content: [
 						{
 							type: "text",
-							text: `No tasks provided. Use: { tasks: [{agent, task}, ...] }\nAvailable agents: ${available}`,
+							text: `Unknown agent "${agentName}". Available: ${available}`,
+						},
+					],
+					details: {
+						projectAgentsDir,
+						results: [],
+						totalDurationMs: 0,
+					},
+				};
+			}
+
+			// Handle empty or missing tasks
+			if (!params.tasks || params.tasks.length === 0) {
+				return {
+					content: [
+						{
+							type: "text",
+							text: `No tasks provided. Use: { agent, context, tasks: [{id, task, description}, ...] }`,
 						},
 					],
 					details: {
@@ -165,6 +181,56 @@ export async function createTaskTool(
 							text: `Too many tasks (${params.tasks.length}). Max is ${MAX_PARALLEL_TASKS}.`,
 						},
 					],
+					details: {
+						projectAgentsDir,
+						results: [],
+						totalDurationMs: 0,
+					},
+				};
+			}
+
+			const tasks = params.tasks;
+			const missingTaskIndexes: number[] = [];
+			const idIndexes = new Map<string, number[]>();
+
+			for (let i = 0; i < tasks.length; i++) {
+				const id = tasks[i]?.id;
+				if (typeof id !== "string" || id.trim() === "") {
+					missingTaskIndexes.push(i);
+					continue;
+				}
+				const normalizedId = id.toLowerCase();
+				const indexes = idIndexes.get(normalizedId);
+				if (indexes) {
+					indexes.push(i);
+				} else {
+					idIndexes.set(normalizedId, [i]);
+				}
+			}
+
+			const duplicateIds: Array<{ id: string; indexes: number[] }> = [];
+			for (const [normalizedId, indexes] of idIndexes.entries()) {
+				if (indexes.length > 1) {
+					duplicateIds.push({
+						id: tasks[indexes[0]]?.id ?? normalizedId,
+						indexes,
+					});
+				}
+			}
+
+			if (missingTaskIndexes.length > 0 || duplicateIds.length > 0) {
+				const problems: string[] = [];
+				if (missingTaskIndexes.length > 0) {
+					problems.push(`Missing task ids at indexes: ${missingTaskIndexes.join(", ")}`);
+				}
+				if (duplicateIds.length > 0) {
+					const details = duplicateIds
+						.map((entry) => `${entry.id} (indexes ${entry.indexes.join(", ")})`)
+						.join("; ");
+					problems.push(`Duplicate task ids detected (case-insensitive): ${details}`);
+				}
+				return {
+					content: [{ type: "text", text: `Invalid tasks: ${problems.join(". ")}` }],
 					details: {
 						projectAgentsDir,
 						results: [],
@@ -197,88 +263,59 @@ export async function createTaskTool(
 			};
 
 			try {
-				let tasks = params.tasks;
-				let skippedSelfRecursion = 0;
-
-				// Filter out blocked agent (self-recursion prevention)
-				if (blockedAgent) {
-					const blockedTasks = tasks.filter((t) => t.agent === blockedAgent);
-					tasks = tasks.filter((t) => t.agent !== blockedAgent);
-					skippedSelfRecursion = blockedTasks.length;
-
-					if (skippedSelfRecursion > 0 && tasks.length === 0) {
-						return {
-							content: [
-								{
-									type: "text",
-									text: `Cannot spawn ${blockedAgent} agent from within itself (recursion prevention). Use a different agent type.`,
-								},
-							],
-							details: {
-								projectAgentsDir,
-								results: [],
-								totalDurationMs: Date.now() - startTime,
+				// Check self-recursion prevention
+				if (blockedAgent && agentName === blockedAgent) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Cannot spawn ${blockedAgent} agent from within itself (recursion prevention). Use a different agent type.`,
 							},
-						};
-					}
-				}
-
-				// Validate all agents exist
-				for (const task of tasks) {
-					if (!getAgent(agents, task.agent)) {
-						const available = agents.map((a) => a.name).join(", ");
-						return {
-							content: [{ type: "text", text: `Unknown agent: ${task.agent}. Available: ${available}` }],
-							details: {
-								projectAgentsDir,
-								results: [],
-								totalDurationMs: Date.now() - startTime,
-							},
-						};
-					}
+						],
+						details: {
+							projectAgentsDir,
+							results: [],
+							totalDurationMs: Date.now() - startTime,
+						},
+					};
 				}
 
 				// Check spawn restrictions from parent
 				const parentSpawns = session.getSessionSpawns() ?? "*";
 				const allowedSpawns = parentSpawns.split(",").map((s) => s.trim());
-				const isSpawnAllowed = (agentName: string): boolean => {
+				const isSpawnAllowed = (): boolean => {
 					if (parentSpawns === "") return false; // Empty = deny all
 					if (parentSpawns === "*") return true; // Wildcard = allow all
 					return allowedSpawns.includes(agentName);
 				};
 
-				for (const task of tasks) {
-					if (!isSpawnAllowed(task.agent)) {
-						const allowed = parentSpawns === "" ? "none (spawns disabled for this agent)" : parentSpawns;
-						return {
-							content: [{ type: "text", text: `Cannot spawn '${task.agent}'. Allowed: ${allowed}` }],
-							details: {
-								projectAgentsDir,
-								results: [],
-								totalDurationMs: Date.now() - startTime,
-							},
-						};
-					}
+				if (!isSpawnAllowed()) {
+					const allowed = parentSpawns === "" ? "none (spawns disabled for this agent)" : parentSpawns;
+					return {
+						content: [{ type: "text", text: `Cannot spawn '${agentName}'. Allowed: ${allowed}` }],
+						details: {
+							projectAgentsDir,
+							results: [],
+							totalDurationMs: Date.now() - startTime,
+						},
+					};
 				}
 
-				// Build full prompts with context prepended and generate task IDs
+				// Build full prompts with context prepended
 				const tasksWithContext = tasks.map((t) => ({
-					agent: t.agent,
 					task: context ? `${context}\n\n${t.task}` : t.task,
-					model: t.model,
 					description: t.description,
-					taskId: generateTaskName(),
+					taskId: t.id,
 				}));
 
 				// Initialize progress for all tasks
 				for (let i = 0; i < tasksWithContext.length; i++) {
 					const t = tasksWithContext[i];
-					const agentCfg = getAgent(agents, t.agent);
 					progressMap.set(i, {
 						index: i,
 						taskId: t.taskId,
-						agent: t.agent,
-						agentSource: agentCfg?.source ?? "user",
+						agent: agentName,
+						agentSource: agent.source,
 						status: "pending",
 						task: t.task,
 						recentTools: [],
@@ -286,36 +323,40 @@ export async function createTaskTool(
 						toolCount: 0,
 						tokens: 0,
 						durationMs: 0,
-						modelOverride: t.model,
+						modelOverride: model,
 						description: t.description,
 					});
 				}
 				emitProgress();
 
 				// Execute in parallel with concurrency limit
-				const results = await mapWithConcurrencyLimit(tasksWithContext, MAX_CONCURRENCY, async (task, index) => {
-					const agent = getAgent(agents, task.agent)!;
-					return runSubprocess({
-						cwd: session.cwd,
-						agent,
-						task: task.task,
-						description: task.description,
-						index,
-						taskId: task.taskId,
-						context: undefined, // Already prepended above
-						modelOverride: task.model,
-						outputSchema,
-						sessionFile,
-						persistArtifacts: !!artifactsDir,
-						artifactsDir: effectiveArtifactsDir,
-						signal,
-						eventBus: undefined,
-						onProgress: (progress) => {
-							progressMap.set(index, structuredClone(progress));
-							emitProgress();
-						},
-					});
-				});
+				const results = await mapWithConcurrencyLimit(
+					tasksWithContext,
+					MAX_CONCURRENCY,
+					async (task, index) => {
+						return runSubprocess({
+							cwd: session.cwd,
+							agent,
+							task: task.task,
+							description: task.description,
+							index,
+							taskId: task.taskId,
+							context: undefined, // Already prepended above
+							modelOverride: model,
+							outputSchema,
+							sessionFile,
+							persistArtifacts: !!artifactsDir,
+							artifactsDir: effectiveArtifactsDir,
+							signal,
+							eventBus: undefined,
+							onProgress: (progress) => {
+								progressMap.set(index, structuredClone(progress));
+								emitProgress();
+							},
+						});
+					},
+					signal,
+				);
 
 				// Aggregate usage from executor results (already accumulated incrementally)
 				const aggregatedUsage = createUsageTotals();
@@ -349,14 +390,10 @@ export async function createTaskTool(
 					return `[${r.agent}] ${status}${meta} ${r.taskId}\n${preview}`;
 				});
 
-				const skippedNote =
-					skippedSelfRecursion > 0
-						? ` (${skippedSelfRecursion} ${blockedAgent} task${skippedSelfRecursion > 1 ? "s" : ""} skipped - self-recursion blocked)`
-						: "";
 				const outputIds = results.map((r) => r.taskId);
 				const outputHint =
 					outputIds.length > 0 ? `\n\nUse output tool for full logs: output ids ${outputIds.join(", ")}` : "";
-				const summary = `${successCount}/${results.length} succeeded${skippedNote} [${formatDuration(
+				const summary = `${successCount}/${results.length} succeeded [${formatDuration(
 					totalDuration,
 				)}]\n\n${summaries.join("\n\n---\n\n")}${outputHint}`;
 

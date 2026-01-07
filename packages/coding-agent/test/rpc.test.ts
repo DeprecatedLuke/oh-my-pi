@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@oh-my-pi/pi-agent-core";
+import { nanoid } from "nanoid";
 import { RpcClient } from "../src/modes/rpc/rpc-client";
 
 /**
@@ -13,7 +14,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_T
 	let sessionDir: string;
 
 	beforeEach(() => {
-		sessionDir = join(tmpdir(), `omp-rpc-test-${Date.now()}`);
+		sessionDir = join(tmpdir(), `omp-rpc-test-${nanoid()}`);
 		client = new RpcClient({
 			cliPath: join(import.meta.dir, "..", "dist", "cli.js"),
 			cwd: join(import.meta.dir, ".."),
@@ -129,7 +130,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_T
 		await client.promptAndWait("Say hi");
 
 		// Run bash command
-		const uniqueValue = `test-${Date.now()}`;
+		const uniqueValue = `test-${nanoid()}`;
 		await client.bash(`echo ${uniqueValue}`);
 
 		// Wait for file writes
@@ -158,7 +159,7 @@ describe.skipIf(!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_OAUTH_T
 		await client.start();
 
 		// Run a bash command with a unique value
-		const uniqueValue = `unique-${Date.now()}`;
+		const uniqueValue = `unique-${nanoid()}`;
 		await client.bash(`echo ${uniqueValue}`);
 
 		// Ask the LLM what the output was

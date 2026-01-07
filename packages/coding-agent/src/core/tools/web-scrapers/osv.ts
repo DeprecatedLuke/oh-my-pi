@@ -47,7 +47,11 @@ interface OsvVulnerability {
 /**
  * Handle OSV (Open Source Vulnerabilities) URLs
  */
-export const handleOsv: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleOsv: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "osv.dev") return null;
@@ -64,6 +68,7 @@ export const handleOsv: SpecialHandler = async (url: string, timeout: number): P
 		const result = await loadPage(apiUrl, {
 			timeout,
 			headers: { Accept: "application/json" },
+			signal,
 		});
 
 		if (!result.ok) return null;

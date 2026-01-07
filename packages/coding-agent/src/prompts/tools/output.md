@@ -16,13 +16,32 @@ Do NOT use when:
 
 ## Parameters
 
-- `ids`: Array of output IDs from Task results (e.g., `["reviewer_0", "explore_1"]`)
+- `ids`: Array of output IDs from Task results (e.g., `["ApiAudit", "DbAudit"]`)
 - `format` (optional):
   - `"raw"` (default): Full output with ANSI codes preserved
   - `"json"`: Structured object with metadata
   - `"stripped"`: Plain text with ANSI codes removed for parsing
-- `query` (optional): jq-like query for JSON outputs (e.g., `.result.items[0].name`)
+- `query` (optional): jq-like query for JSON outputs (e.g., `.endpoints[0].file`)
 - `offset` (optional): Line number to start reading from (1-indexed)
 - `limit` (optional): Maximum number of lines to read
 
-Use offset/limit for line ranges to reduce context usage on large outputs. Use `query` for JSON outputs (for example, subagent `complete` results).
+Use offset/limit for line ranges to reduce context usage on large outputs. Use `query` for structured agent outputs (agents that call `complete` with `output`).
+
+## Query Examples
+
+For agents returning structured data via `complete`, use `query` to extract specific fields:
+
+```
+# Given output: { properties: { endpoints: { elements: { properties: { file, line, hasAuth } } } } }
+
+.endpoints                    # Get all endpoints array
+.endpoints[0]                 # First endpoint object
+.endpoints[0].file            # First endpoint's file path
+.endpoints[0]["hasAuth"]      # Bracket notation (equivalent to .hasAuth)
+```
+
+Query paths:
+- `.foo` - property access
+- `[0]` - array index
+- `.foo.bar[0].baz` - chained access
+- `["special-key"]` - properties with special characters

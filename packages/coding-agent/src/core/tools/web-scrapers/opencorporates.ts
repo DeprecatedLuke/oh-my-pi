@@ -81,6 +81,7 @@ interface ApiResponse {
 export const handleOpenCorporates: SpecialHandler = async (
 	url: string,
 	timeout: number,
+	signal?: AbortSignal,
 ): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
@@ -100,6 +101,7 @@ export const handleOpenCorporates: SpecialHandler = async (
 		const result = await loadPage(apiUrl, {
 			timeout,
 			headers: { Accept: "application/json" },
+			signal,
 		});
 
 		if (!result.ok) return null;

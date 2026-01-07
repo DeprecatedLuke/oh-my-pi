@@ -70,7 +70,11 @@ function resolveSuggestedVersion(data: FdroidPackage): string | undefined {
 /**
  * Handle F-Droid URLs via API
  */
-export const handleFdroid: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleFdroid: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "f-droid.org" && parsed.hostname !== "www.f-droid.org") return null;
@@ -86,6 +90,7 @@ export const handleFdroid: SpecialHandler = async (url: string, timeout: number)
 		const result = await loadPage(apiUrl, {
 			timeout,
 			headers: { Accept: "application/json" },
+			signal,
 		});
 
 		if (!result.ok) return null;

@@ -72,7 +72,11 @@ function formatAbstract(abstract?: string): string | null {
 	return markdown.trim().length > 0 ? markdown : null;
 }
 
-export const handleCrossref: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleCrossref: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (!DOI_HOSTS.has(parsed.hostname.toLowerCase())) return null;
@@ -84,6 +88,7 @@ export const handleCrossref: SpecialHandler = async (url: string, timeout: numbe
 		const apiUrl = `https://api.crossref.org/works/${encodeURIComponent(doi)}`;
 		const result = await loadPage(apiUrl, {
 			timeout,
+			signal,
 			headers: {
 				Accept: "application/json",
 			},

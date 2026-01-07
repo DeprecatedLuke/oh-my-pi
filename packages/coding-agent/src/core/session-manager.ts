@@ -1,17 +1,3 @@
-import {
-	closeSync,
-	createWriteStream,
-	existsSync,
-	fsyncSync,
-	mkdirSync,
-	openSync,
-	readFileSync,
-	readSync,
-	renameSync,
-	statSync,
-	unlinkSync,
-	type WriteStream,
-} from "node:fs";
 import { basename, join, resolve } from "node:path";
 import type { ImageContent, Message, TextContent, Usage } from "@mariozechner/pi-ai";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
@@ -26,6 +12,8 @@ import {
 	createCustomMessage,
 	type HookMessage,
 } from "./messages";
+import type { SessionStorage, SessionStorageWriter } from "./session-storage";
+import { FileSessionStorage, MemorySessionStorage } from "./session-storage";
 
 export const CURRENT_SESSION_VERSION = 3;
 
@@ -437,20 +425,18 @@ export function buildSessionContext(
  * Compute the default session directory for a cwd.
  * Encodes cwd into a safe directory name under ~/.omp/agent/sessions/.
  */
-function getDefaultSessionDir(cwd: string): string {
+function getDefaultSessionDir(cwd: string, storage: SessionStorage): string {
 	const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 	const sessionDir = join(getDefaultAgentDir(), "sessions", safePath);
-	if (!existsSync(sessionDir)) {
-		mkdirSync(sessionDir, { recursive: true });
-	}
+	storage.ensureDirSync(sessionDir);
 	return sessionDir;
 }
 
 /** Exported for testing */
-export function loadEntriesFromFile(filePath: string): FileEntry[] {
-	if (!existsSync(filePath)) return [];
+export function loadEntriesFromFile(filePath: string, storage: SessionStorage = new FileSessionStorage()): FileEntry[] {
+	if (!storage.existsSync(filePath)) return [];
 
-	const content = readFileSync(filePath, "utf-8");
+	const content = storage.readTextSync(filePath);
 	const entries: FileEntry[] = [];
 	const lines = content.trim().split("\n");
 
@@ -523,57 +509,38 @@ class RecentSessionInfo {
  * Uses low-level file I/O to efficiently read only the first 512 bytes of each file
  * to extract the JSON header without loading entire session logs into memory.
  */
-function getSortedSessions(sessionDir: string): RecentSessionInfo[] {
+function getSortedSessions(sessionDir: string, storage: SessionStorage): RecentSessionInfo[] {
 	try {
-		// Reusable buffer for reading file headers
-		const buf = Buffer.allocUnsafe(512);
-
-		/**
-		 * Reads the first line (JSON header) from an open file descriptor.
-		 * Returns null if the file is empty or doesn't start with valid JSON.
-		 */
-		const readHeader = (fd: number) => {
-			const bytesRead = readSync(fd, buf, 0, 512, 0);
-			if (bytesRead === 0) return null;
-			const sub = buf.subarray(0, bytesRead);
-			// Quick check: first char must be '{' for valid JSON object
-			if (sub.at(0) !== "{".charCodeAt(0)) return null;
-			// Find end of first JSON line
-			const eol = sub.indexOf("}\n");
-			if (eol <= 0) return null;
-			const header = JSON.parse(sub.toString("utf8", 0, eol + 1));
-			// Validate session header
-			if (header.type !== "session" || typeof header.id !== "string") return null;
-			return header;
-		};
-
-		return Array.from(new Bun.Glob("*.jsonl").scanSync(sessionDir))
-			.map((f) => {
+		const buf = Buffer.alloc(512);
+		const files: string[] = storage.listFilesSync(sessionDir, "*.jsonl");
+		return files
+			.map((path: string) => {
 				try {
-					const path = join(sessionDir, f);
-					const fd = openSync(path, "r");
-					try {
-						const header = readHeader(fd);
-						if (!header) return null;
-						const mtime = statSync(path).mtimeMs;
-						return new RecentSessionInfo(path, mtime, header);
-					} finally {
-						closeSync(fd);
-					}
+					const length = storage.readTextPrefixSync(path, buf);
+					const content = buf.toString("utf-8", 0, length);
+					const firstLine = content.split("\n")[0];
+					if (!firstLine || !firstLine.trim()) return null;
+					const header = JSON.parse(firstLine) as Record<string, unknown>;
+					if (header.type !== "session" || typeof header.id !== "string") return null;
+					const mtime = storage.statSync(path).mtimeMs;
+					return new RecentSessionInfo(path, mtime, header);
 				} catch {
 					return null;
 				}
 			})
-			.filter((x) => x !== null)
-			.sort((a, b) => b.mtime - a.mtime); // Sort newest first
+			.filter((item): item is RecentSessionInfo => item !== null)
+			.sort((a, b) => b.mtime - a.mtime);
 	} catch {
 		return [];
 	}
 }
 
 /** Exported for testing */
-export function findMostRecentSession(sessionDir: string): string | null {
-	const sessions = getSortedSessions(sessionDir);
+export function findMostRecentSession(
+	sessionDir: string,
+	storage: SessionStorage = new FileSessionStorage(),
+): string | null {
+	const sessions = getSortedSessions(sessionDir, storage);
 	return sessions[0]?.path || null;
 }
 
@@ -598,19 +565,6 @@ const PLACEHOLDER_IMAGE_DATA =
 	"/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAAQABADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAgP/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCkA//Z";
 
 const TEXT_CONTENT_KEY = "content";
-
-function fsyncDirSync(dir: string): void {
-	try {
-		const fd = openSync(dir, "r");
-		try {
-			fsyncSync(fd);
-		} finally {
-			closeSync(fd);
-		}
-	} catch {
-		// Best-effort: some platforms/filesystems don't support fsync on directories.
-	}
-}
 
 /**
  * Recursively truncate large strings in an object for session persistence.
@@ -724,36 +678,26 @@ async function prepareEntryForPersistence(entry: FileEntry): Promise<FileEntry> 
 }
 
 class NdjsonFileWriter {
-	private writeStream: WriteStream;
+	private writer: SessionStorageWriter;
 	private closed = false;
 	private closing = false;
 	private error: Error | undefined;
 	private pendingWrites: Promise<void> = Promise.resolve();
-	private ready: Promise<void>;
-	private fd: number | null = null;
 	private onError: ((err: Error) => void) | undefined;
 
-	constructor(path: string, options?: { flags?: string; onError?: (err: Error) => void }) {
+	constructor(storage: SessionStorage, path: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }) {
 		this.onError = options?.onError;
-		this.writeStream = createWriteStream(path, { flags: options?.flags ?? "a" });
-		this.ready = new Promise<void>((resolve, reject) => {
-			const onOpen = (fd: number) => {
-				this.fd = fd;
-				this.writeStream.off("error", onError);
-				resolve();
-			};
-			const onError = (err: Error) => {
-				this.writeStream.off("open", onOpen);
-				reject(err);
-			};
-			this.writeStream.once("open", onOpen);
-			this.writeStream.once("error", onError);
+		this.writer = storage.openWriter(path, {
+			flags: options?.flags ?? "a",
+			onError: (err: Error) => this.recordError(err),
 		});
-		this.writeStream.on("error", (err: Error) => {
-			const writeErr = toError(err);
-			if (!this.error) this.error = writeErr;
-			this.onError?.(writeErr);
-		});
+	}
+
+	private recordError(err: unknown): Error {
+		const writeErr = toError(err);
+		if (!this.error) this.error = writeErr;
+		this.onError?.(writeErr);
+		return writeErr;
 	}
 
 	private enqueue(task: () => Promise<void>): Promise<void> {
@@ -762,43 +706,20 @@ class NdjsonFileWriter {
 			await task();
 		};
 		const next = this.pendingWrites.then(run);
-		this.pendingWrites = next.catch((err) => {
+		void next.catch((err: unknown) => {
 			if (!this.error) this.error = toError(err);
 		});
+		this.pendingWrites = next;
 		return next;
 	}
 
 	private async writeLine(line: string): Promise<void> {
 		if (this.error) throw this.error;
-		await new Promise<void>((resolve, reject) => {
-			let settled = false;
-			const onError = (err: Error) => {
-				if (settled) return;
-				settled = true;
-				const writeErr = toError(err);
-				if (!this.error) this.error = writeErr;
-				this.writeStream.off("error", onError);
-				reject(writeErr);
-			};
-			this.writeStream.once("error", onError);
-			this.writeStream.write(line, (err) => {
-				if (settled) return;
-				settled = true;
-				this.writeStream.off("error", onError);
-				if (err) {
-					const writeErr = toError(err);
-					if (!this.error) this.error = writeErr;
-					reject(writeErr);
-				} else {
-					resolve();
-				}
-			});
-			if (this.error && !settled) {
-				settled = true;
-				this.writeStream.off("error", onError);
-				reject(this.error);
-			}
-		});
+		try {
+			await this.writer.writeLine(line);
+		} catch (err) {
+			throw this.recordError(err);
+		}
 	}
 
 	/** Queue a write. Returns a promise so callers can await if needed. */
@@ -809,7 +730,7 @@ class NdjsonFileWriter {
 		return this.enqueue(() => this.writeLine(line));
 	}
 
-	/** Flush all buffered data to disk. Waits for all queued writes and fsync. */
+	/** Flush all buffered data to disk. Waits for all queued writes. */
 	async flush(): Promise<void> {
 		if (this.closed) return;
 		if (this.error) throw this.error;
@@ -818,19 +739,22 @@ class NdjsonFileWriter {
 
 		if (this.error) throw this.error;
 
-		await this.ready;
-		const fd = this.fd;
-		if (typeof fd === "number") {
-			try {
-				fsyncSync(fd);
-			} catch (err) {
-				const fsyncErr = toError(err);
-				if (!this.error) this.error = fsyncErr;
-				throw fsyncErr;
-			}
+		try {
+			await this.writer.flush();
+		} catch (err) {
+			throw this.recordError(err);
 		}
+	}
 
+	/** Sync data to persistent storage. */
+	async fsync(): Promise<void> {
+		if (this.closed) return;
 		if (this.error) throw this.error;
+		try {
+			await this.writer.fsync();
+		} catch (err) {
+			throw this.recordError(err);
+		}
 	}
 
 	/** Close the writer, flushing all data. */
@@ -845,25 +769,23 @@ class NdjsonFileWriter {
 			closeError = toError(err);
 		}
 
-		await this.pendingWrites;
+		try {
+			await this.pendingWrites;
+		} catch (err) {
+			if (!closeError) closeError = toError(err);
+		}
 
-		await new Promise<void>((resolve, reject) => {
-			this.writeStream.end((err?: Error | null) => {
-				if (err) {
-					const endErr = toError(err);
-					if (!this.error) this.error = endErr;
-					reject(endErr);
-				} else {
-					resolve();
-				}
-			});
-		});
+		try {
+			await this.writer.close();
+		} catch (err) {
+			const endErr = this.recordError(err);
+			if (!closeError) closeError = endErr;
+		}
 
 		this.closed = true;
-		this.writeStream.removeAllListeners();
 
+		if (!closeError && this.error) closeError = this.error;
 		if (closeError) throw closeError;
-		if (this.error) throw this.error;
 	}
 
 	/** Check if there's a stored error. */
@@ -873,8 +795,12 @@ class NdjsonFileWriter {
 }
 
 /** Get recent sessions for display in welcome screen */
-export function getRecentSessions(sessionDir: string, limit = 3): RecentSessionInfo[] {
-	return getSortedSessions(sessionDir).slice(0, limit);
+export function getRecentSessions(
+	sessionDir: string,
+	limit = 3,
+	storage: SessionStorage = new FileSessionStorage(),
+): RecentSessionInfo[] {
+	return getSortedSessions(sessionDir, storage).slice(0, limit);
 }
 
 /**
@@ -921,21 +847,22 @@ export class SessionManager {
 	private persistWriterPath: string | undefined;
 	private persistChain: Promise<void> = Promise.resolve();
 	private persistError: Error | undefined;
-	private persistErrorReported = false;
+	private storage: SessionStorage;
 
-	private constructor(cwd: string, sessionDir: string, persist: boolean) {
+	private constructor(cwd: string, sessionDir: string, persist: boolean, storage: SessionStorage) {
 		this.cwd = cwd;
 		this.sessionDir = sessionDir;
 		this.persist = persist;
-		if (persist && sessionDir && !existsSync(sessionDir)) {
-			mkdirSync(sessionDir, { recursive: true });
+		this.storage = storage;
+		if (persist && sessionDir) {
+			this.storage.ensureDirSync(sessionDir);
 		}
 		// Note: call _initSession() or _initSessionFile() after construction
 	}
 
 	/** Initialize with a specific session file (used by factory methods) */
-	private _initSessionFile(sessionFile: string): void {
-		this.setSessionFile(sessionFile);
+	private async _initSessionFile(sessionFile: string): Promise<void> {
+		await this.setSessionFile(sessionFile);
 	}
 
 	/** Initialize with a new session (used by factory methods) */
@@ -944,25 +871,22 @@ export class SessionManager {
 	}
 
 	/** Switch to a different session file (used for resume and branching) */
-	setSessionFile(sessionFile: string): void {
-		void this._closePersistWriter();
+	async setSessionFile(sessionFile: string): Promise<void> {
+		await this._closePersistWriter();
 		this.persistError = undefined;
-		this.persistErrorReported = false;
 		this.sessionFile = resolve(sessionFile);
-		if (existsSync(this.sessionFile)) {
-			void (async () => {
-				this.fileEntries = await loadEntriesFromFile(this.sessionFile!);
-				const header = this.fileEntries.find((e) => e.type === "session") as SessionHeader | undefined;
-				this.sessionId = header?.id ?? nanoid();
-				this.sessionTitle = header?.title;
+		if (this.storage.existsSync(this.sessionFile)) {
+			this.fileEntries = loadEntriesFromFile(this.sessionFile!, this.storage);
+			const header = this.fileEntries.find((e) => e.type === "session") as SessionHeader | undefined;
+			this.sessionId = header?.id ?? nanoid();
+			this.sessionTitle = header?.title;
 
-				if (migrateToCurrentVersion(this.fileEntries)) {
-					await this._rewriteFile();
-				}
+			if (migrateToCurrentVersion(this.fileEntries)) {
+				await this._rewriteFile();
+			}
 
-				this._buildIndex();
-				this.flushed = true;
-			})();
+			this._buildIndex();
+			this.flushed = true;
 		} else {
 			this._newSessionSync();
 		}
@@ -978,7 +902,6 @@ export class SessionManager {
 	private _newSessionSync(options?: NewSessionOptions): string | undefined {
 		this.persistChain = Promise.resolve();
 		this.persistError = undefined;
-		this.persistErrorReported = false;
 		this.sessionId = nanoid();
 		const timestamp = new Date().toISOString();
 		const header: SessionHeader = {
@@ -1044,10 +967,7 @@ export class SessionManager {
 	private _recordPersistError(err: unknown): Error {
 		const normalized = toError(err);
 		if (!this.persistError) this.persistError = normalized;
-		if (!this.persistErrorReported) {
-			this.persistErrorReported = true;
-			console.error("Session persistence error:", normalized);
-		}
+		console.error("Session persistence error:", normalized);
 		return normalized;
 	}
 
@@ -1067,7 +987,7 @@ export class SessionManager {
 		if (this.persistError) throw this.persistError;
 		if (this.persistWriter && this.persistWriterPath === this.sessionFile) return this.persistWriter;
 		// Note: caller must await _closePersistWriter() before calling this if switching files
-		this.persistWriter = new NdjsonFileWriter(this.sessionFile, {
+		this.persistWriter = new NdjsonFileWriter(this.storage, this.sessionFile, {
 			onError: (err) => {
 				this._recordPersistError(err);
 			},
@@ -1097,18 +1017,23 @@ export class SessionManager {
 		if (!this.sessionFile) return;
 		const dir = resolve(this.sessionFile, "..");
 		const tempPath = join(dir, `.${basename(this.sessionFile)}.${nanoid(6)}.tmp`);
-		const writer = new NdjsonFileWriter(tempPath, { flags: "w" });
-		for (const entry of entries) {
-			await writer.write(entry);
-		}
-		await writer.flush();
-		await writer.close();
+		const writer = new NdjsonFileWriter(this.storage, tempPath, { flags: "w" });
 		try {
-			renameSync(tempPath, this.sessionFile);
-			fsyncDirSync(dir);
+			for (const entry of entries) {
+				await writer.write(entry);
+			}
+			await writer.flush();
+			await writer.close();
+			await this.storage.rename(tempPath, this.sessionFile);
+			this.storage.fsyncDirSync(dir);
 		} catch (err) {
 			try {
-				unlinkSync(tempPath);
+				await writer.close();
+			} catch {
+				// Ignore cleanup errors
+			}
+			try {
+				await this.storage.unlink(tempPath);
 			} catch {
 				// Ignore cleanup errors
 			}
@@ -1134,7 +1059,10 @@ export class SessionManager {
 	async flush(): Promise<void> {
 		if (!this.persistWriter) return;
 		await this._queuePersistTask(async () => {
-			if (this.persistWriter) await this.persistWriter.flush();
+			if (this.persistWriter) {
+				await this.persistWriter.flush();
+				await this.persistWriter.fsync();
+			}
 		});
 		if (this.persistError) throw this.persistError;
 	}
@@ -1175,43 +1103,8 @@ export class SessionManager {
 
 		// Update the session file header with the title (if already flushed)
 		const sessionFile = this.sessionFile;
-		if (this.persist && sessionFile && existsSync(sessionFile)) {
-			await this._queuePersistTask(async () => {
-				await this._closePersistWriterInternal();
-				try {
-					const content = readFileSync(sessionFile, "utf-8");
-					const lines = content.split("\n");
-					if (lines.length > 0) {
-						const fileHeader = JSON.parse(lines[0]) as SessionHeader;
-						if (fileHeader.type === "session") {
-							fileHeader.title = title;
-							lines[0] = JSON.stringify(fileHeader);
-							const tempPath = join(resolve(sessionFile, ".."), `.${basename(sessionFile)}.${nanoid(6)}.tmp`);
-							await Bun.write(tempPath, lines.join("\n"));
-							const fd = openSync(tempPath, "r");
-							try {
-								fsyncSync(fd);
-							} finally {
-								closeSync(fd);
-							}
-							try {
-								renameSync(tempPath, sessionFile);
-								fsyncDirSync(resolve(sessionFile, ".."));
-							} catch (err) {
-								try {
-									unlinkSync(tempPath);
-								} catch {
-									// Ignore cleanup errors
-								}
-								throw err;
-							}
-						}
-					}
-				} catch (err) {
-					this._recordPersistError(err);
-					throw err;
-				}
-			});
+		if (this.persist && sessionFile && this.storage.existsSync(sessionFile)) {
+			await this._rewriteFile();
 		}
 	}
 
@@ -1655,11 +1548,10 @@ export class SessionManager {
 		}
 
 		if (this.persist) {
-			const file = Bun.file(newSessionFile);
-			const writer = file.writer();
-			writer.write(`${JSON.stringify(header)}\n`);
+			const lines: string[] = [];
+			lines.push(JSON.stringify(header));
 			for (const entry of pathWithoutLabels) {
-				writer.write(`${JSON.stringify(entry)}\n`);
+				lines.push(JSON.stringify(entry));
 			}
 			// Write fresh label entries at the end
 			const lastEntryId = pathWithoutLabels[pathWithoutLabels.length - 1]?.id || null;
@@ -1674,12 +1566,12 @@ export class SessionManager {
 					targetId,
 					label,
 				};
-				writer.write(`${JSON.stringify(labelEntry)}\n`);
+				lines.push(JSON.stringify(labelEntry));
 				pathEntryIds.add(labelEntry.id);
 				labelEntries.push(labelEntry);
 				parentId = labelEntry.id;
 			}
-			writer.end();
+			this.storage.writeTextSync(newSessionFile, `${lines.join("\n")}\n`);
 			this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
 			this.sessionId = newSessionId;
 			this._buildIndex();
@@ -1712,9 +1604,9 @@ export class SessionManager {
 	 * @param cwd Working directory (stored in session header)
 	 * @param sessionDir Optional session directory. If omitted, uses default (~/.omp/agent/sessions/<encoded-cwd>/).
 	 */
-	static create(cwd: string, sessionDir?: string): SessionManager {
-		const dir = sessionDir ?? getDefaultSessionDir(cwd);
-		const manager = new SessionManager(cwd, dir, true);
+	static create(cwd: string, sessionDir?: string, storage: SessionStorage = new FileSessionStorage()): SessionManager {
+		const dir = sessionDir ?? getDefaultSessionDir(cwd, storage);
+		const manager = new SessionManager(cwd, dir, true, storage);
 		manager._initNewSession();
 		return manager;
 	}
@@ -1724,15 +1616,19 @@ export class SessionManager {
 	 * @param path Path to session file
 	 * @param sessionDir Optional session directory for /new or /branch. If omitted, derives from file's parent.
 	 */
-	static async open(path: string, sessionDir?: string): Promise<SessionManager> {
+	static async open(
+		path: string,
+		sessionDir?: string,
+		storage: SessionStorage = new FileSessionStorage(),
+	): Promise<SessionManager> {
 		// Extract cwd from session header if possible, otherwise use process.cwd()
-		const entries = await loadEntriesFromFile(path);
+		const entries = loadEntriesFromFile(path, storage);
 		const header = entries.find((e) => e.type === "session") as SessionHeader | undefined;
 		const cwd = header?.cwd ?? process.cwd();
 		// If no sessionDir provided, derive from file's parent directory
 		const dir = sessionDir ?? resolve(path, "..");
-		const manager = new SessionManager(cwd, dir, true);
-		manager._initSessionFile(path);
+		const manager = new SessionManager(cwd, dir, true, storage);
+		await manager._initSessionFile(path);
 		return manager;
 	}
 
@@ -1741,12 +1637,16 @@ export class SessionManager {
 	 * @param cwd Working directory
 	 * @param sessionDir Optional session directory. If omitted, uses default (~/.omp/agent/sessions/<encoded-cwd>/).
 	 */
-	static continueRecent(cwd: string, sessionDir?: string): SessionManager {
-		const dir = sessionDir ?? getDefaultSessionDir(cwd);
-		const mostRecent = findMostRecentSession(dir);
-		const manager = new SessionManager(cwd, dir, true);
+	static async continueRecent(
+		cwd: string,
+		sessionDir?: string,
+		storage: SessionStorage = new FileSessionStorage(),
+	): Promise<SessionManager> {
+		const dir = sessionDir ?? getDefaultSessionDir(cwd, storage);
+		const mostRecent = findMostRecentSession(dir, storage);
+		const manager = new SessionManager(cwd, dir, true, storage);
 		if (mostRecent) {
-			manager._initSessionFile(mostRecent);
+			await manager._initSessionFile(mostRecent);
 		} else {
 			manager._initNewSession();
 		}
@@ -1754,8 +1654,8 @@ export class SessionManager {
 	}
 
 	/** Create an in-memory session (no file persistence) */
-	static inMemory(cwd: string = process.cwd()): SessionManager {
-		const manager = new SessionManager(cwd, "", false);
+	static inMemory(cwd: string = process.cwd(), storage: SessionStorage = new MemorySessionStorage()): SessionManager {
+		const manager = new SessionManager(cwd, "", false, storage);
 		manager._initNewSession();
 		return manager;
 	}
@@ -1765,16 +1665,16 @@ export class SessionManager {
 	 * @param cwd Working directory (used to compute default session directory)
 	 * @param sessionDir Optional session directory. If omitted, uses default (~/.omp/agent/sessions/<encoded-cwd>/).
 	 */
-	static list(cwd: string, sessionDir?: string): SessionInfo[] {
-		const dir = sessionDir ?? getDefaultSessionDir(cwd);
+	static list(cwd: string, sessionDir?: string, storage: SessionStorage = new FileSessionStorage()): SessionInfo[] {
+		const dir = sessionDir ?? getDefaultSessionDir(cwd, storage);
 		const sessions: SessionInfo[] = [];
 
 		try {
-			const files = Array.from(new Bun.Glob("*.jsonl").scanSync(dir)).map((f) => join(dir, f));
+			const files = storage.listFilesSync(dir, "*.jsonl");
 
 			for (const file of files) {
 				try {
-					const content = readFileSync(file, "utf-8");
+					const content = storage.readTextSync(file);
 					const lines = content.trim().split("\n");
 					if (lines.length === 0) continue;
 
@@ -1790,7 +1690,7 @@ export class SessionManager {
 					}
 					if (!header) continue;
 
-					const stats = statSync(file);
+					const stats = storage.statSync(file);
 					let messageCount = 0;
 					let firstMessage = "";
 					const allMessages: string[] = [];

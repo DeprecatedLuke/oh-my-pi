@@ -5,7 +5,11 @@ import { finalizeOutput } from "./types";
 /**
  * Handle GitHub Gist URLs via GitHub API
  */
-export const handleGitHubGist: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleGitHubGist: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "gist.github.com") return null;
@@ -21,7 +25,7 @@ export const handleGitHubGist: SpecialHandler = async (url: string, timeout: num
 		const fetchedAt = new Date().toISOString();
 
 		// Fetch via GitHub API
-		const result = await fetchGitHubApi(`/gists/${gistId}`, timeout);
+		const result = await fetchGitHubApi(`/gists/${gistId}`, timeout, signal);
 		if (!result.ok || !result.data) return null;
 
 		const gist = result.data as {

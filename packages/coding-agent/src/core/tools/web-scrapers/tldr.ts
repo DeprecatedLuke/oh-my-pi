@@ -9,7 +9,11 @@ const PLATFORMS = ["common", "linux", "osx"] as const;
  * - https://tldr.sh/{command}
  * - https://tldr.ostera.io/{command}
  */
-export const handleTldr: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleTldr: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "tldr.sh" && parsed.hostname !== "tldr.ostera.io") return null;
@@ -23,7 +27,7 @@ export const handleTldr: SpecialHandler = async (url: string, timeout: number): 
 		// Try platforms in order: common, linux, osx
 		for (const platform of PLATFORMS) {
 			const rawUrl = `${TLDR_BASE}/${platform}/${command}.md`;
-			const result = await loadPage(rawUrl, { timeout });
+			const result = await loadPage(rawUrl, { timeout, signal });
 
 			if (result.ok && result.content.trim()) {
 				const output = finalizeOutput(result.content);

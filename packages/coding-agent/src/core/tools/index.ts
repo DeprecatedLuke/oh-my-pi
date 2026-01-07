@@ -24,7 +24,7 @@ export {
 export { createNotebookTool, type NotebookToolDetails } from "./notebook";
 export { createOutputTool, type OutputToolDetails } from "./output";
 export { createReadTool, type ReadToolDetails } from "./read";
-export { reportFindingTool, submitReviewTool } from "./review";
+export { reportFindingTool, type SubmitReviewDetails } from "./review";
 export { filterRulebookRules, formatRulesForPrompt, type RulebookToolDetails } from "./rulebook";
 export { BUNDLED_AGENTS, createTaskTool, taskTool } from "./task/index";
 export type { TruncationResult } from "./truncate";
@@ -53,6 +53,7 @@ export { createWriteTool, type WriteToolDetails } from "./write";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Rule } from "../../capability/rule";
 import type { EventBus } from "../event-bus";
+import type { BashInterceptorRule } from "../settings-manager";
 import { createAskTool } from "./ask";
 import { createBashTool } from "./bash";
 import { createCompleteTool } from "./complete";
@@ -65,7 +66,7 @@ import { createLspTool } from "./lsp/index";
 import { createNotebookTool } from "./notebook";
 import { createOutputTool } from "./output";
 import { createReadTool } from "./read";
-import { reportFindingTool, submitReviewTool } from "./review";
+import { reportFindingTool } from "./review";
 import { createRulebookTool } from "./rulebook";
 import { createTaskTool } from "./task/index";
 import { createWebFetchTool } from "./web-fetch";
@@ -102,6 +103,8 @@ export interface ToolSession {
 		getEditFuzzyMatch(): boolean;
 		getGitToolEnabled(): boolean;
 		getBashInterceptorEnabled(): boolean;
+		getBashInterceptorSimpleLsEnabled(): boolean;
+		getBashInterceptorRules(): BashInterceptorRule[];
 	};
 }
 
@@ -129,7 +132,6 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	complete: createCompleteTool,
 	report_finding: () => reportFindingTool,
-	submit_review: () => submitReviewTool,
 };
 
 export type ToolName = keyof typeof BUILTIN_TOOLS;

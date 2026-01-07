@@ -17,7 +17,11 @@ function looksLikeHtml(content: string): boolean {
 /**
  * Handle crates.io URLs via API
  */
-export const handleCratesIo: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleCratesIo: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "crates.io" && parsed.hostname !== "www.crates.io") return null;
@@ -33,6 +37,7 @@ export const handleCratesIo: SpecialHandler = async (url: string, timeout: numbe
 		const apiUrl = `https://crates.io/api/v1/crates/${crateName}`;
 		const result = await loadPage(apiUrl, {
 			timeout,
+			signal,
 			headers: { "User-Agent": "omp-web-fetch/1.0 (https://github.com/anthropics)" },
 		});
 
@@ -101,7 +106,7 @@ export const handleCratesIo: SpecialHandler = async (url: string, timeout: numbe
 
 		// Try to fetch README from docs.rs or repository
 		const docsRsUrl = `https://docs.rs/crate/${crateName}/${crate.max_version}/source/README.md`;
-		const readmeResult = await loadPage(docsRsUrl, { timeout: Math.min(timeout, 5) });
+		const readmeResult = await loadPage(docsRsUrl, { timeout: Math.min(timeout, 5), signal });
 		if (readmeResult.ok && readmeResult.content.length > 100 && !looksLikeHtml(readmeResult.content)) {
 			md += `\n---\n\n## README\n\n${readmeResult.content}\n`;
 		}

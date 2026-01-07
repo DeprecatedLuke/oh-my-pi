@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getModel, type Model } from "@mariozechner/pi-ai";
 import { Agent, type ThinkingLevel } from "@oh-my-pi/pi-agent-core";
+import { nanoid } from "nanoid";
 import { AgentSession } from "../src/core/agent-session";
 import { AuthStorage } from "../src/core/auth-storage";
 import { ModelRegistry } from "../src/core/model-registry";
@@ -31,7 +32,7 @@ describe.skipIf(!HAS_ANTIGRAVITY_AUTH)("Compaction with thinking models (Antigra
 	let tempDir: string;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-thinking-compaction-test-${Date.now()}`);
+		tempDir = join(tmpdir(), `pi-thinking-compaction-test-${nanoid()}`);
 		mkdirSync(tempDir, { recursive: true });
 	});
 
@@ -144,7 +145,7 @@ describe.skipIf(!HAS_ANTHROPIC_AUTH)("Compaction with thinking models (Anthropic
 	let tempDir: string;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-thinking-compaction-anthropic-test-${Date.now()}`);
+		tempDir = join(tmpdir(), `pi-thinking-compaction-anthropic-test-${nanoid()}`);
 		mkdirSync(tempDir, { recursive: true });
 	});
 

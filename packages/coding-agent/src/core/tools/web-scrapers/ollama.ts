@@ -171,7 +171,11 @@ function collectParameterSizes(models: OllamaTagModel[], htmlSizes: string[]): s
 	return Array.from(sizes);
 }
 
-export const handleOllama: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleOllama: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = parseOllamaUrl(url);
 		if (!parsed) return null;
@@ -181,8 +185,8 @@ export const handleOllama: SpecialHandler = async (url: string, timeout: number)
 
 		const tagsUrl = "https://ollama.com/api/tags";
 		const [tagsResult, pageResult] = await Promise.all([
-			loadPage(tagsUrl, { timeout, headers: { Accept: "application/json" } }),
-			loadPage(pageUrl, { timeout }),
+			loadPage(tagsUrl, { timeout, signal, headers: { Accept: "application/json" } }),
+			loadPage(pageUrl, { timeout, signal }),
 		]);
 
 		let tagsData: OllamaTagsResponse | null = null;

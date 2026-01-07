@@ -90,7 +90,11 @@ function cleanRfcText(text: string): string {
 /**
  * Handle RFC Editor URLs - fetches IETF RFCs
  */
-export const handleRfc: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleRfc: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		const rfcNumber = extractRfcNumber(parsed);
@@ -105,8 +109,8 @@ export const handleRfc: SpecialHandler = async (url: string, timeout: number): P
 		const textUrl = `https://www.rfc-editor.org/rfc/rfc${rfcNumber}.txt`;
 
 		const [metaResult, textResult] = await Promise.all([
-			loadPage(metadataUrl, { timeout: Math.min(timeout, 10) }),
-			loadPage(textUrl, { timeout }),
+			loadPage(metadataUrl, { timeout: Math.min(timeout, 10), signal }),
+			loadPage(textUrl, { timeout, signal }),
 		]);
 
 		// We need at least the text content

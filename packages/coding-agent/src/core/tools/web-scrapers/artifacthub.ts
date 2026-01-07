@@ -53,7 +53,11 @@ interface ArtifactHubPackage {
  * Handle Artifact Hub URLs via API
  * Supports Helm charts, OLM operators, Falco rules, OPA policies, etc.
  */
-export const handleArtifactHub: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleArtifactHub: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "artifacthub.io" && parsed.hostname !== "www.artifacthub.io") return null;
@@ -70,6 +74,7 @@ export const handleArtifactHub: SpecialHandler = async (url: string, timeout: nu
 		const result = await loadPage(apiUrl, {
 			timeout,
 			headers: { Accept: "application/json" },
+			signal,
 		});
 
 		if (!result.ok) return null;

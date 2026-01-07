@@ -72,7 +72,11 @@ function extractEditors(editorsPayload: JsonRecord | null): string[] {
 	return names;
 }
 
-export const handleW3c: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleW3c: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "www.w3.org" && parsed.hostname !== "w3.org") return null;
@@ -86,8 +90,8 @@ export const handleW3c: SpecialHandler = async (url: string, timeout: number): P
 		const latestUrl = `https://api.w3.org/specifications/${encodeURIComponent(shortname)}/versions/latest`;
 
 		const [specResult, latestResult] = await Promise.all([
-			loadPage(specUrl, { timeout, headers: { Accept: "application/json" } }),
-			loadPage(latestUrl, { timeout, headers: { Accept: "application/json" } }),
+			loadPage(specUrl, { timeout, signal, headers: { Accept: "application/json" } }),
+			loadPage(latestUrl, { timeout, signal, headers: { Accept: "application/json" } }),
 		]);
 
 		if (!specResult.ok || !latestResult.ok) return null;
@@ -117,7 +121,7 @@ export const handleW3c: SpecialHandler = async (url: string, timeout: number): P
 
 		let editors: string[] = [];
 		if (editorsUrl) {
-			const editorsResult = await loadPage(editorsUrl, { timeout: Math.min(timeout, 10) });
+			const editorsResult = await loadPage(editorsUrl, { timeout: Math.min(timeout, 10), signal });
 			if (editorsResult.ok) {
 				try {
 					const editorsPayload = asRecord(JSON.parse(editorsResult.content));

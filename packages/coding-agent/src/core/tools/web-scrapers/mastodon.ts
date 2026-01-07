@@ -51,11 +51,12 @@ interface MastodonStatus {
 /**
  * Check if a domain is a Mastodon instance by probing the API
  */
-async function isMastodonInstance(hostname: string, timeout: number): Promise<boolean> {
+async function isMastodonInstance(hostname: string, timeout: number, signal?: AbortSignal): Promise<boolean> {
 	try {
 		const result = await loadPage(`https://${hostname}/api/v1/instance`, {
 			timeout: Math.min(timeout, 5),
 			headers: { Accept: "application/json" },
+			signal,
 		});
 		if (!result.ok) return false;
 		const data = JSON.parse(result.content);
@@ -188,7 +189,11 @@ function formatAccount(account: MastodonAccount): string {
 /**
  * Handle Mastodon/Fediverse URLs
  */
-export const handleMastodon: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleMastodon: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 
@@ -199,7 +204,7 @@ export const handleMastodon: SpecialHandler = async (url: string, timeout: numbe
 		if (!postMatch && !profileMatch) return null;
 
 		// Verify this is a Mastodon instance
-		if (!(await isMastodonInstance(parsed.hostname, timeout))) {
+		if (!(await isMastodonInstance(parsed.hostname, timeout, signal))) {
 			return null;
 		}
 
@@ -214,6 +219,7 @@ export const handleMastodon: SpecialHandler = async (url: string, timeout: numbe
 			const result = await loadPage(apiUrl, {
 				timeout,
 				headers: { Accept: "application/json" },
+				signal,
 			});
 
 			if (!result.ok) return null;
@@ -248,6 +254,7 @@ export const handleMastodon: SpecialHandler = async (url: string, timeout: numbe
 			const result = await loadPage(lookupUrl, {
 				timeout,
 				headers: { Accept: "application/json" },
+				signal,
 			});
 
 			if (!result.ok) return null;
@@ -264,6 +271,7 @@ export const handleMastodon: SpecialHandler = async (url: string, timeout: numbe
 			const statusesResult = await loadPage(statusesUrl, {
 				timeout,
 				headers: { Accept: "application/json" },
+				signal,
 			});
 
 			let md = formatAccount(account);

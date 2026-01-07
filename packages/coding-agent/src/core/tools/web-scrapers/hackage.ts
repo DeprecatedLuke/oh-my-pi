@@ -19,7 +19,11 @@ interface HackagePackage {
 /**
  * Handle Hackage (Haskell package registry) URLs via JSON API
  */
-export const handleHackage: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleHackage: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "hackage.haskell.org") return null;
@@ -36,6 +40,7 @@ export const handleHackage: SpecialHandler = async (url: string, timeout: number
 		const result = await loadPage(apiUrl, {
 			timeout,
 			headers: { Accept: "application/json" },
+			signal,
 		});
 
 		if (!result.ok) return null;

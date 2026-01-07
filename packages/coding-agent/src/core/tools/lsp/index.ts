@@ -1,5 +1,5 @@
 import type { Dirent } from "node:fs";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { BunFile } from "bun";
@@ -136,14 +136,18 @@ async function syncFileContent(
 	content: string,
 	cwd: string,
 	servers: Array<[string, ServerConfig]>,
+	signal?: AbortSignal,
 ): Promise<void> {
+	signal?.throwIfAborted();
 	await Promise.allSettled(
 		servers.map(async ([_serverName, serverConfig]) => {
+			signal?.throwIfAborted();
 			if (serverConfig.createClient) {
 				return;
 			}
 			const client = await getOrCreateClient(serverConfig, cwd);
-			await syncContent(client, absolutePath, content);
+			signal?.throwIfAborted();
+			await syncContent(client, absolutePath, content, signal);
 		}),
 	);
 }
@@ -160,14 +164,17 @@ async function notifyFileSaved(
 	absolutePath: string,
 	cwd: string,
 	servers: Array<[string, ServerConfig]>,
+	signal?: AbortSignal,
 ): Promise<void> {
+	signal?.throwIfAborted();
 	await Promise.allSettled(
 		servers.map(async ([_serverName, serverConfig]) => {
+			signal?.throwIfAborted();
 			if (serverConfig.createClient) {
 				return;
 			}
 			const client = await getOrCreateClient(serverConfig, cwd);
-			await notifySaved(client, absolutePath);
+			await notifySaved(client, absolutePath, signal);
 		}),
 	);
 }
@@ -227,13 +234,19 @@ function findFileByExtensions(baseDir: string, extensions: string[], maxDepth: n
 	const normalized = extensions.map((ext) => ext.toLowerCase());
 	const search = (dir: string, depth: number): string | null => {
 		if (depth > maxDepth) return null;
-		let entries: Dirent[];
+		const entries: Dirent[] = [];
 		try {
-			entries = Array.from(new Bun.Glob("*").scanSync({ cwd: dir, onlyFiles: false })).map((name) => ({
-				name,
-				isFile: () => !existsSync(path.join(dir, name)) || Bun.file(path.join(dir, name)).type !== "directory",
-				isDirectory: () => existsSync(path.join(dir, name)) && Bun.file(path.join(dir, name)).type === "directory",
-			})) as Dirent[];
+			const names = Array.from(new Bun.Glob("*").scanSync({ cwd: dir, onlyFiles: false }));
+			for (const name of names) {
+				const fullPath = path.join(dir, name);
+				let isDir = false;
+				try {
+					isDir = statSync(fullPath).isDirectory();
+				} catch {
+					continue;
+				}
+				entries.push({ name, isFile: () => !isDir, isDirectory: () => isDir } as Dirent);
+			}
 		} catch {
 			return null;
 		}
@@ -298,9 +311,15 @@ function getServerForWorkspaceAction(config: LspConfig, action: string): [string
 	return null;
 }
 
-async function waitForDiagnostics(client: LspClient, uri: string, timeoutMs = 3000): Promise<Diagnostic[]> {
+async function waitForDiagnostics(
+	client: LspClient,
+	uri: string,
+	timeoutMs = 3000,
+	signal?: AbortSignal,
+): Promise<Diagnostic[]> {
 	const start = Date.now();
 	while (Date.now() - start < timeoutMs) {
+		signal?.throwIfAborted();
 		const diagnostics = client.diagnostics.get(uri);
 		if (diagnostics !== undefined) return diagnostics;
 		await sleep(100);
@@ -440,6 +459,7 @@ async function getDiagnosticsForFile(
 	absolutePath: string,
 	cwd: string,
 	servers: Array<[string, ServerConfig]>,
+	signal?: AbortSignal,
 ): Promise<FileDiagnosticsResult | undefined> {
 	if (servers.length === 0) {
 		return undefined;
@@ -453,6 +473,7 @@ async function getDiagnosticsForFile(
 	// Wait for diagnostics from all servers in parallel
 	const results = await Promise.allSettled(
 		servers.map(async ([serverName, serverConfig]) => {
+			signal?.throwIfAborted();
 			// Use custom linter client if configured
 			if (serverConfig.createClient) {
 				const linterClient = getLinterClient(serverName, serverConfig, cwd);
@@ -462,8 +483,9 @@ async function getDiagnosticsForFile(
 
 			// Default: use LSP
 			const client = await getOrCreateClient(serverConfig, cwd);
+			signal?.throwIfAborted();
 			// Content already synced + didSave sent, just wait for diagnostics
-			const diagnostics = await waitForDiagnostics(client, uri);
+			const diagnostics = await waitForDiagnostics(client, uri, 3000, signal);
 			return { serverName, diagnostics };
 		}),
 	);
@@ -539,6 +561,7 @@ async function formatContent(
 	content: string,
 	cwd: string,
 	servers: Array<[string, ServerConfig]>,
+	signal?: AbortSignal,
 ): Promise<string> {
 	if (servers.length === 0) {
 		return content;
@@ -548,6 +571,7 @@ async function formatContent(
 
 	for (const [serverName, serverConfig] of servers) {
 		try {
+			signal?.throwIfAborted();
 			// Use custom linter client if configured
 			if (serverConfig.createClient) {
 				const linterClient = getLinterClient(serverName, serverConfig, cwd);
@@ -556,6 +580,7 @@ async function formatContent(
 
 			// Default: use LSP
 			const client = await getOrCreateClient(serverConfig, cwd);
+			signal?.throwIfAborted();
 
 			const caps = client.serverCapabilities;
 			if (!caps?.documentFormattingProvider) {
@@ -563,10 +588,15 @@ async function formatContent(
 			}
 
 			// Request formatting (content already synced)
-			const edits = (await sendRequest(client, "textDocument/formatting", {
-				textDocument: { uri },
-				options: DEFAULT_FORMAT_OPTIONS,
-			})) as TextEdit[] | null;
+			const edits = (await sendRequest(
+				client,
+				"textDocument/formatting",
+				{
+					textDocument: { uri },
+					options: DEFAULT_FORMAT_OPTIONS,
+				},
+				signal,
+			)) as TextEdit[] | null;
 
 			if (!edits || edits.length === 0) {
 				return content;
@@ -633,28 +663,29 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 		let formatter: FileFormatResult | undefined;
 		let diagnostics: FileDiagnosticsResult | undefined;
 		try {
-			signal ??= AbortSignal.timeout(10_000);
-			await untilAborted(signal, async () => {
+			const timeoutSignal = AbortSignal.timeout(10_000);
+			const operationSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+			await untilAborted(operationSignal, async () => {
 				if (useCustomFormatter) {
 					// Custom linters (e.g. Biome CLI) require on-disk input.
 					await writeContent(content);
-					finalContent = await formatContent(dst, content, cwd, customLinterServers);
+					finalContent = await formatContent(dst, content, cwd, customLinterServers, operationSignal);
 					formatter = finalContent !== content ? FileFormatResult.FORMATTED : FileFormatResult.UNCHANGED;
 					await writeContent(finalContent);
-					await syncFileContent(dst, finalContent, cwd, lspServers);
+					await syncFileContent(dst, finalContent, cwd, lspServers, operationSignal);
 				} else {
 					// 1. Sync original content to LSP servers
-					await syncFileContent(dst, content, cwd, lspServers);
+					await syncFileContent(dst, content, cwd, lspServers, operationSignal);
 
 					// 2. Format in-memory via LSP
 					if (enableFormat) {
-						finalContent = await formatContent(dst, content, cwd, lspServers);
+						finalContent = await formatContent(dst, content, cwd, lspServers, operationSignal);
 						formatter = finalContent !== content ? FileFormatResult.FORMATTED : FileFormatResult.UNCHANGED;
 					}
 
 					// 3. If formatted, sync formatted content to LSP servers
 					if (finalContent !== content) {
-						await syncFileContent(dst, finalContent, cwd, lspServers);
+						await syncFileContent(dst, finalContent, cwd, lspServers, operationSignal);
 					}
 
 					// 4. Write to disk
@@ -662,11 +693,11 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 				}
 
 				// 5. Notify saved to LSP servers
-				await notifyFileSaved(dst, cwd, lspServers);
+				await notifyFileSaved(dst, cwd, lspServers, operationSignal);
 
 				// 6. Get diagnostics from all servers
 				if (enableDiagnostics) {
-					diagnostics = await getDiagnosticsForFile(dst, cwd, servers);
+					diagnostics = await getDiagnosticsForFile(dst, cwd, servers, operationSignal);
 				}
 			});
 		} catch {

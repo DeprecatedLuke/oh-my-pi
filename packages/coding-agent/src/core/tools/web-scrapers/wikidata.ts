@@ -90,7 +90,11 @@ type WikidataValue =
 /**
  * Handle Wikidata URLs via EntityData API
  */
-export const handleWikidata: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleWikidata: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (!parsed.hostname.includes("wikidata.org")) return null;
@@ -104,7 +108,7 @@ export const handleWikidata: SpecialHandler = async (url: string, timeout: numbe
 
 		// Fetch entity data from API
 		const apiUrl = `https://www.wikidata.org/wiki/Special:EntityData/${qid}.json`;
-		const result = await loadPage(apiUrl, { timeout });
+		const result = await loadPage(apiUrl, { timeout, signal });
 
 		if (!result.ok) return null;
 
@@ -149,7 +153,7 @@ export const handleWikidata: SpecialHandler = async (url: string, timeout: numbe
 			}
 
 			// Fetch labels for referenced entities (limit to 50)
-			const entityLabels = await resolveEntityLabels(Array.from(entityIdsToResolve).slice(0, 50), timeout);
+			const entityLabels = await resolveEntityLabels(Array.from(entityIdsToResolve).slice(0, 50), timeout, signal);
 
 			// Group claims by property
 			const processedProperties: string[] = [];
@@ -256,7 +260,11 @@ function getLocalizedAliases(
 /**
  * Resolve entity IDs to their labels via wbgetentities API
  */
-async function resolveEntityLabels(entityIds: string[], timeout: number): Promise<Record<string, string>> {
+async function resolveEntityLabels(
+	entityIds: string[],
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<Record<string, string>> {
 	if (entityIds.length === 0) return {};
 
 	const labels: Record<string, string> = {};
@@ -268,7 +276,7 @@ async function resolveEntityLabels(entityIds: string[], timeout: number): Promis
 		const apiUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${batch.join("|")}&props=labels&languages=en&format=json`;
 
 		try {
-			const result = await loadPage(apiUrl, { timeout: Math.min(timeout, 10) });
+			const result = await loadPage(apiUrl, { timeout: Math.min(timeout, 10), signal });
 			if (result.ok) {
 				const data = JSON.parse(result.content) as {
 					entities: Record<string, { labels?: Record<string, { value: string }> }>;

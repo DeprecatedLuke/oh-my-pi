@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getModel } from "@mariozechner/pi-ai";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import { nanoid } from "nanoid";
 import { AgentSession } from "../src/core/agent-session";
 import { AuthStorage } from "../src/core/auth-storage";
 import { ModelRegistry } from "../src/core/model-registry";
@@ -77,7 +78,7 @@ export interface TestSessionContext {
  * Use this for e2e tests that need real LLM calls.
  */
 export async function createTestSession(options: TestSessionOptions = {}): Promise<TestSessionContext> {
-	const tempDir = join(tmpdir(), `omp-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+	const tempDir = join(tmpdir(), `omp-test-${nanoid()}`);
 	mkdirSync(tempDir, { recursive: true });
 
 	const toolSession: ToolSession = {

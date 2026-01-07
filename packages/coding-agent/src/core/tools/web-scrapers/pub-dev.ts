@@ -3,7 +3,7 @@ import { finalizeOutput, formatCount, loadPage, type SpecialHandler } from "./ty
 /**
  * Handle pub.dev URLs via API
  */
-export const handlePubDev: SpecialHandler = async (url: string, timeout: number) => {
+export const handlePubDev: SpecialHandler = async (url: string, timeout: number, signal?: AbortSignal) => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "pub.dev" && parsed.hostname !== "www.pub.dev") return null;
@@ -17,7 +17,7 @@ export const handlePubDev: SpecialHandler = async (url: string, timeout: number)
 
 		// Fetch from pub.dev API
 		const apiUrl = `https://pub.dev/api/packages/${encodeURIComponent(packageName)}`;
-		const result = await loadPage(apiUrl, { timeout });
+		const result = await loadPage(apiUrl, { timeout, signal });
 
 		if (!result.ok) return null;
 
@@ -122,7 +122,7 @@ export const handlePubDev: SpecialHandler = async (url: string, timeout: number)
 		// Try to fetch README from pub.dev
 		const readmeUrl = `https://pub.dev/packages/${encodeURIComponent(packageName)}/versions/${encodeURIComponent(latest.version)}/readme`;
 		try {
-			const readmeResult = await loadPage(readmeUrl, { timeout: Math.min(timeout, 10) });
+			const readmeResult = await loadPage(readmeUrl, { timeout: Math.min(timeout, 10), signal });
 			if (readmeResult.ok) {
 				// Extract README content from HTML
 				const readmeMatch = readmeResult.content.match(

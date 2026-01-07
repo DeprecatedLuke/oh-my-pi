@@ -8,7 +8,11 @@ import { finalizeOutput, loadPage } from "./types";
 /**
  * Handle PubMed URLs - fetch article metadata, abstract, MeSH terms
  */
-export const handlePubMed: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handlePubMed: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 
@@ -39,7 +43,7 @@ export const handlePubMed: SpecialHandler = async (url: string, timeout: number)
 
 		// Fetch summary metadata
 		const summaryUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${pmid}&retmode=json`;
-		const summaryResult = await loadPage(summaryUrl, { timeout });
+		const summaryResult = await loadPage(summaryUrl, { timeout, signal });
 
 		if (!summaryResult.ok) return null;
 
@@ -70,7 +74,7 @@ export const handlePubMed: SpecialHandler = async (url: string, timeout: number)
 
 		// Fetch abstract
 		const abstractUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${pmid}&rettype=abstract&retmode=text`;
-		const abstractResult = await loadPage(abstractUrl, { timeout });
+		const abstractResult = await loadPage(abstractUrl, { timeout, signal });
 
 		let abstractText = "";
 		if (abstractResult.ok) {
@@ -133,7 +137,7 @@ export const handlePubMed: SpecialHandler = async (url: string, timeout: number)
 		// Try to fetch MeSH terms
 		try {
 			const meshUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${pmid}&rettype=medline&retmode=text`;
-			const meshResult = await loadPage(meshUrl, { timeout: Math.min(timeout, 5) });
+			const meshResult = await loadPage(meshUrl, { timeout: Math.min(timeout, 5), signal });
 
 			if (meshResult.ok) {
 				const meshTerms: string[] = [];

@@ -79,7 +79,7 @@ function extractVideoId(url: string): string | null {
 /**
  * Handle Vimeo URLs via oEmbed API
  */
-export const handleVimeo: SpecialHandler = async (url: string, timeout: number) => {
+export const handleVimeo: SpecialHandler = async (url: string, timeout: number, signal?: AbortSignal) => {
 	try {
 		const parsed = new URL(url);
 		if (!parsed.hostname.includes("vimeo.com")) return null;
@@ -92,7 +92,7 @@ export const handleVimeo: SpecialHandler = async (url: string, timeout: number) 
 		// Use canonical URL for oEmbed (handles staffpicks and other URL formats)
 		const canonicalUrl = `https://vimeo.com/${videoId}`;
 		const oembedUrl = `https://vimeo.com/api/oembed.json?url=${encodeURIComponent(canonicalUrl)}`;
-		const oembedResult = await loadPage(oembedUrl, { timeout });
+		const oembedResult = await loadPage(oembedUrl, { timeout, signal });
 
 		if (!oembedResult.ok) return null;
 
@@ -117,7 +117,7 @@ export const handleVimeo: SpecialHandler = async (url: string, timeout: number) 
 		// Try to get additional details from video config
 		try {
 			const configUrl = `https://player.vimeo.com/video/${videoId}/config`;
-			const configResult = await loadPage(configUrl, { timeout: Math.min(timeout, 5) });
+			const configResult = await loadPage(configUrl, { timeout: Math.min(timeout, 5), signal });
 
 			if (configResult.ok) {
 				const config = JSON.parse(configResult.content) as VimeoVideoConfig;

@@ -106,7 +106,11 @@ function buildPostUrl(baseUrl: string, postId: string): string {
 /**
  * Handle Discourse forum URLs via API
  */
-export const handleDiscourse: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleDiscourse: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		const topicMatch = parseTopicPath(parsed.pathname);
@@ -120,7 +124,7 @@ export const handleDiscourse: SpecialHandler = async (url: string, timeout: numb
 		let topicId = topicMatch?.topicId ?? null;
 
 		if (!topicId && postMatch) {
-			const postResult = await loadPage(buildPostUrl(baseUrl, postMatch.postId), { timeout });
+			const postResult = await loadPage(buildPostUrl(baseUrl, postMatch.postId), { timeout, signal });
 			if (!postResult.ok) return null;
 
 			let postData: DiscoursePostResponse;
@@ -137,7 +141,7 @@ export const handleDiscourse: SpecialHandler = async (url: string, timeout: numb
 
 		if (!topicId) return null;
 
-		const topicResult = await loadPage(buildTopicUrl(baseUrl, topicId), { timeout });
+		const topicResult = await loadPage(buildTopicUrl(baseUrl, topicId), { timeout, signal });
 		if (!topicResult.ok) return null;
 
 		let topic: DiscourseTopic;

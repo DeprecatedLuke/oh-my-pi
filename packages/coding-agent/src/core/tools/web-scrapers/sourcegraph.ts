@@ -168,13 +168,19 @@ function safeParseJson<T>(content: string): T | null {
 	}
 }
 
-async function fetchGraphql<T>(query: string, variables: Record<string, unknown>, timeout: number): Promise<T | null> {
+async function fetchGraphql<T>(
+	query: string,
+	variables: Record<string, unknown>,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<T | null> {
 	const body = JSON.stringify({ query, variables });
 	const result = await loadPage(GRAPHQL_ENDPOINT, {
 		timeout,
 		headers: GRAPHQL_HEADERS,
 		method: "POST",
 		body,
+		signal,
 	});
 	if (!result.ok) return null;
 
@@ -200,8 +206,12 @@ function formatRepoMarkdown(repo: SourcegraphRepository): string {
 	return md;
 }
 
-async function renderRepo(repoName: string, timeout: number): Promise<{ content: string; ok: boolean }> {
-	const data = await fetchGraphql<RepoQueryData>(REPO_QUERY, { name: repoName }, timeout);
+async function renderRepo(
+	repoName: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<{ content: string; ok: boolean }> {
+	const data = await fetchGraphql<RepoQueryData>(REPO_QUERY, { name: repoName }, timeout, signal);
 	if (!data?.repository) return { content: "", ok: false };
 
 	return { content: formatRepoMarkdown(data.repository), ok: true };
@@ -212,11 +222,13 @@ async function renderFile(
 	filePath: string,
 	rev: string,
 	timeout: number,
+	signal?: AbortSignal,
 ): Promise<{ content: string; ok: boolean }> {
 	const data = await fetchGraphql<RepoFileQueryData>(
 		REPO_FILE_QUERY,
 		{ name: repoName, path: filePath, rev },
 		timeout,
+		signal,
 	);
 	const repo = data?.repository;
 	const content = repo?.commit?.blob?.content ?? null;
@@ -232,8 +244,12 @@ async function renderFile(
 	return { content: md, ok: true };
 }
 
-async function renderSearch(query: string, timeout: number): Promise<{ content: string; ok: boolean }> {
-	const data = await fetchGraphql<SearchQueryData>(SEARCH_QUERY, { query }, timeout);
+async function renderSearch(
+	query: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<{ content: string; ok: boolean }> {
+	const data = await fetchGraphql<SearchQueryData>(SEARCH_QUERY, { query }, timeout, signal);
 	const resultsData = data?.search?.results;
 	if (!resultsData) return { content: "", ok: false };
 	const results = resultsData.results ?? [];
@@ -291,7 +307,11 @@ async function renderSearch(query: string, timeout: number): Promise<{ content: 
 	return { content: md, ok: true };
 }
 
-export const handleSourcegraph: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleSourcegraph: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const target = parseSourcegraphUrl(url);
 		if (!target) return null;
@@ -301,7 +321,7 @@ export const handleSourcegraph: SpecialHandler = async (url: string, timeout: nu
 
 		switch (target.type) {
 			case "search": {
-				const result = await renderSearch(target.query, timeout);
+				const result = await renderSearch(target.query, timeout, signal);
 				if (!result.ok) return null;
 				const output = finalizeOutput(result.content);
 				return {
@@ -317,7 +337,7 @@ export const handleSourcegraph: SpecialHandler = async (url: string, timeout: nu
 			}
 			case "file": {
 				const rev = target.rev ?? "HEAD";
-				const result = await renderFile(target.repoName, target.filePath, rev, timeout);
+				const result = await renderFile(target.repoName, target.filePath, rev, timeout, signal);
 				if (!result.ok) return null;
 				const output = finalizeOutput(result.content);
 				return {
@@ -332,7 +352,7 @@ export const handleSourcegraph: SpecialHandler = async (url: string, timeout: nu
 				};
 			}
 			case "repo": {
-				const result = await renderRepo(target.repoName, timeout);
+				const result = await renderRepo(target.repoName, timeout, signal);
 				if (!result.ok) return null;
 				const output = finalizeOutput(result.content);
 				return {

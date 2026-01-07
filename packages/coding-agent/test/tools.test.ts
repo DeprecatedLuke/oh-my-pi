@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { nanoid } from "nanoid";
 import { createBashTool } from "../src/core/tools/bash";
 import { createEditTool } from "../src/core/tools/edit";
 import { createFindTool } from "../src/core/tools/find";
@@ -43,7 +44,7 @@ describe("Coding Agent Tools", () => {
 
 	beforeEach(() => {
 		// Create a unique temporary directory for each test
-		testDir = join(tmpdir(), `coding-agent-test-${Date.now()}`);
+		testDir = join(tmpdir(), `coding-agent-test-${nanoid()}`);
 		mkdirSync(testDir, { recursive: true });
 
 		// Create tools for this test directory
@@ -492,7 +493,7 @@ describe("edit tool CRLF handling", () => {
 	let editTool: ReturnType<typeof createEditTool>;
 
 	beforeEach(() => {
-		testDir = join(tmpdir(), `coding-agent-crlf-test-${Date.now()}`);
+		testDir = join(tmpdir(), `coding-agent-crlf-test-${nanoid()}`);
 		mkdirSync(testDir, { recursive: true });
 		editTool = createEditTool(createTestToolSession(testDir));
 	});

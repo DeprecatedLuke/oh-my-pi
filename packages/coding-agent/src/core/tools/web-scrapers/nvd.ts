@@ -73,7 +73,11 @@ interface NvdResponse {
 /**
  * Handle NVD (National Vulnerability Database) CVE URLs
  */
-export const handleNvd: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleNvd: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (!parsed.hostname.includes("nvd.nist.gov")) return null;
@@ -90,6 +94,7 @@ export const handleNvd: SpecialHandler = async (url: string, timeout: number): P
 		const result = await loadPage(apiUrl, {
 			timeout,
 			headers: { Accept: "application/json" },
+			signal,
 		});
 
 		if (!result.ok) return null;

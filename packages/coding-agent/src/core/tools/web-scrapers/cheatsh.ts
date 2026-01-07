@@ -7,7 +7,11 @@ import { finalizeOutput, loadPage } from "./types";
  * API: Plain text at https://cheat.sh/{topic}?T (T flag removes ANSI colors)
  * Supports: commands, language/topic queries (e.g., python/list, go/slice)
  */
-export const handleCheatSh: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleCheatSh: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "cheat.sh" && parsed.hostname !== "cht.sh") return null;
@@ -22,6 +26,7 @@ export const handleCheatSh: SpecialHandler = async (url: string, timeout: number
 		const apiUrl = `https://cheat.sh/${encodeURIComponent(topic)}?T`;
 		const result = await loadPage(apiUrl, {
 			timeout,
+			signal,
 			headers: {
 				Accept: "text/plain",
 			},

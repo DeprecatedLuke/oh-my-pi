@@ -1,4 +1,3 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -53,23 +52,25 @@ export function createLsTool(session: ToolSession): AgentTool<typeof lsSchema> {
 				const dirPath = resolveToCwd(path || ".", session.cwd);
 				const effectiveLimit = limit ?? DEFAULT_LIMIT;
 
-				// Check if path exists
-				if (!existsSync(dirPath)) {
+				// Check if path exists and is a directory
+				let dirStat: Awaited<ReturnType<Bun.BunFile["stat"]>>;
+				try {
+					dirStat = await Bun.file(dirPath).stat();
+				} catch {
 					throw new Error(`Path not found: ${dirPath}`);
 				}
 
-				// Check if path is a directory
-				const stat = statSync(dirPath);
-				if (!stat.isDirectory()) {
+				if (!dirStat.isDirectory()) {
 					throw new Error(`Not a directory: ${dirPath}`);
 				}
 
 				// Read directory entries
 				let entries: string[];
 				try {
-					entries = readdirSync(dirPath);
-				} catch (e: any) {
-					throw new Error(`Cannot read directory: ${e.message}`);
+					entries = await Array.fromAsync(new Bun.Glob("*").scan({ cwd: dirPath, dot: true, onlyFiles: false }));
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					throw new Error(`Cannot read directory: ${message}`);
 				}
 
 				// Sort alphabetically (case-insensitive)
@@ -82,6 +83,7 @@ export function createLsTool(session: ToolSession): AgentTool<typeof lsSchema> {
 				let fileCount = 0;
 
 				for (const entry of entries) {
+					signal?.throwIfAborted();
 					if (results.length >= effectiveLimit) {
 						entryLimitReached = true;
 						break;
@@ -92,7 +94,7 @@ export function createLsTool(session: ToolSession): AgentTool<typeof lsSchema> {
 					let age = "";
 
 					try {
-						const entryStat = statSync(fullPath);
+						const entryStat = await Bun.file(fullPath).stat();
 						if (entryStat.isDirectory()) {
 							suffix = "/";
 							dirCount += 1;

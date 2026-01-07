@@ -11,6 +11,7 @@
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
 
+import { nanoid } from "nanoid";
 import type { AgentSession } from "../../core/agent-session";
 import type { ExtensionUIContext } from "../../core/extensions/index";
 import { theme } from "../interactive/theme/theme";
@@ -66,7 +67,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 	 */
 	const createExtensionUIContext = (): ExtensionUIContext => ({
 		async select(title: string, options: string[]): Promise<string | undefined> {
-			const id = globalThis.crypto.randomUUID();
+			const id = nanoid();
 			return new Promise((resolve, reject) => {
 				pendingExtensionRequests.set(id, {
 					resolve: (response: RpcExtensionUIResponse) => {
@@ -85,7 +86,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 		},
 
 		async confirm(title: string, message: string): Promise<boolean> {
-			const id = globalThis.crypto.randomUUID();
+			const id = nanoid();
 			return new Promise((resolve, reject) => {
 				pendingExtensionRequests.set(id, {
 					resolve: (response: RpcExtensionUIResponse) => {
@@ -104,7 +105,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 		},
 
 		async input(title: string, placeholder?: string): Promise<string | undefined> {
-			const id = globalThis.crypto.randomUUID();
+			const id = nanoid();
 			return new Promise((resolve, reject) => {
 				pendingExtensionRequests.set(id, {
 					resolve: (response: RpcExtensionUIResponse) => {
@@ -126,7 +127,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			// Fire and forget - no response needed
 			output({
 				type: "extension_ui_request",
-				id: globalThis.crypto.randomUUID(),
+				id: nanoid(),
 				method: "notify",
 				message,
 				notifyType: type,
@@ -137,7 +138,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			// Fire and forget - no response needed
 			output({
 				type: "extension_ui_request",
-				id: globalThis.crypto.randomUUID(),
+				id: nanoid(),
 				method: "setStatus",
 				statusKey: key,
 				statusText: text,
@@ -149,7 +150,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			if (content === undefined || Array.isArray(content)) {
 				output({
 					type: "extension_ui_request",
-					id: globalThis.crypto.randomUUID(),
+					id: nanoid(),
 					method: "setWidget",
 					widgetKey: key,
 					widgetLines: content as string[] | undefined,
@@ -162,7 +163,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			// Fire and forget - host can implement terminal title control
 			output({
 				type: "extension_ui_request",
-				id: globalThis.crypto.randomUUID(),
+				id: nanoid(),
 				method: "setTitle",
 				title,
 			} as RpcExtensionUIRequest);
@@ -177,7 +178,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 			// Fire and forget - host can implement editor control
 			output({
 				type: "extension_ui_request",
-				id: globalThis.crypto.randomUUID(),
+				id: nanoid(),
 				method: "set_editor_text",
 				text,
 			} as RpcExtensionUIRequest);
@@ -190,7 +191,7 @@ export async function runRpcMode(session: AgentSession): Promise<never> {
 		},
 
 		async editor(title: string, prefill?: string): Promise<string | undefined> {
-			const id = globalThis.crypto.randomUUID();
+			const id = nanoid();
 			return new Promise((resolve, reject) => {
 				pendingExtensionRequests.set(id, {
 					resolve: (response: RpcExtensionUIResponse) => {

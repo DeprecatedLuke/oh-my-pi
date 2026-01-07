@@ -1,10 +1,15 @@
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { Component } from "@oh-my-pi/pi-tui";
+import { Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@sinclair/typebox";
+import { nanoid } from "nanoid";
 import { parse as parseHtml } from "node-html-parser";
+import { type Theme, theme } from "../../modes/interactive/theme/theme";
 import webFetchDescription from "../../prompts/tools/web-fetch.md" with { type: "text" };
 import { ensureTool } from "../../utils/tools-manager";
+import type { RenderResultOptions } from "../custom-tools/types";
 import type { ToolSession } from "./index";
 import { specialHandlers } from "./web-scrapers/index";
 import type { RenderResult } from "./web-scrapers/types";
@@ -403,7 +408,7 @@ async function renderHtmlToText(
 	timeout: number,
 ): Promise<{ content: string; ok: boolean; method: string }> {
 	const tmpDir = tmpdir();
-	const tmpFile = path.join(tmpDir, `omp-render-${Date.now()}.html`);
+	const tmpFile = path.join(tmpDir, `omp-${nanoid()}.html`);
 
 	try {
 		await Bun.write(tmpFile, html);
@@ -487,7 +492,7 @@ async function handleSpecialUrls(url: string, timeout: number, signal?: AbortSig
 		if (signal?.aborted) {
 			throw new Error("Operation aborted");
 		}
-		const result = await handler(url, timeout);
+		const result = await handler(url, timeout, signal);
 		if (result) return result;
 	}
 	return null;
@@ -881,11 +886,6 @@ export function createWebFetchTool(_session: ToolSession): AgentTool<typeof webF
 // =============================================================================
 // TUI Rendering
 // =============================================================================
-
-import type { Component } from "@oh-my-pi/pi-tui";
-import { Text } from "@oh-my-pi/pi-tui";
-import { type Theme, theme } from "../../modes/interactive/theme/theme";
-import type { RenderResultOptions } from "../custom-tools/types";
 
 /** Truncate text to max length with ellipsis */
 function truncate(text: string, maxLen: number, ellipsis: string): string {

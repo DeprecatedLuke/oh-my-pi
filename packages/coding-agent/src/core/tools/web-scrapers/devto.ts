@@ -23,7 +23,11 @@ interface DevToArticle {
 /**
  * Handle dev.to URLs via API
  */
-export const handleDevTo: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleDevTo: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "dev.to") return null;
@@ -39,7 +43,7 @@ export const handleDevTo: SpecialHandler = async (url: string, timeout: number):
 			const tag = pathParts[1];
 			const apiUrl = `https://dev.to/api/articles?tag=${encodeURIComponent(tag)}&per_page=20`;
 
-			const result = await loadPage(apiUrl, { timeout });
+			const result = await loadPage(apiUrl, { timeout, signal });
 			if (!result.ok) return null;
 
 			const articles = JSON.parse(result.content) as DevToArticle[];
@@ -82,7 +86,7 @@ export const handleDevTo: SpecialHandler = async (url: string, timeout: number):
 			const username = pathParts[0];
 			const apiUrl = `https://dev.to/api/articles?username=${encodeURIComponent(username)}&per_page=20`;
 
-			const result = await loadPage(apiUrl, { timeout });
+			const result = await loadPage(apiUrl, { timeout, signal });
 			if (!result.ok) return null;
 
 			const articles = JSON.parse(result.content) as DevToArticle[];
@@ -125,7 +129,7 @@ export const handleDevTo: SpecialHandler = async (url: string, timeout: number):
 			const slug = pathParts[1];
 			const apiUrl = `https://dev.to/api/articles/${encodeURIComponent(username)}/${encodeURIComponent(slug)}`;
 
-			const result = await loadPage(apiUrl, { timeout });
+			const result = await loadPage(apiUrl, { timeout, signal });
 			if (!result.ok) return null;
 
 			const article = JSON.parse(result.content) as DevToArticle;

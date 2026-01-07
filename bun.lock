@@ -22,7 +22,7 @@
       "name": "@oh-my-pi/pi-agent-core",
       "version": "3.30.0",
       "dependencies": {
-        "@mariozechner/pi-ai": "^0.37.4",
+        "@mariozechner/pi-ai": "^0.37.8",
         "@oh-my-pi/pi-tui": "workspace:*",
       },
       "devDependencies": {
@@ -37,7 +37,7 @@
         "omp": "src/cli.ts",
       },
       "dependencies": {
-        "@mariozechner/pi-ai": "^0.37.4",
+        "@mariozechner/pi-ai": "^0.37.8",
         "@oh-my-pi/pi-agent-core": "workspace:*",
         "@oh-my-pi/pi-git-tool": "workspace:*",
         "@oh-my-pi/pi-tui": "workspace:*",

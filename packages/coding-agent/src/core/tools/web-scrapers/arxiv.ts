@@ -6,7 +6,11 @@ import { convertWithMarkitdown, fetchBinary } from "./utils";
 /**
  * Handle arXiv URLs via arXiv API
  */
-export const handleArxiv: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleArxiv: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "arxiv.org") return null;
@@ -22,7 +26,7 @@ export const handleArxiv: SpecialHandler = async (url: string, timeout: number):
 
 		// Fetch metadata via arXiv API
 		const apiUrl = `https://export.arxiv.org/api/query?id_list=${paperId}`;
-		const result = await loadPage(apiUrl, { timeout });
+		const result = await loadPage(apiUrl, { timeout, signal });
 
 		if (!result.ok) return null;
 
@@ -56,9 +60,9 @@ export const handleArxiv: SpecialHandler = async (url: string, timeout: number):
 		if (match[1] === "pdf" || parsed.pathname.includes(".pdf")) {
 			if (pdfLink) {
 				notes.push("Fetching PDF for full content...");
-				const pdfResult = await fetchBinary(pdfLink, timeout);
+				const pdfResult = await fetchBinary(pdfLink, timeout, signal);
 				if (pdfResult.ok) {
-					const converted = await convertWithMarkitdown(pdfResult.buffer, ".pdf", timeout);
+					const converted = await convertWithMarkitdown(pdfResult.buffer, ".pdf", timeout, signal);
 					if (converted.ok && converted.content.length > 500) {
 						md += `---\n\n## Full Paper\n\n${converted.content}\n`;
 						notes.push("PDF converted via markitdown");

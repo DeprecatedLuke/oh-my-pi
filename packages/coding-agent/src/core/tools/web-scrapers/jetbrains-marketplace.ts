@@ -76,6 +76,7 @@ function formatBuildCompatibility(update: UpdateData): string | null {
 export const handleJetBrainsMarketplace: SpecialHandler = async (
 	url: string,
 	timeout: number,
+	signal?: AbortSignal,
 ): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
@@ -91,8 +92,8 @@ export const handleJetBrainsMarketplace: SpecialHandler = async (
 		const updatesUrl = `https://plugins.jetbrains.com/api/plugins/${pluginId}/updates?size=1`;
 
 		const [pluginResult, updatesResult] = await Promise.all([
-			loadPage(pluginUrl, { timeout }),
-			loadPage(updatesUrl, { timeout }),
+			loadPage(pluginUrl, { timeout, signal }),
+			loadPage(updatesUrl, { timeout, signal }),
 		]);
 
 		if (!pluginResult.ok || !updatesResult.ok) return null;

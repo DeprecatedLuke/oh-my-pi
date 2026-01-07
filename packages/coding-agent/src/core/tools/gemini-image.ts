@@ -1,8 +1,7 @@
-import * as crypto from "node:crypto";
-import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Static, Type } from "@sinclair/typebox";
+import { nanoid } from "nanoid";
 import geminiImageDescription from "../../prompts/tools/gemini-image.md" with { type: "text" };
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime";
 import type { CustomTool } from "../custom-tools/types";
@@ -311,12 +310,16 @@ function getExtensionForMime(mimeType: string): string {
 	return map[mimeType] ?? "png";
 }
 
-function saveImageToTemp(image: InlineImageData): string {
+async function saveImageToTemp(image: InlineImageData): Promise<string> {
 	const ext = getExtensionForMime(image.mimeType);
-	const filename = `omp-image-${crypto.randomUUID()}.${ext}`;
+	const filename = `omp-image-${nanoid()}.${ext}`;
 	const filepath = join(tmpdir(), filename);
-	fs.writeFileSync(filepath, Buffer.from(image.data, "base64"));
+	await Bun.write(filepath, Buffer.from(image.data, "base64"));
 	return filepath;
+}
+
+async function saveImagesToTemp(images: InlineImageData[]): Promise<string[]> {
+	return Promise.all(images.map(saveImageToTemp));
 }
 
 function buildResponseSummary(model: string, imagePaths: string[], responseText: string | undefined): string {
@@ -356,27 +359,9 @@ function combineParts(response: GeminiGenerateContentResponse): GeminiPart[] {
 	return parts;
 }
 
-function createAbortController(
-	signal: AbortSignal | undefined,
-	timeoutSeconds: number,
-): { controller: AbortController; cleanup: () => void } {
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
-
-	let abortListener: (() => void) | undefined;
-	if (signal) {
-		abortListener = () => controller.abort(signal.reason);
-		signal.addEventListener("abort", abortListener, { once: true });
-	}
-
-	const cleanup = () => {
-		clearTimeout(timeout);
-		if (abortListener && signal) {
-			signal.removeEventListener("abort", abortListener);
-		}
-	};
-
-	return { controller, cleanup };
+function createRequestSignal(signal: AbortSignal | undefined, timeoutSeconds: number): AbortSignal {
+	const timeoutSignal = AbortSignal.timeout(timeoutSeconds * 1000);
+	return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 }
 
 export const geminiImageTool: CustomTool<typeof geminiImageSchema, GeminiImageToolDetails> = {
@@ -404,118 +389,28 @@ export const geminiImageTool: CustomTool<typeof geminiImageSchema, GeminiImageTo
 			}
 
 			const timeoutSeconds = params.timeout_seconds ?? DEFAULT_TIMEOUT_SECONDS;
-			const { controller, cleanup } = createAbortController(signal, timeoutSeconds);
+			const requestSignal = createRequestSignal(signal, timeoutSeconds);
 
-			try {
-				if (provider === "openrouter") {
-					const contentParts: OpenRouterContentPart[] = [{ type: "text", text: params.prompt }];
-					for (const image of resolvedImages) {
-						contentParts.push({ type: "image_url", image_url: { url: toDataUrl(image) } });
-					}
-
-					const requestBody = {
-						model: resolvedModel,
-						messages: [{ role: "user" as const, content: contentParts }],
-					};
-
-					const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json",
-							Authorization: `Bearer ${apiKey.apiKey}`,
-						},
-						body: JSON.stringify(requestBody),
-						signal: controller.signal,
-					});
-
-					const rawText = await response.text();
-					if (!response.ok) {
-						let message = rawText;
-						try {
-							const parsed = JSON.parse(rawText) as { error?: { message?: string } };
-							message = parsed.error?.message ?? message;
-						} catch {
-							// Keep raw text.
-						}
-						throw new Error(`OpenRouter image request failed (${response.status}): ${message}`);
-					}
-
-					const data = JSON.parse(rawText) as OpenRouterResponse;
-					const message = data.choices?.[0]?.message;
-					const responseText = collectOpenRouterResponseText(message);
-					const imageUrls = extractOpenRouterImageUrls(message);
-					const inlineImages: InlineImageData[] = [];
-					for (const imageUrl of imageUrls) {
-						inlineImages.push(await loadImageFromUrl(imageUrl, controller.signal));
-					}
-
-					if (inlineImages.length === 0) {
-						const messageText = responseText ? `\n\n${responseText}` : "";
-						return {
-							content: [{ type: "text", text: `No image data returned.${messageText}` }],
-							details: {
-								provider,
-								model: resolvedModel,
-								imageCount: 0,
-								imagePaths: [],
-								images: [],
-								responseText,
-							},
-						};
-					}
-
-					const imagePaths = inlineImages.map(saveImageToTemp);
-
-					return {
-						content: [{ type: "text", text: buildResponseSummary(resolvedModel, imagePaths, responseText) }],
-						details: {
-							provider,
-							model: resolvedModel,
-							imageCount: inlineImages.length,
-							imagePaths,
-							images: inlineImages,
-							responseText,
-						},
-					};
-				}
-
-				const parts = [] as Array<{ text?: string; inlineData?: InlineImageData }>;
+			if (provider === "openrouter") {
+				const contentParts: OpenRouterContentPart[] = [{ type: "text", text: params.prompt }];
 				for (const image of resolvedImages) {
-					parts.push({ inlineData: image });
-				}
-				parts.push({ text: params.prompt });
-
-				const generationConfig: {
-					responseModalities: GeminiResponseModality[];
-					imageConfig?: { aspectRatio?: string; imageSize?: string };
-				} = {
-					responseModalities: ["Image"],
-				};
-
-				if (params.aspect_ratio || params.image_size) {
-					generationConfig.imageConfig = {
-						aspectRatio: params.aspect_ratio,
-						imageSize: params.image_size,
-					};
+					contentParts.push({ type: "image_url", image_url: { url: toDataUrl(image) } });
 				}
 
 				const requestBody = {
-					contents: [{ role: "user" as const, parts }],
-					generationConfig,
+					model: resolvedModel,
+					messages: [{ role: "user" as const, content: contentParts }],
 				};
 
-				const response = await fetch(
-					`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-					{
-						method: "POST",
-						headers: {
-							"Content-Type": "application/json",
-							"x-goog-api-key": apiKey.apiKey,
-						},
-						body: JSON.stringify(requestBody),
-						signal: controller.signal,
+				const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						Authorization: `Bearer ${apiKey.apiKey}`,
 					},
-				);
+					body: JSON.stringify(requestBody),
+					signal: requestSignal,
+				});
 
 				const rawText = await response.text();
 				if (!response.ok) {
@@ -526,51 +421,137 @@ export const geminiImageTool: CustomTool<typeof geminiImageSchema, GeminiImageTo
 					} catch {
 						// Keep raw text.
 					}
-					throw new Error(`Gemini image request failed (${response.status}): ${message}`);
+					throw new Error(`OpenRouter image request failed (${response.status}): ${message}`);
 				}
 
-				const data = JSON.parse(rawText) as GeminiGenerateContentResponse;
-				const responseParts = combineParts(data);
-				const responseText = collectResponseText(responseParts);
-				const inlineImages = collectInlineImages(responseParts);
+				const data = JSON.parse(rawText) as OpenRouterResponse;
+				const message = data.choices?.[0]?.message;
+				const responseText = collectOpenRouterResponseText(message);
+				const imageUrls = extractOpenRouterImageUrls(message);
+				const inlineImages: InlineImageData[] = [];
+				for (const imageUrl of imageUrls) {
+					inlineImages.push(await loadImageFromUrl(imageUrl, requestSignal));
+				}
 
 				if (inlineImages.length === 0) {
-					const blocked = data.promptFeedback?.blockReason
-						? `Blocked: ${data.promptFeedback.blockReason}`
-						: "No image data returned.";
+					const messageText = responseText ? `\n\n${responseText}` : "";
 					return {
-						content: [{ type: "text", text: `${blocked}${responseText ? `\n\n${responseText}` : ""}` }],
+						content: [{ type: "text", text: `No image data returned.${messageText}` }],
 						details: {
 							provider,
-							model,
+							model: resolvedModel,
 							imageCount: 0,
 							imagePaths: [],
 							images: [],
 							responseText,
-							promptFeedback: data.promptFeedback,
-							usage: data.usageMetadata,
 						},
 					};
 				}
 
-				const imagePaths = inlineImages.map(saveImageToTemp);
+				const imagePaths = await saveImagesToTemp(inlineImages);
 
 				return {
-					content: [{ type: "text", text: buildResponseSummary(model, imagePaths, responseText) }],
+					content: [{ type: "text", text: buildResponseSummary(resolvedModel, imagePaths, responseText) }],
 					details: {
 						provider,
-						model,
+						model: resolvedModel,
 						imageCount: inlineImages.length,
 						imagePaths,
 						images: inlineImages,
+						responseText,
+					},
+				};
+			}
+
+			const parts = [] as Array<{ text?: string; inlineData?: InlineImageData }>;
+			for (const image of resolvedImages) {
+				parts.push({ inlineData: image });
+			}
+			parts.push({ text: params.prompt });
+
+			const generationConfig: {
+				responseModalities: GeminiResponseModality[];
+				imageConfig?: { aspectRatio?: string; imageSize?: string };
+			} = {
+				responseModalities: ["Image"],
+			};
+
+			if (params.aspect_ratio || params.image_size) {
+				generationConfig.imageConfig = {
+					aspectRatio: params.aspect_ratio,
+					imageSize: params.image_size,
+				};
+			}
+
+			const requestBody = {
+				contents: [{ role: "user" as const, parts }],
+				generationConfig,
+			};
+
+			const response = await fetch(
+				`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+				{
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						"x-goog-api-key": apiKey.apiKey,
+					},
+					body: JSON.stringify(requestBody),
+					signal: requestSignal,
+				},
+			);
+
+			const rawText = await response.text();
+			if (!response.ok) {
+				let message = rawText;
+				try {
+					const parsed = JSON.parse(rawText) as { error?: { message?: string } };
+					message = parsed.error?.message ?? message;
+				} catch {
+					// Keep raw text.
+				}
+				throw new Error(`Gemini image request failed (${response.status}): ${message}`);
+			}
+
+			const data = JSON.parse(rawText) as GeminiGenerateContentResponse;
+			const responseParts = combineParts(data);
+			const responseText = collectResponseText(responseParts);
+			const inlineImages = collectInlineImages(responseParts);
+
+			if (inlineImages.length === 0) {
+				const blocked = data.promptFeedback?.blockReason
+					? `Blocked: ${data.promptFeedback.blockReason}`
+					: "No image data returned.";
+				return {
+					content: [{ type: "text", text: `${blocked}${responseText ? `\n\n${responseText}` : ""}` }],
+					details: {
+						provider,
+						model,
+						imageCount: 0,
+						imagePaths: [],
+						images: [],
 						responseText,
 						promptFeedback: data.promptFeedback,
 						usage: data.usageMetadata,
 					},
 				};
-			} finally {
-				cleanup();
 			}
+
+			const imagePaths = await saveImagesToTemp(inlineImages);
+
+			return {
+				content: [{ type: "text", text: buildResponseSummary(model, imagePaths, responseText) }],
+				details: {
+					provider,
+					model,
+					imageCount: inlineImages.length,
+					imagePaths,
+					images: inlineImages,
+					responseText,
+					promptFeedback: data.promptFeedback,
+					usage: data.usageMetadata,
+				},
+			};
 		});
 	},
 };

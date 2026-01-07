@@ -5,7 +5,11 @@ import { finalizeOutput, loadPage } from "./types";
 /**
  * Handle Wikipedia URLs via Wikipedia API
  */
-export const handleWikipedia: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleWikipedia: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		// Match *.wikipedia.org
@@ -21,7 +25,7 @@ export const handleWikipedia: SpecialHandler = async (url: string, timeout: numb
 
 		// Use Wikipedia API to get plain text extract
 		const apiUrl = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
-		const summaryResult = await loadPage(apiUrl, { timeout });
+		const summaryResult = await loadPage(apiUrl, { timeout, signal });
 
 		let md = "";
 
@@ -38,7 +42,7 @@ export const handleWikipedia: SpecialHandler = async (url: string, timeout: numb
 
 		// Get full article content via mobile-html or parse API
 		const contentUrl = `https://${lang}.wikipedia.org/api/rest_v1/page/mobile-html/${encodeURIComponent(title)}`;
-		const contentResult = await loadPage(contentUrl, { timeout });
+		const contentResult = await loadPage(contentUrl, { timeout, signal });
 
 		if (contentResult.ok) {
 			const doc = parseHtml(contentResult.content);

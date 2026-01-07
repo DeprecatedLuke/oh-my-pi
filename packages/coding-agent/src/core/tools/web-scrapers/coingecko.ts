@@ -29,7 +29,11 @@ interface CoinGeckoResponse {
 /**
  * Handle CoinGecko cryptocurrency URLs via API
  */
-export const handleCoinGecko: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleCoinGecko: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (!parsed.hostname.includes("coingecko.com")) return null;
@@ -46,6 +50,7 @@ export const handleCoinGecko: SpecialHandler = async (url: string, timeout: numb
 		const result = await loadPage(apiUrl, {
 			timeout,
 			headers: { Accept: "application/json" },
+			signal,
 		});
 
 		if (!result.ok) return null;

@@ -132,7 +132,11 @@ function renderComments(comments: LemmyCommentView[]): string {
 	return renderThread(0, 0).trim();
 }
 
-export const handleLemmy: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleLemmy: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		const match = parsed.pathname.match(/^\/(post|comment)\/(\d+)/);
@@ -148,7 +152,7 @@ export const handleLemmy: SpecialHandler = async (url: string, timeout: number):
 		let postId = id;
 		if (kind === "comment") {
 			const commentUrl = `${baseUrl}/api/v3/comment?id=${id}`;
-			const commentResult = await loadPage(commentUrl, { timeout });
+			const commentResult = await loadPage(commentUrl, { timeout, signal });
 			if (!commentResult.ok) return null;
 
 			const commentData = parseJson<LemmyCommentResponse>(commentResult.content);
@@ -162,8 +166,8 @@ export const handleLemmy: SpecialHandler = async (url: string, timeout: number):
 		const commentsUrl = `${baseUrl}/api/v3/comment/list?post_id=${postId}`;
 
 		const [postResult, commentsResult] = await Promise.all([
-			loadPage(postUrl, { timeout }),
-			loadPage(commentsUrl, { timeout }),
+			loadPage(postUrl, { timeout, signal }),
+			loadPage(commentsUrl, { timeout, signal }),
 		]);
 
 		if (!postResult.ok || !commentsResult.ok) return null;

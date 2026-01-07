@@ -88,7 +88,11 @@ function formatDependencies(deps: unknown): string[] {
 /**
  * Handle Clojars URLs via API
  */
-export const handleClojars: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleClojars: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "clojars.org" && parsed.hostname !== "www.clojars.org") return null;
@@ -112,6 +116,7 @@ export const handleClojars: SpecialHandler = async (url: string, timeout: number
 		const result = await loadPage(apiUrl, {
 			timeout,
 			headers: { Accept: "application/json" },
+			signal,
 		});
 
 		if (!result.ok) return null;

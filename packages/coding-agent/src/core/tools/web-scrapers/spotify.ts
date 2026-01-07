@@ -157,7 +157,7 @@ function formatOutput(contentType: string, oEmbed: SpotifyOEmbedResponse, og: Op
 	return sections.join("\n");
 }
 
-export const handleSpotify: SpecialHandler = async (url: string, timeout: number) => {
+export const handleSpotify: SpecialHandler = async (url: string, timeout: number, signal?: AbortSignal) => {
 	// Check if this is a Spotify URL
 	if (!url.includes("open.spotify.com/")) {
 		return null;
@@ -175,7 +175,7 @@ export const handleSpotify: SpecialHandler = async (url: string, timeout: number
 	// Fetch oEmbed data
 	try {
 		const oEmbedUrl = `https://open.spotify.com/oembed?url=${encodeURIComponent(url)}`;
-		const response = await loadPage(oEmbedUrl, { timeout });
+		const response = await loadPage(oEmbedUrl, { timeout, signal });
 
 		if (response.ok) {
 			oEmbedData = JSON.parse(response.content) as SpotifyOEmbedResponse;
@@ -189,7 +189,7 @@ export const handleSpotify: SpecialHandler = async (url: string, timeout: number
 
 	// Fetch page HTML for Open Graph metadata
 	try {
-		const pageResponse = await loadPage(url, { timeout });
+		const pageResponse = await loadPage(url, { timeout, signal });
 
 		if (pageResponse.ok) {
 			ogData = parseOpenGraph(pageResponse.content);

@@ -4,7 +4,7 @@ import { finalizeOutput, formatCount, loadPage } from "./types";
 /**
  * Handle Hex.pm (Elixir package registry) URLs via API
  */
-export const handleHex: SpecialHandler = async (url, timeout) => {
+export const handleHex: SpecialHandler = async (url, timeout, signal) => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "hex.pm" && parsed.hostname !== "www.hex.pm") return null;
@@ -18,7 +18,7 @@ export const handleHex: SpecialHandler = async (url, timeout) => {
 
 		// Fetch from Hex.pm API
 		const apiUrl = `https://hex.pm/api/packages/${packageName}`;
-		const result = await loadPage(apiUrl, { timeout });
+		const result = await loadPage(apiUrl, { timeout, signal });
 
 		if (!result.ok) return null;
 
@@ -74,7 +74,7 @@ export const handleHex: SpecialHandler = async (url, timeout) => {
 		// Fetch releases if available
 		if (data.releases?.length) {
 			const releasesUrl = `https://hex.pm/api/packages/${packageName}/releases/${version}`;
-			const releaseResult = await loadPage(releasesUrl, { timeout: Math.min(timeout, 5) });
+			const releaseResult = await loadPage(releasesUrl, { timeout: Math.min(timeout, 5), signal });
 
 			if (releaseResult.ok) {
 				try {

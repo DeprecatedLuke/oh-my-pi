@@ -1,8 +1,10 @@
-import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { extname, join } from "node:path";
+import { basename, extname, join } from "node:path";
+import { globSync } from "glob";
+import { parse as parseYaml } from "yaml";
 import { getConfigDirPaths } from "../../../config";
 import { createBiomeClient } from "./clients/biome-client";
+import DEFAULTS from "./defaults.json" with { type: "json" };
 import type { ServerConfig } from "./types";
 
 export interface LspConfig {
@@ -12,599 +14,138 @@ export interface LspConfig {
 }
 
 // =============================================================================
-// Predefined Server Configurations
+// Default Server Configuration Loading
 // =============================================================================
 
-/**
- * Comprehensive LSP server configurations.
- *
- * Each server can be customized via lsp.json config file with these options:
- * - command: Binary name or path
- * - args: Command line arguments
- * - fileTypes: File extensions this server handles
- * - rootMarkers: Files that indicate project root
- * - initOptions: LSP initialization options
- * - settings: LSP workspace settings
- * - disabled: Set to true to disable this server
- * - isLinter: If true, used only for diagnostics/actions (not type intelligence)
- */
-export const SERVERS: Record<string, ServerConfig> = {
-	// =========================================================================
-	// Systems Languages
-	// =========================================================================
-
-	"rust-analyzer": {
-		command: "rust-analyzer",
-		args: [],
-		fileTypes: [".rs"],
-		rootMarkers: ["Cargo.toml", "rust-analyzer.toml"],
-		initOptions: {
-			checkOnSave: { command: "clippy" },
-			cargo: { allFeatures: true },
-			procMacro: { enable: true },
-		},
-		settings: {
-			"rust-analyzer": {
-				diagnostics: { enable: true },
-				inlayHints: { enable: true },
-			},
-		},
-		capabilities: {
-			flycheck: true,
-			ssr: true,
-			expandMacro: true,
-			runnables: true,
-			relatedTests: true,
-		},
-	},
-
-	clangd: {
-		command: "clangd",
-		args: ["--background-index", "--clang-tidy", "--header-insertion=iwyu"],
-		fileTypes: [".c", ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hxx", ".m", ".mm"],
-		rootMarkers: ["compile_commands.json", "CMakeLists.txt", ".clangd", ".clang-format", "Makefile"],
-	},
-
-	zls: {
-		command: "zls",
-		args: [],
-		fileTypes: [".zig"],
-		rootMarkers: ["build.zig", "build.zig.zon", "zls.json"],
-	},
-
-	gopls: {
-		command: "gopls",
-		args: ["serve"],
-		fileTypes: [".go", ".mod", ".sum"],
-		rootMarkers: ["go.mod", "go.work", "go.sum"],
-		settings: {
-			gopls: {
-				analyses: { unusedparams: true, shadow: true },
-				staticcheck: true,
-				gofumpt: true,
-			},
-		},
-	},
-
-	// =========================================================================
-	// JavaScript/TypeScript Ecosystem
-	// =========================================================================
-
-	"typescript-language-server": {
-		command: "typescript-language-server",
-		args: ["--stdio"],
-		fileTypes: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
-		rootMarkers: ["package.json", "tsconfig.json", "jsconfig.json"],
-		initOptions: {
-			hostInfo: "omp-coding-agent",
-			preferences: {
-				includeInlayParameterNameHints: "all",
-				includeInlayVariableTypeHints: true,
-				includeInlayFunctionParameterTypeHints: true,
-			},
-		},
-	},
-
-	biome: {
-		command: "biome",
-		args: ["lsp-proxy"],
-		fileTypes: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".jsonc"],
-		rootMarkers: ["biome.json", "biome.jsonc"],
-		isLinter: true,
-		// Use CLI instead of LSP - Biome's LSP has known stale diagnostics issues
-		createClient: createBiomeClient,
-	},
-
-	eslint: {
-		command: "vscode-eslint-language-server",
-		args: ["--stdio"],
-		fileTypes: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte"],
-		rootMarkers: [
-			".eslintrc",
-			".eslintrc.js",
-			".eslintrc.json",
-			".eslintrc.yml",
-			"eslint.config.js",
-			"eslint.config.mjs",
-		],
-		isLinter: true,
-		settings: {
-			validate: "on",
-			run: "onType",
-		},
-	},
-
-	denols: {
-		command: "deno",
-		args: ["lsp"],
-		fileTypes: [".ts", ".tsx", ".js", ".jsx"],
-		rootMarkers: ["deno.json", "deno.jsonc", "deno.lock"],
-		initOptions: {
-			enable: true,
-			lint: true,
-			unstable: true,
-		},
-	},
-
-	// =========================================================================
-	// Web Technologies
-	// =========================================================================
-
-	"vscode-html-language-server": {
-		command: "vscode-html-language-server",
-		args: ["--stdio"],
-		fileTypes: [".html", ".htm"],
-		rootMarkers: ["package.json", ".git"],
-		initOptions: {
-			provideFormatter: true,
-		},
-	},
-
-	"vscode-css-language-server": {
-		command: "vscode-css-language-server",
-		args: ["--stdio"],
-		fileTypes: [".css", ".scss", ".sass", ".less"],
-		rootMarkers: ["package.json", ".git"],
-		initOptions: {
-			provideFormatter: true,
-		},
-	},
-
-	"vscode-json-language-server": {
-		command: "vscode-json-language-server",
-		args: ["--stdio"],
-		fileTypes: [".json", ".jsonc"],
-		rootMarkers: ["package.json", ".git"],
-		initOptions: {
-			provideFormatter: true,
-		},
-	},
-
-	tailwindcss: {
-		command: "tailwindcss-language-server",
-		args: ["--stdio"],
-		fileTypes: [".html", ".css", ".scss", ".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte"],
-		rootMarkers: ["tailwind.config.js", "tailwind.config.ts", "tailwind.config.mjs", "tailwind.config.cjs"],
-	},
-
-	svelte: {
-		command: "svelteserver",
-		args: ["--stdio"],
-		fileTypes: [".svelte"],
-		rootMarkers: ["svelte.config.js", "svelte.config.mjs", "package.json"],
-	},
-
-	"vue-language-server": {
-		command: "vue-language-server",
-		args: ["--stdio"],
-		fileTypes: [".vue"],
-		rootMarkers: ["vue.config.js", "nuxt.config.js", "nuxt.config.ts", "package.json"],
-	},
-
-	astro: {
-		command: "astro-ls",
-		args: ["--stdio"],
-		fileTypes: [".astro"],
-		rootMarkers: ["astro.config.mjs", "astro.config.js", "astro.config.ts"],
-	},
-
-	// =========================================================================
-	// Python
-	// =========================================================================
-
-	pyright: {
-		command: "pyright-langserver",
-		args: ["--stdio"],
-		fileTypes: [".py", ".pyi"],
-		rootMarkers: ["pyproject.toml", "pyrightconfig.json", "setup.py", "setup.cfg", "requirements.txt", "Pipfile"],
-		settings: {
-			python: {
-				analysis: {
-					autoSearchPaths: true,
-					diagnosticMode: "openFilesOnly",
-					useLibraryCodeForTypes: true,
-				},
-			},
-		},
-	},
-
-	basedpyright: {
-		command: "basedpyright-langserver",
-		args: ["--stdio"],
-		fileTypes: [".py", ".pyi"],
-		rootMarkers: ["pyproject.toml", "pyrightconfig.json", "setup.py", "requirements.txt"],
-		settings: {
-			basedpyright: {
-				analysis: {
-					autoSearchPaths: true,
-					diagnosticMode: "openFilesOnly",
-					useLibraryCodeForTypes: true,
-				},
-			},
-		},
-	},
-
-	pylsp: {
-		command: "pylsp",
-		args: [],
-		fileTypes: [".py"],
-		rootMarkers: ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile"],
-	},
-
-	ruff: {
-		command: "ruff",
-		args: ["server"],
-		fileTypes: [".py", ".pyi"],
-		rootMarkers: ["pyproject.toml", "ruff.toml", ".ruff.toml"],
-		isLinter: true,
-	},
-
-	// =========================================================================
-	// JVM Languages
-	// =========================================================================
-
-	jdtls: {
-		command: "jdtls",
-		args: [],
-		fileTypes: [".java"],
-		rootMarkers: ["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", ".project"],
-	},
-
-	"kotlin-language-server": {
-		command: "kotlin-language-server",
-		args: [],
-		fileTypes: [".kt", ".kts"],
-		rootMarkers: ["build.gradle", "build.gradle.kts", "pom.xml", "settings.gradle", "settings.gradle.kts"],
-	},
-
-	metals: {
-		command: "metals",
-		args: [],
-		fileTypes: [".scala", ".sbt", ".sc"],
-		rootMarkers: ["build.sbt", "build.sc", "build.gradle", "pom.xml"],
-		initOptions: {
-			statusBarProvider: "show-message",
-			isHttpEnabled: true,
-		},
-	},
-
-	// =========================================================================
-	// Functional Languages
-	// =========================================================================
-
-	hls: {
-		command: "haskell-language-server-wrapper",
-		args: ["--lsp"],
-		fileTypes: [".hs", ".lhs"],
-		rootMarkers: ["stack.yaml", "cabal.project", "hie.yaml", "package.yaml", "*.cabal"],
-		settings: {
-			haskell: {
-				formattingProvider: "ormolu",
-				checkProject: true,
-			},
-		},
-	},
-
-	ocamllsp: {
-		command: "ocamllsp",
-		args: [],
-		fileTypes: [".ml", ".mli", ".mll", ".mly"],
-		rootMarkers: ["dune-project", "dune-workspace", "*.opam", ".ocamlformat"],
-	},
-
-	elixirls: {
-		command: "elixir-ls",
-		args: [],
-		fileTypes: [".ex", ".exs", ".heex", ".eex"],
-		rootMarkers: ["mix.exs", "mix.lock"],
-		settings: {
-			elixirLS: {
-				dialyzerEnabled: true,
-				fetchDeps: false,
-			},
-		},
-	},
-
-	erlangls: {
-		command: "erlang_ls",
-		args: [],
-		fileTypes: [".erl", ".hrl"],
-		rootMarkers: ["rebar.config", "erlang.mk", "rebar.lock"],
-	},
-
-	gleam: {
-		command: "gleam",
-		args: ["lsp"],
-		fileTypes: [".gleam"],
-		rootMarkers: ["gleam.toml"],
-	},
-
-	// =========================================================================
-	// Ruby
-	// =========================================================================
-
-	solargraph: {
-		command: "solargraph",
-		args: ["stdio"],
-		fileTypes: [".rb", ".rake", ".gemspec"],
-		rootMarkers: ["Gemfile", ".solargraph.yml", "Rakefile"],
-		initOptions: {
-			formatting: true,
-		},
-		settings: {
-			solargraph: {
-				diagnostics: true,
-				completion: true,
-				hover: true,
-				formatting: true,
-				references: true,
-				rename: true,
-				symbols: true,
-			},
-		},
-	},
-
-	"ruby-lsp": {
-		command: "ruby-lsp",
-		args: [],
-		fileTypes: [".rb", ".rake", ".gemspec", ".erb"],
-		rootMarkers: ["Gemfile", ".ruby-version", ".ruby-gemset"],
-		initOptions: {
-			formatter: "auto",
-		},
-	},
-
-	rubocop: {
-		command: "rubocop",
-		args: ["--lsp"],
-		fileTypes: [".rb", ".rake"],
-		rootMarkers: [".rubocop.yml", "Gemfile"],
-		isLinter: true,
-	},
-
-	// =========================================================================
-	// Shell / Scripting
-	// =========================================================================
-
-	bashls: {
-		command: "bash-language-server",
-		args: ["start"],
-		fileTypes: [".sh", ".bash", ".zsh"],
-		rootMarkers: [".git"],
-		settings: {
-			bashIde: {
-				globPattern: "*@(.sh|.inc|.bash|.command)",
-			},
-		},
-	},
-
-	nushell: {
-		command: "nu",
-		args: ["--lsp"],
-		fileTypes: [".nu"],
-		rootMarkers: [".git"],
-	},
-
-	// =========================================================================
-	// Lua
-	// =========================================================================
-
-	"lua-language-server": {
-		command: "lua-language-server",
-		args: [],
-		fileTypes: [".lua"],
-		rootMarkers: [".luarc.json", ".luarc.jsonc", ".luacheckrc", ".stylua.toml", "stylua.toml"],
-		settings: {
-			Lua: {
-				runtime: { version: "LuaJIT" },
-				diagnostics: { globals: ["vim"] },
-				workspace: { checkThirdParty: false },
-				telemetry: { enable: false },
-			},
-		},
-	},
-
-	// =========================================================================
-	// PHP
-	// =========================================================================
-
-	intelephense: {
-		command: "intelephense",
-		args: ["--stdio"],
-		fileTypes: [".php", ".phtml"],
-		rootMarkers: ["composer.json", "composer.lock", ".git"],
-	},
-
-	phpactor: {
-		command: "phpactor",
-		args: ["language-server"],
-		fileTypes: [".php"],
-		rootMarkers: ["composer.json", ".phpactor.json", ".phpactor.yml"],
-	},
-
-	// =========================================================================
-	// .NET
-	// =========================================================================
-
-	omnisharp: {
-		command: "omnisharp",
-		args: ["-z", "--hostPID", String(process.pid), "--encoding", "utf-8", "--languageserver"],
-		fileTypes: [".cs", ".csx"],
-		rootMarkers: ["*.sln", "*.csproj", "omnisharp.json", ".git"],
-		settings: {
-			FormattingOptions: { EnableEditorConfigSupport: true },
-			RoslynExtensionsOptions: { EnableAnalyzersSupport: true },
-		},
-	},
-
-	// =========================================================================
-	// Configuration Languages
-	// =========================================================================
-
-	yamlls: {
-		command: "yaml-language-server",
-		args: ["--stdio"],
-		fileTypes: [".yaml", ".yml"],
-		rootMarkers: [".git"],
-		settings: {
-			yaml: {
-				validate: true,
-				format: { enable: true },
-				hover: true,
-				completion: true,
-			},
-			redhat: { telemetry: { enabled: false } },
-		},
-	},
-
-	taplo: {
-		command: "taplo",
-		args: ["lsp", "stdio"],
-		fileTypes: [".toml"],
-		rootMarkers: [".taplo.toml", "taplo.toml", ".git"],
-	},
-
-	terraformls: {
-		command: "terraform-ls",
-		args: ["serve"],
-		fileTypes: [".tf", ".tfvars"],
-		rootMarkers: [".terraform", "terraform.tfstate", "*.tf"],
-	},
-
-	dockerls: {
-		command: "docker-langserver",
-		args: ["--stdio"],
-		fileTypes: [".dockerfile"],
-		rootMarkers: ["Dockerfile", "docker-compose.yml", "docker-compose.yaml", ".dockerignore"],
-	},
-
-	"helm-ls": {
-		command: "helm_ls",
-		args: ["serve"],
-		fileTypes: [".yaml", ".yml", ".tpl"],
-		rootMarkers: ["Chart.yaml", "Chart.yml"],
-	},
-
-	// =========================================================================
-	// Nix
-	// =========================================================================
-
-	nixd: {
-		command: "nixd",
-		args: [],
-		fileTypes: [".nix"],
-		rootMarkers: ["flake.nix", "default.nix", "shell.nix"],
-	},
-
-	nil: {
-		command: "nil",
-		args: [],
-		fileTypes: [".nix"],
-		rootMarkers: ["flake.nix", "default.nix", "shell.nix"],
-	},
-
-	// =========================================================================
-	// Other Languages
-	// =========================================================================
-
-	ols: {
-		command: "ols",
-		args: [],
-		fileTypes: [".odin"],
-		rootMarkers: ["ols.json", ".git"],
-	},
-
-	dartls: {
-		command: "dart",
-		args: ["language-server", "--protocol=lsp"],
-		fileTypes: [".dart"],
-		rootMarkers: ["pubspec.yaml", "pubspec.lock"],
-		initOptions: {
-			closingLabels: true,
-			flutterOutline: true,
-			outline: true,
-		},
-	},
-
-	marksman: {
-		command: "marksman",
-		args: ["server"],
-		fileTypes: [".md", ".markdown"],
-		rootMarkers: [".marksman.toml", ".git"],
-	},
-
-	texlab: {
-		command: "texlab",
-		args: [],
-		fileTypes: [".tex", ".bib", ".sty", ".cls"],
-		rootMarkers: [".latexmkrc", "latexmkrc", ".texlabroot", "texlabroot", "Tectonic.toml"],
-		settings: {
-			texlab: {
-				build: {
-					executable: "latexmk",
-					args: ["-pdf", "-interaction=nonstopmode", "-synctex=1", "%f"],
-				},
-				chktex: { onOpenAndSave: true },
-			},
-		},
-	},
-
-	graphql: {
-		command: "graphql-lsp",
-		args: ["server", "-m", "stream"],
-		fileTypes: [".graphql", ".gql"],
-		rootMarkers: [".graphqlrc", ".graphqlrc.json", ".graphqlrc.yml", ".graphqlrc.yaml", "graphql.config.js"],
-	},
-
-	prismals: {
-		command: "prisma-language-server",
-		args: ["--stdio"],
-		fileTypes: [".prisma"],
-		rootMarkers: ["schema.prisma", "prisma/schema.prisma"],
-	},
-
-	vimls: {
-		command: "vim-language-server",
-		args: ["--stdio"],
-		fileTypes: [".vim", ".vimrc"],
-		rootMarkers: [".git"],
-		initOptions: {
-			isNeovim: true,
-			diagnostic: { enable: true },
-		},
-	},
-
-	// =========================================================================
-	// Emmet (HTML/CSS expansion)
-	// =========================================================================
-
-	"emmet-language-server": {
-		command: "emmet-language-server",
-		args: ["--stdio"],
-		fileTypes: [".html", ".css", ".scss", ".less", ".jsx", ".tsx", ".vue", ".svelte"],
-		rootMarkers: [".git"],
-	},
-};
+const PID_TOKEN = "$PID";
+
+interface NormalizedConfig {
+	servers: Record<string, Partial<ServerConfig>>;
+	idleTimeoutMs?: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseConfigContent(content: string, filePath: string): unknown {
+	const extension = extname(filePath).toLowerCase();
+	if (extension === ".yaml" || extension === ".yml") {
+		return parseYaml(content) as unknown;
+	}
+	return JSON.parse(content) as unknown;
+}
+
+function normalizeConfig(value: unknown): NormalizedConfig | null {
+	if (!isRecord(value)) return null;
+
+	const idleTimeoutMs = typeof value.idleTimeoutMs === "number" ? value.idleTimeoutMs : undefined;
+	const rawServers = value.servers;
+
+	if (isRecord(rawServers)) {
+		return { servers: rawServers as Record<string, Partial<ServerConfig>>, idleTimeoutMs };
+	}
+
+	const servers = Object.fromEntries(Object.entries(value).filter(([key]) => key !== "idleTimeoutMs")) as Record<
+		string,
+		Partial<ServerConfig>
+	>;
+
+	return { servers, idleTimeoutMs };
+}
+
+function normalizeStringArray(value: unknown): string[] | null {
+	if (!Array.isArray(value)) return null;
+	const items = value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+	return items.length > 0 ? items : null;
+}
+
+function normalizeServerConfig(name: string, config: Partial<ServerConfig>): ServerConfig | null {
+	const command = typeof config.command === "string" && config.command.length > 0 ? config.command : null;
+	const fileTypes = normalizeStringArray(config.fileTypes);
+	const rootMarkers = normalizeStringArray(config.rootMarkers);
+
+	if (!command || !fileTypes || !rootMarkers) {
+		console.warn(`Ignoring invalid LSP server config "${name}" (missing required fields).`);
+		return null;
+	}
+
+	const args = Array.isArray(config.args)
+		? config.args.filter((entry): entry is string => typeof entry === "string")
+		: undefined;
+
+	return {
+		...config,
+		command,
+		args,
+		fileTypes,
+		rootMarkers,
+	};
+}
+
+async function readConfigFile(filePath: string): Promise<NormalizedConfig | null> {
+	try {
+		const file = Bun.file(filePath);
+		if (!(await file.exists())) {
+			return null;
+		}
+		const content = await file.text();
+		const parsed = parseConfigContent(content, filePath);
+		return normalizeConfig(parsed);
+	} catch {
+		return null;
+	}
+}
+
+function coerceServerConfigs(servers: Record<string, Partial<ServerConfig>>): Record<string, ServerConfig> {
+	const result: Record<string, ServerConfig> = {};
+	for (const [name, config] of Object.entries(servers)) {
+		const normalized = normalizeServerConfig(name, config);
+		if (normalized) {
+			result[name] = normalized;
+		}
+	}
+	return result;
+}
+
+function mergeServers(
+	base: Record<string, ServerConfig>,
+	overrides: Record<string, Partial<ServerConfig>>,
+): Record<string, ServerConfig> {
+	const merged: Record<string, ServerConfig> = { ...base };
+	for (const [name, config] of Object.entries(overrides)) {
+		if (merged[name]) {
+			const candidate = { ...merged[name], ...config };
+			const normalized = normalizeServerConfig(name, candidate);
+			if (normalized) {
+				merged[name] = normalized;
+			} else {
+				console.warn(`Ignoring invalid LSP overrides for "${name}" (keeping previous config).`);
+			}
+		} else {
+			const normalized = normalizeServerConfig(name, config);
+			if (normalized) {
+				merged[name] = normalized;
+			}
+		}
+	}
+	return merged;
+}
+
+function applyRuntimeDefaults(servers: Record<string, ServerConfig>): Record<string, ServerConfig> {
+	const updated: Record<string, ServerConfig> = { ...servers };
+
+	if (updated.biome) {
+		updated.biome = { ...updated.biome, createClient: createBiomeClient };
+	}
+
+	if (updated.omnisharp?.args) {
+		const args = updated.omnisharp.args.map((arg) => (arg === PID_TOKEN ? String(process.pid) : arg));
+		updated.omnisharp = { ...updated.omnisharp, args };
+	}
+
+	return updated;
+}
 
 // =============================================================================
 // Configuration Loading
@@ -613,22 +154,26 @@ export const SERVERS: Record<string, ServerConfig> = {
 /**
  * Check if any root marker file exists in the directory
  */
-export function hasRootMarkers(cwd: string, markers: string[]): boolean {
-	return markers.some((marker) => {
+export async function hasRootMarkers(cwd: string, markers: string[]): Promise<boolean> {
+	for (const marker of markers) {
 		// Handle glob-like patterns (e.g., "*.cabal")
 		if (marker.includes("*")) {
 			try {
-				const { globSync } = require("glob");
 				const matches = globSync(join(cwd, marker));
-				return matches.length > 0;
+				if (matches.length > 0) {
+					return true;
+				}
 			} catch {
-				// globSync not available, skip glob patterns
-				return false;
+				console.warn(`Failed to resolve glob root marker "${marker}" in ${cwd}`);
 			}
+			continue;
 		}
 		const filePath = join(cwd, marker);
-		return existsSync(filePath);
-	});
+		if (await Bun.file(filePath).exists()) {
+			return true;
+		}
+	}
+	return false;
 }
 
 // =============================================================================
@@ -661,12 +206,12 @@ const LOCAL_BIN_PATHS: Array<{ markers: string[]; binDir: string }> = [
  * @param cwd - Working directory to search from
  * @returns Absolute path to the executable, or null if not found
  */
-export function resolveCommand(command: string, cwd: string): string | null {
+export async function resolveCommand(command: string, cwd: string): Promise<string | null> {
 	// Check local bin directories based on project markers
 	for (const { markers, binDir } of LOCAL_BIN_PATHS) {
-		if (hasRootMarkers(cwd, markers)) {
+		if (await hasRootMarkers(cwd, markers)) {
 			const localPath = join(cwd, binDir, command);
-			if (existsSync(localPath)) {
+			if (await Bun.file(localPath).exists()) {
 				return localPath;
 			}
 		}
@@ -681,7 +226,7 @@ export function resolveCommand(command: string, cwd: string): string | null {
  * Supports both visible and hidden variants at each config location.
  */
 function getConfigPaths(cwd: string): string[] {
-	const filenames = ["lsp.json", ".lsp.json"];
+	const filenames = ["lsp.json", ".lsp.json", "lsp.yaml", ".lsp.yaml", "lsp.yml", ".lsp.yml"];
 	const paths: string[] = [];
 
 	// Project root files (highest priority)
@@ -716,14 +261,16 @@ function getConfigPaths(cwd: string): string[] {
 /**
  * Load LSP configuration.
  *
- * Priority:
- * 1. Project root: lsp.json, .lsp.json
- * 2. Project config dirs: .omp/lsp.json, .pi/lsp.json, .claude/lsp.json (+ hidden variants)
- * 3. User config dirs: ~/.omp/agent/lsp.json, ~/.pi/agent/lsp.json, ~/.claude/lsp.json (+ hidden variants)
- * 4. User home root: ~/lsp.json, ~/.lsp.json
+ * Priority (highest to lowest):
+ * 1. Project root: lsp.json/.lsp.json/lsp.yml/.lsp.yml/lsp.yaml/.lsp.yaml
+ * 2. Project config dirs: .omp/lsp.*, .pi/lsp.*, .claude/lsp.* (+ hidden variants)
+ * 3. User config dirs: ~/.omp/agent/lsp.*, ~/.pi/agent/lsp.*, ~/.claude/lsp.* (+ hidden variants)
+ * 4. User home root: ~/lsp.*, ~/.lsp.*
  * 5. Auto-detect from project markers + available binaries
  *
- * Config file format:
+ * Config files are merged from lowest to highest priority; later files override earlier settings.
+ *
+ * Config file format (JSON or YAML):
  * ```json
  * {
  *   "servers": {
@@ -743,61 +290,53 @@ function getConfigPaths(cwd: string): string[] {
  * ```
  */
 export async function loadConfig(cwd: string): Promise<LspConfig> {
-	const configPaths = getConfigPaths(cwd);
+	let mergedServers = coerceServerConfigs(DEFAULTS);
 
+	const configPaths = getConfigPaths(cwd).reverse();
+	let hasOverrides = false;
+
+	let idleTimeoutMs: number | undefined;
 	for (const configPath of configPaths) {
-		if (existsSync(configPath)) {
-			try {
-				const content = readFileSync(configPath, "utf-8");
-				const parsed = JSON.parse(content);
-
-				// Support both { servers: {...} } and direct server map
-				const servers = parsed.servers || parsed;
-
-				// Merge with defaults and filter to available
-				const merged: Record<string, ServerConfig> = { ...SERVERS };
-
-				for (const [name, config] of Object.entries(servers) as [string, Partial<ServerConfig>][]) {
-					if (merged[name]) {
-						// Merge with existing config
-						merged[name] = { ...merged[name], ...config };
-					} else {
-						// Add new server config
-						merged[name] = config as ServerConfig;
-					}
-				}
-
-				// Filter to only enabled servers with available commands
-				const available: Record<string, ServerConfig> = {};
-				for (const [name, config] of Object.entries(merged)) {
-					if (config.disabled) continue;
-					const resolved = resolveCommand(config.command, cwd);
-					if (!resolved) continue;
-					available[name] = { ...config, resolvedCommand: resolved };
-				}
-
-				return { servers: available };
-			} catch {
-				// Ignore parse errors, continue to next config or auto-detect
-			}
+		const parsed = await readConfigFile(configPath);
+		if (!parsed) continue;
+		hasOverrides = true;
+		mergedServers = mergeServers(mergedServers, parsed.servers);
+		if (parsed.idleTimeoutMs !== undefined) {
+			idleTimeoutMs = parsed.idleTimeoutMs;
 		}
 	}
 
-	// Auto-detect: find servers based on project markers AND available binaries
-	const detected: Record<string, ServerConfig> = {};
+	if (!hasOverrides) {
+		// Auto-detect: find servers based on project markers AND available binaries
+		const detected: Record<string, ServerConfig> = {};
+		const defaultsWithRuntime = applyRuntimeDefaults(mergedServers);
 
-	for (const [name, config] of Object.entries(SERVERS)) {
-		// Check if project has root markers for this language
-		if (!hasRootMarkers(cwd, config.rootMarkers)) continue;
+		for (const [name, config] of Object.entries(defaultsWithRuntime)) {
+			// Check if project has root markers for this language
+			if (!(await hasRootMarkers(cwd, config.rootMarkers))) continue;
 
-		// Check if the language server binary is available (local or $PATH)
-		const resolved = resolveCommand(config.command, cwd);
-		if (!resolved) continue;
+			// Check if the language server binary is available (local or $PATH)
+			const resolved = await resolveCommand(config.command, cwd);
+			if (!resolved) continue;
 
-		detected[name] = { ...config, resolvedCommand: resolved };
+			detected[name] = { ...config, resolvedCommand: resolved };
+		}
+
+		return { servers: detected, idleTimeoutMs };
 	}
 
-	return { servers: detected };
+	// Merge overrides with defaults and filter to available servers
+	const mergedWithRuntime = applyRuntimeDefaults(mergedServers);
+	const available: Record<string, ServerConfig> = {};
+
+	for (const [name, config] of Object.entries(mergedWithRuntime)) {
+		if (config.disabled) continue;
+		const resolved = await resolveCommand(config.command, cwd);
+		if (!resolved) continue;
+		available[name] = { ...config, resolvedCommand: resolved };
+	}
+
+	return { servers: available, idleTimeoutMs };
 }
 
 // =============================================================================
@@ -810,10 +349,16 @@ export async function loadConfig(cwd: string): Promise<LspConfig> {
  */
 export function getServersForFile(config: LspConfig, filePath: string): Array<[string, ServerConfig]> {
 	const ext = extname(filePath).toLowerCase();
+	const fileName = basename(filePath).toLowerCase();
 	const matches: Array<[string, ServerConfig]> = [];
 
 	for (const [name, serverConfig] of Object.entries(config.servers)) {
-		if (serverConfig.fileTypes.includes(ext)) {
+		const supportsFile = serverConfig.fileTypes.some((fileType) => {
+			const normalized = fileType.toLowerCase();
+			return normalized === ext || normalized === fileName;
+		});
+
+		if (supportsFile) {
 			matches.push([name, serverConfig]);
 		}
 	}

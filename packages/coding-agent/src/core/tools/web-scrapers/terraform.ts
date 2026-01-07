@@ -64,7 +64,11 @@ interface TerraformProvider {
 /**
  * Handle Terraform Registry URLs via API
  */
-export const handleTerraform: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleTerraform: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (!parsed.hostname.includes("registry.terraform.io")) return null;
@@ -75,14 +79,14 @@ export const handleTerraform: SpecialHandler = async (url: string, timeout: numb
 		const moduleMatch = parsed.pathname.match(/^\/modules\/([^/]+)\/([^/]+)\/([^/]+)/);
 		if (moduleMatch) {
 			const [, namespace, name, provider] = moduleMatch;
-			return await handleModuleUrl(url, namespace, name, provider, timeout, fetchedAt);
+			return await handleModuleUrl(url, namespace, name, provider, timeout, signal, fetchedAt);
 		}
 
 		// Match provider URL: /providers/{namespace}/{type}
 		const providerMatch = parsed.pathname.match(/^\/providers\/([^/]+)\/([^/]+)/);
 		if (providerMatch) {
 			const [, namespace, type] = providerMatch;
-			return await handleProviderUrl(url, namespace, type, timeout, fetchedAt);
+			return await handleProviderUrl(url, namespace, type, timeout, signal, fetchedAt);
 		}
 
 		return null;
@@ -97,11 +101,13 @@ async function handleModuleUrl(
 	name: string,
 	provider: string,
 	timeout: number,
+	signal: AbortSignal | undefined,
 	fetchedAt: string,
 ): Promise<RenderResult | null> {
 	const apiUrl = `https://registry.terraform.io/v1/modules/${namespace}/${name}/${provider}`;
 	const result = await loadPage(apiUrl, {
 		timeout,
+		signal,
 		headers: { Accept: "application/json" },
 	});
 
@@ -224,11 +230,13 @@ async function handleProviderUrl(
 	namespace: string,
 	type: string,
 	timeout: number,
+	signal: AbortSignal | undefined,
 	fetchedAt: string,
 ): Promise<RenderResult | null> {
 	const apiUrl = `https://registry.terraform.io/v1/providers/${namespace}/${type}`;
 	const result = await loadPage(apiUrl, {
 		timeout,
+		signal,
 		headers: { Accept: "application/json" },
 	});
 

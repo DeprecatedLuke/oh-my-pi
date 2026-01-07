@@ -315,18 +315,18 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"icon.rewind": "↩",
 	// pick: ⚡ | alt: ✨ ✦
 	"icon.auto": "⚡",
-	// pick: SK | alt: 🧠 🎓
-	"icon.extensionSkill": "SK",
-	// pick: TL | alt: 🛠 ⚙
-	"icon.extensionTool": "TL",
+	// pick: ✧ | alt: ⚙ SK 🧠
+	"icon.extensionSkill": "✧",
+	// pick: ⚒ | alt: ⛭ TL 🛠
+	"icon.extensionTool": "⚒",
 	// pick: / | alt: ⌘ ⌥
 	"icon.extensionSlashCommand": "/",
-	// pick: MCP | alt: 🔌 🧩
-	"icon.extensionMcp": "MCP",
-	// pick: RL | alt: ⚖ 📏
-	"icon.extensionRule": "RL",
-	// pick: HK | alt: 🪝 ⚓
-	"icon.extensionHook": "HK",
+	// pick: ◈ | alt: ⧫ MCP 🔌
+	"icon.extensionMcp": "◈",
+	// pick: § | alt: ⚖ RL 📏
+	"icon.extensionRule": "§",
+	// pick: ↪ | alt: ⚓ HK 🪝
+	"icon.extensionHook": "↪",
 	// pick: PR | alt: 💬 ✎
 	"icon.extensionPrompt": "PR",
 	// pick: CF | alt: 📄 📎
@@ -356,10 +356,10 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"format.bullet": "•",
 	// pick: – | alt: — ― -
 	"format.dash": "–",
-	// pick: [ | alt: ⟦ ⟨
-	"format.bracketLeft": "[",
-	// pick: ] | alt: ⟧ ⟩
-	"format.bracketRight": "]",
+	// pick: ⟨ | alt: [ ⟦
+	"format.bracketLeft": "⟨",
+	// pick: ⟩ | alt: ] ⟧
+	"format.bracketRight": "⟩",
 	// Markdown-specific
 	// pick: │ | alt: ┃ ║
 	"md.quoteBorder": "│",
@@ -574,15 +574,15 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.extensionInstruction": "\uf02d",
 	// Thinking Levels - emoji labels
 	// pick: 🤨 min | alt:  min  min
-	"thinking.minimal": "🤨 min",
+	"thinking.minimal": "\u{F0E7} min",
 	// pick: 🤔 low | alt:  low  low
-	"thinking.low": "🤔 low",
+	"thinking.low": "\u{F10C} low",
 	// pick: 🤓 med | alt:  med  med
-	"thinking.medium": "🤓 med",
+	"thinking.medium": "\u{F192} med",
 	// pick: 🤯 high | alt:  high  high
-	"thinking.high": "🤯 high",
+	"thinking.high": "\u{F111} high",
 	// pick: 🧠 xhi | alt:  xhi  xhi
-	"thinking.xhigh": "🧠 xhi",
+	"thinking.xhigh": "\u{F06D} xhi",
 	// Checkboxes
 	// pick:  | alt:  
 	"checkbox.checked": "\uf14a",
@@ -595,10 +595,10 @@ const NERD_SYMBOLS: SymbolMap = {
 	"format.bullet": "\uf111",
 	// pick: – | alt: — ― -
 	"format.dash": "\u2013",
-	// pick: [ | alt: ⟦ ⟨
-	"format.bracketLeft": "[",
-	// pick: ] | alt: ⟧ ⟩
-	"format.bracketRight": "]",
+	// pick: ⟨ | alt: [ ⟦
+	"format.bracketLeft": "⟨",
+	// pick: ⟩ | alt: ] ⟧
+	"format.bracketRight": "⟩",
 	// Markdown-specific
 	// pick: │ | alt: ┃ ║
 	"md.quoteBorder": "\u2502",
@@ -608,41 +608,41 @@ const NERD_SYMBOLS: SymbolMap = {
 	"md.bullet": "\uf111",
 	// Language icons (nerd font devicons)
 	"lang.default": "",
-	"lang.typescript": "",
-	"lang.javascript": "",
-	"lang.python": "",
-	"lang.rust": "",
-	"lang.go": "",
-	"lang.java": "",
-	"lang.c": "",
-	"lang.cpp": "",
-	"lang.csharp": "",
-	"lang.ruby": "",
-	"lang.php": "",
-	"lang.swift": "",
-	"lang.kotlin": "",
-	"lang.shell": "",
-	"lang.html": "",
-	"lang.css": "",
-	"lang.json": "",
-	"lang.yaml": "",
-	"lang.markdown": "",
-	"lang.sql": "",
-	"lang.docker": "",
-	"lang.lua": "",
-	"lang.text": "",
-	"lang.env": "",
-	"lang.toml": "",
-	"lang.xml": "󰗀",
-	"lang.ini": "",
-	"lang.conf": "",
-	"lang.log": "󰌱",
-	"lang.csv": "󰈛",
-	"lang.tsv": "󰈛",
-	"lang.image": "󰈟",
-	"lang.pdf": "󰈦",
-	"lang.archive": "",
-	"lang.binary": "󰆚",
+	"lang.typescript": "\u{E628}",
+	"lang.javascript": "\u{E60C}",
+	"lang.python": "\u{E606}",
+	"lang.rust": "\u{E7A8}",
+	"lang.go": "\u{E627}",
+	"lang.java": "\u{E738}",
+	"lang.c": "\u{E61E}",
+	"lang.cpp": "\u{E61D}",
+	"lang.csharp": "\u{E7BC}",
+	"lang.ruby": "\u{E791}",
+	"lang.php": "\u{E608}",
+	"lang.swift": "\u{E755}",
+	"lang.kotlin": "\u{E634}",
+	"lang.shell": "\u{E795}",
+	"lang.html": "\u{E736}",
+	"lang.css": "\u{E749}",
+	"lang.json": "\u{E60B}",
+	"lang.yaml": "\u{E615}",
+	"lang.markdown": "\u{E609}",
+	"lang.sql": "\u{E706}",
+	"lang.docker": "\u{E7B0}",
+	"lang.lua": "\u{E620}",
+	"lang.text": "\u{E612}",
+	"lang.env": "\u{E615}",
+	"lang.toml": "\u{E615}",
+	"lang.xml": "\u{F05C0}",
+	"lang.ini": "\u{E615}",
+	"lang.conf": "\u{E615}",
+	"lang.log": "\u{F0331}",
+	"lang.csv": "\u{F021B}",
+	"lang.tsv": "\u{F021B}",
+	"lang.image": "\u{F021F}",
+	"lang.pdf": "\u{F0226}",
+	"lang.archive": "\u{F187}",
+	"lang.binary": "\u{F019A}",
 };
 
 const ASCII_SYMBOLS: SymbolMap = {

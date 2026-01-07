@@ -30,7 +30,11 @@ interface RubyGemsResponse {
 /**
  * Handle RubyGems URLs via API
  */
-export const handleRubyGems: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleRubyGems: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "rubygems.org" && parsed.hostname !== "www.rubygems.org") return null;
@@ -46,6 +50,7 @@ export const handleRubyGems: SpecialHandler = async (url: string, timeout: numbe
 		const apiUrl = `https://rubygems.org/api/v1/gems/${encodeURIComponent(gemName)}.json`;
 		const result = await loadPage(apiUrl, {
 			timeout,
+			signal,
 			headers: { Accept: "application/json" },
 		});
 

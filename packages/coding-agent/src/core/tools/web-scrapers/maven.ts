@@ -25,7 +25,11 @@ interface MavenResponse {
  * Handle Maven Central URLs via Solr API
  * Supports: search.maven.org/artifact/... and mvnrepository.com/artifact/...
  */
-export const handleMaven: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleMaven: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		const hostname = parsed.hostname;
@@ -65,6 +69,7 @@ export const handleMaven: SpecialHandler = async (url: string, timeout: number):
 		const result = await loadPage(apiUrl, {
 			timeout,
 			headers: { Accept: "application/json" },
+			signal,
 		});
 
 		if (!result.ok) return null;

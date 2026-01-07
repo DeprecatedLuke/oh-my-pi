@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getModel } from "@mariozechner/pi-ai";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import { nanoid } from "nanoid";
 import { AgentSession } from "../src/core/agent-session";
 import { AuthStorage } from "../src/core/auth-storage";
 import {
@@ -32,7 +33,7 @@ describe.skipIf(!API_KEY)("Compaction hooks", () => {
 	let capturedEvents: SessionEvent[];
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `omp-compaction-hooks-test-${Date.now()}`);
+		tempDir = join(tmpdir(), `omp-compaction-hooks-test-${nanoid()}`);
 		mkdirSync(tempDir, { recursive: true });
 		capturedEvents = [];
 	});

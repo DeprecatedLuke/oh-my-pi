@@ -119,7 +119,7 @@ Structured code review with priority-based findings:
 
 - **`/review` command**: Interactive mode selection (branch comparison, uncommitted changes, commit review)
 - **Structured findings**: `report_finding` tool with priority levels (P0-P3: critical → nit)
-- **Verdict rendering**: `submit_review` aggregates findings into approve/request-changes/comment
+- **Verdict rendering**: aggregates findings into approve/request-changes/comment
 - Combined result tree showing verdict and all findings
 
 ## + Task Tool (Subagent System)

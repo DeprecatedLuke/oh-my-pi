@@ -12,7 +12,11 @@ const NITTER_INSTANCES = [
 /**
  * Handle Twitter/X URLs via Nitter
  */
-export const handleTwitter: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleTwitter: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (!["twitter.com", "x.com", "www.twitter.com", "www.x.com"].includes(parsed.hostname)) {
@@ -24,7 +28,7 @@ export const handleTwitter: SpecialHandler = async (url: string, timeout: number
 		// Try Nitter instances
 		for (const instance of NITTER_INSTANCES) {
 			const nitterUrl = `https://${instance}${parsed.pathname}`;
-			const result = await loadPage(nitterUrl, { timeout: Math.min(timeout, 10) });
+			const result = await loadPage(nitterUrl, { timeout: Math.min(timeout, 10), signal });
 
 			if (result.ok && result.content.length > 500) {
 				// Parse the Nitter HTML
@@ -67,7 +71,15 @@ export const handleTwitter: SpecialHandler = async (url: string, timeout: number
 				}
 			}
 		}
-	} catch {}
+	} catch {
+		if (signal?.aborted) {
+			return null;
+		}
+	}
+
+	if (signal?.aborted) {
+		return null;
+	}
 
 	// X.com blocks all bots - return a helpful error instead of falling through
 	return {

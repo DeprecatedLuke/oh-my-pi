@@ -24,7 +24,11 @@ interface RedditComment {
 /**
  * Handle Reddit URLs via JSON API
  */
-export const handleReddit: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleReddit: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (!parsed.hostname.includes("reddit.com")) return null;
@@ -37,7 +41,7 @@ export const handleReddit: SpecialHandler = async (url: string, timeout: number)
 			jsonUrl = `${url.replace(/\/$/, "").replace(parsed.search, "")}.json${parsed.search}`;
 		}
 
-		const result = await loadPage(jsonUrl, { timeout });
+		const result = await loadPage(jsonUrl, { timeout, signal });
 		if (!result.ok) return null;
 
 		const data = JSON.parse(result.content);

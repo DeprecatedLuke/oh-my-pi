@@ -13,7 +13,7 @@ export interface RenderResult {
 	notes: string[];
 }
 
-export type SpecialHandler = (url: string, timeout: number) => Promise<RenderResult | null>;
+export type SpecialHandler = (url: string, timeout: number, signal?: AbortSignal) => Promise<RenderResult | null>;
 
 export const MAX_OUTPUT_CHARS = 500_000;
 const MAX_BYTES = 50 * 1024 * 1024;

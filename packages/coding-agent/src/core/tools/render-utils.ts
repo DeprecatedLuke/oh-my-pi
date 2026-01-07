@@ -147,11 +147,7 @@ export function formatAge(ageSeconds: number | null | undefined): string {
  * Get the appropriate status icon with color for a given state.
  * Standardizes status icon usage across all renderers.
  */
-export function getStyledStatusIcon(
-	status: "success" | "error" | "warning" | "info" | "pending" | "running" | "aborted",
-	theme: Theme,
-	spinnerFrame?: number,
-): string {
+export function getStyledStatusIcon(status: ToolUIStatus, theme: Theme, spinnerFrame?: number): string {
 	switch (status) {
 		case "success":
 			return theme.styledSymbol("status.success", "success");
@@ -185,11 +181,7 @@ export function formatExpandHint(expanded: boolean, hasMore: boolean, theme: The
 /**
  * Format a badge like [done] or [failed] with brackets and color.
  */
-export function formatBadge(
-	label: string,
-	color: "success" | "error" | "warning" | "accent" | "muted",
-	theme: Theme,
-): string {
+export function formatBadge(label: string, color: ToolUIColor, theme: Theme): string {
 	const left = theme.format.bracketLeft;
 	const right = theme.format.bracketRight;
 	return theme.fg(color, `${left}${label}${right}`);
@@ -223,6 +215,74 @@ export function formatErrorMessage(message: string | undefined, theme: Theme): s
 
 export function formatEmptyMessage(message: string, theme: Theme): string {
 	return `${theme.styledSymbol("status.warning", "warning")} ${theme.fg("muted", message)}`;
+}
+
+// =============================================================================
+// Tool UI Kit
+// =============================================================================
+
+export type ToolUIStatus = "success" | "error" | "warning" | "info" | "pending" | "running" | "aborted";
+export type ToolUIColor = "success" | "error" | "warning" | "accent" | "muted";
+
+export interface ToolUITitleOptions {
+	bold?: boolean;
+}
+
+export interface ToolUIKit {
+	theme: Theme;
+	title: (label: string, options?: ToolUITitleOptions) => string;
+	meta: (meta: string[]) => string;
+	count: (label: string, count: number) => string;
+	moreItems: (remaining: number, itemType: string) => string;
+	expandHint: (expanded: boolean, hasMore: boolean) => string;
+	scope: (scopePath?: string) => string;
+	truncationSuffix: (truncated: boolean) => string;
+	errorMessage: (message: string | undefined) => string;
+	emptyMessage: (message: string) => string;
+	badge: (label: string, color: ToolUIColor) => string;
+	statusIcon: (status: ToolUIStatus, spinnerFrame?: number) => string;
+	wrapBrackets: (text: string) => string;
+	truncate: (text: string, maxLen: number) => string;
+	previewLines: (text: string, maxLines: number, maxLineLen: number) => string[];
+	formatBytes: (bytes: number) => string;
+	formatTokens: (tokens: number) => string;
+	formatDuration: (ms: number) => string;
+	formatAge: (ageSeconds: number | null | undefined) => string;
+	formatDiagnostics: (
+		diag: { errored: boolean; summary: string; messages: string[] },
+		expanded: boolean,
+		getLangIcon: (filePath: string) => string,
+	) => string;
+	formatDiffStats: (added: number, removed: number, hunks: number) => string;
+}
+
+export function createToolUIKit(theme: Theme): ToolUIKit {
+	return {
+		theme,
+		title: (label, options) => {
+			const content = options?.bold === false ? label : theme.bold(label);
+			return theme.fg("toolTitle", content);
+		},
+		meta: (meta) => formatMeta(meta, theme),
+		count: (label, count) => formatCount(label, count),
+		moreItems: (remaining, itemType) => formatMoreItems(remaining, itemType, theme),
+		expandHint: (expanded, hasMore) => formatExpandHint(expanded, hasMore, theme),
+		scope: (scopePath) => formatScope(scopePath, theme),
+		truncationSuffix: (truncated) => formatTruncationSuffix(truncated, theme),
+		errorMessage: (message) => formatErrorMessage(message, theme),
+		emptyMessage: (message) => formatEmptyMessage(message, theme),
+		badge: (label, color) => formatBadge(label, color, theme),
+		statusIcon: (status, spinnerFrame) => getStyledStatusIcon(status, theme, spinnerFrame),
+		wrapBrackets: (text) => wrapBrackets(text, theme),
+		truncate: (text, maxLen) => truncate(text, maxLen, theme.format.ellipsis),
+		previewLines: (text, maxLines, maxLineLen) => getPreviewLines(text, maxLines, maxLineLen, theme.format.ellipsis),
+		formatBytes,
+		formatTokens,
+		formatDuration,
+		formatAge,
+		formatDiagnostics: (diag, expanded, getLangIcon) => formatDiagnostics(diag, expanded, theme, getLangIcon),
+		formatDiffStats: (added, removed, hunks) => formatDiffStats(added, removed, hunks, theme),
+	};
 }
 
 // =============================================================================

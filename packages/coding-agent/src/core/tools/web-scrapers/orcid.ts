@@ -201,7 +201,11 @@ function collectWorkTitles(container: OrcidWorksContainer | undefined): string[]
 	return titles;
 }
 
-export const handleOrcid: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleOrcid: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (!isOrcidHost(parsed.hostname)) return null;
@@ -215,6 +219,7 @@ export const handleOrcid: SpecialHandler = async (url: string, timeout: number):
 		const result = await loadPage(apiUrl, {
 			timeout,
 			headers: { Accept: "application/json" },
+			signal,
 		});
 
 		if (!result.ok || !result.content) return null;

@@ -266,6 +266,7 @@ async function startMessageReader(client: LspClient): Promise<void> {
 					if (message.method === "textDocument/publishDiagnostics" && message.params) {
 						const params = message.params as { uri: string; diagnostics: Diagnostic[] };
 						client.diagnostics.set(params.uri, params.diagnostics);
+						client.diagnosticsVersion += 1;
 					}
 				}
 
@@ -408,6 +409,7 @@ export async function getOrCreateClient(config: ServerConfig, cwd: string): Prom
 			config,
 			requestId: 0,
 			diagnostics: new Map(),
+			diagnosticsVersion: 0,
 			openFiles: new Map(),
 			pendingRequests: new Map(),
 			messageBuffer: new Uint8Array(0),
@@ -516,9 +518,15 @@ export async function ensureFileOpen(client: LspClient, filePath: string): Promi
  * Sync in-memory content to the LSP client without reading from disk.
  * Use this to provide instant feedback during edits before the file is saved.
  */
-export async function syncContent(client: LspClient, filePath: string, content: string): Promise<void> {
+export async function syncContent(
+	client: LspClient,
+	filePath: string,
+	content: string,
+	signal?: AbortSignal,
+): Promise<void> {
 	const uri = fileToUri(filePath);
 	const lockKey = `${client.name}:${uri}`;
+	signal?.throwIfAborted();
 
 	const existingLock = fileOperationLocks.get(lockKey);
 	if (existingLock) {
@@ -534,6 +542,7 @@ export async function syncContent(client: LspClient, filePath: string, content: 
 		if (!info) {
 			// Open file with provided content instead of reading from disk
 			const languageId = detectLanguageId(filePath);
+			signal?.throwIfAborted();
 			await sendNotification(client, "textDocument/didOpen", {
 				textDocument: {
 					uri,
@@ -548,6 +557,7 @@ export async function syncContent(client: LspClient, filePath: string, content: 
 		}
 
 		const version = ++info.version;
+		signal?.throwIfAborted();
 		await sendNotification(client, "textDocument/didChange", {
 			textDocument: { uri, version },
 			contentChanges: [{ text: content }],
@@ -567,11 +577,12 @@ export async function syncContent(client: LspClient, filePath: string, content: 
  * Notify LSP that a file was saved.
  * Assumes content was already synced via syncContent - just sends didSave.
  */
-export async function notifySaved(client: LspClient, filePath: string): Promise<void> {
+export async function notifySaved(client: LspClient, filePath: string, signal?: AbortSignal): Promise<void> {
 	const uri = fileToUri(filePath);
 	const info = client.openFiles.get(uri);
 	if (!info) return; // File not open, nothing to notify
 
+	signal?.throwIfAborted();
 	await sendNotification(client, "textDocument/didSave", {
 		textDocument: { uri },
 	});
@@ -653,9 +664,18 @@ export function shutdownClient(key: string): void {
 /**
  * Send an LSP request and wait for response.
  */
-export async function sendRequest(client: LspClient, method: string, params: unknown): Promise<unknown> {
+export async function sendRequest(
+	client: LspClient,
+	method: string,
+	params: unknown,
+	signal?: AbortSignal,
+): Promise<unknown> {
 	// Atomically increment and capture request ID
 	const id = ++client.requestId;
+	if (signal?.aborted) {
+		const reason = signal.reason instanceof Error ? signal.reason : new Error("Operation aborted");
+		return Promise.reject(reason);
+	}
 
 	const request: LspJsonRpcRequest = {
 		jsonrpc: "2.0",
@@ -667,22 +687,49 @@ export async function sendRequest(client: LspClient, method: string, params: unk
 	client.lastActivity = Date.now();
 
 	return new Promise((resolve, reject) => {
-		// Set timeout
-		const timeout = setTimeout(() => {
+		let timeout: ReturnType<typeof setTimeout> | undefined;
+		const cleanup = () => {
+			if (signal) {
+				signal.removeEventListener("abort", abortHandler);
+			}
+		};
+		const abortHandler = () => {
 			if (client.pendingRequests.has(id)) {
 				client.pendingRequests.delete(id);
-				reject(new Error(`LSP request ${method} timed out`));
+			}
+			if (timeout) clearTimeout(timeout);
+			cleanup();
+			const reason = signal?.reason instanceof Error ? signal.reason : new Error("Operation aborted");
+			reject(reason);
+		};
+
+		// Set timeout
+		timeout = setTimeout(() => {
+			if (client.pendingRequests.has(id)) {
+				client.pendingRequests.delete(id);
+				const err = new Error(`LSP request ${method} timed out`);
+				cleanup();
+				reject(err);
 			}
 		}, 30000);
+		if (signal) {
+			signal.addEventListener("abort", abortHandler, { once: true });
+			if (signal.aborted) {
+				abortHandler();
+				return;
+			}
+		}
 
 		// Register pending request with timeout wrapper
 		client.pendingRequests.set(id, {
 			resolve: (result) => {
-				clearTimeout(timeout);
+				if (timeout) clearTimeout(timeout);
+				cleanup();
 				resolve(result);
 			},
 			reject: (err) => {
-				clearTimeout(timeout);
+				if (timeout) clearTimeout(timeout);
+				cleanup();
 				reject(err);
 			},
 			method,
@@ -690,8 +737,9 @@ export async function sendRequest(client: LspClient, method: string, params: unk
 
 		// Write request
 		writeMessage(client.process.stdin as import("bun").FileSink, request).catch((err) => {
-			clearTimeout(timeout);
+			if (timeout) clearTimeout(timeout);
 			client.pendingRequests.delete(id);
+			cleanup();
 			reject(err);
 		});
 	});

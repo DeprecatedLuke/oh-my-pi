@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getModel } from "@mariozechner/pi-ai";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import { nanoid } from "nanoid";
 import { AgentSession, type AgentSessionEvent } from "../src/core/agent-session";
 import { AuthStorage } from "../src/core/auth-storage";
 import { ModelRegistry } from "../src/core/model-registry";
@@ -29,7 +30,7 @@ describe.skipIf(!API_KEY)("AgentSession compaction e2e", () => {
 
 	beforeEach(() => {
 		// Create temp directory for session files
-		tempDir = join(tmpdir(), `omp-compaction-test-${Date.now()}`);
+		tempDir = join(tmpdir(), `omp-compaction-test-${nanoid()}`);
 		mkdirSync(tempDir, { recursive: true });
 
 		// Track events

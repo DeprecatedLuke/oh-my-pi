@@ -105,7 +105,7 @@ function convertMDNBody(sections: MDNSection[]): string {
 	return parts.join("\n\n");
 }
 
-export const handleMDN: SpecialHandler = async (url: string, timeout: number) => {
+export const handleMDN: SpecialHandler = async (url: string, timeout: number, signal?: AbortSignal) => {
 	const urlObj = new URL(url);
 
 	// Only handle developer.mozilla.org
@@ -124,7 +124,7 @@ export const handleMDN: SpecialHandler = async (url: string, timeout: number) =>
 	const jsonUrl = url.replace(/\/?$/, "/index.json");
 
 	try {
-		const result = await loadPage(jsonUrl, { timeout, headers: { Accept: "application/json" } });
+		const result = await loadPage(jsonUrl, { timeout, signal, headers: { Accept: "application/json" } });
 
 		if (!result.ok) {
 			notes.push(`Failed to fetch MDN JSON API (status ${result.status || "unknown"})`);

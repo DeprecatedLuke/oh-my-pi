@@ -86,11 +86,11 @@ function parseGitLabUrl(url: string): GitLabUrl | null {
 /**
  * Get project ID from namespace/project path
  */
-async function getProjectId(gl: GitLabUrl, timeout: number): Promise<number | null> {
+async function getProjectId(gl: GitLabUrl, timeout: number, signal?: AbortSignal): Promise<number | null> {
 	const encodedPath = encodeURIComponent(`${gl.namespace}/${gl.project}`);
 	const apiUrl = `https://gitlab.com/api/v4/projects/${encodedPath}`;
 
-	const result = await loadPage(apiUrl, { timeout });
+	const result = await loadPage(apiUrl, { timeout, signal });
 	if (!result.ok) return null;
 
 	try {
@@ -104,11 +104,15 @@ async function getProjectId(gl: GitLabUrl, timeout: number): Promise<number | nu
 /**
  * Render GitLab repository
  */
-async function renderGitLabRepo(gl: GitLabUrl, timeout: number): Promise<{ content: string; ok: boolean }> {
+async function renderGitLabRepo(
+	gl: GitLabUrl,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<{ content: string; ok: boolean }> {
 	const encodedPath = encodeURIComponent(`${gl.namespace}/${gl.project}`);
 	const apiUrl = `https://gitlab.com/api/v4/projects/${encodedPath}`;
 
-	const result = await loadPage(apiUrl, { timeout });
+	const result = await loadPage(apiUrl, { timeout, signal });
 	if (!result.ok) return { content: "", ok: false };
 
 	try {
@@ -137,7 +141,7 @@ async function renderGitLabRepo(gl: GitLabUrl, timeout: number): Promise<{ conte
 
 		// Try to fetch README
 		if (repo.readme_url) {
-			const readmeResult = await loadPage(repo.readme_url, { timeout });
+			const readmeResult = await loadPage(repo.readme_url, { timeout, signal });
 			if (readmeResult.ok && readmeResult.content.trim().length > 0) {
 				md += `---\n\n## README\n\n${readmeResult.content}\n`;
 			}
@@ -156,11 +160,12 @@ async function renderGitLabFile(
 	gl: GitLabUrl,
 	projectId: number,
 	timeout: number,
+	signal?: AbortSignal,
 ): Promise<{ content: string; ok: boolean }> {
 	const encodedPath = encodeURIComponent(gl.path!);
 	const apiUrl = `https://gitlab.com/api/v4/projects/${projectId}/repository/files/${encodedPath}/raw?ref=${gl.ref}`;
 
-	const result = await loadPage(apiUrl, { timeout });
+	const result = await loadPage(apiUrl, { timeout, signal });
 	if (!result.ok) return { content: "", ok: false };
 
 	return { content: result.content, ok: true };
@@ -173,10 +178,11 @@ async function renderGitLabTree(
 	gl: GitLabUrl,
 	projectId: number,
 	timeout: number,
+	signal?: AbortSignal,
 ): Promise<{ content: string; ok: boolean }> {
 	const apiUrl = `https://gitlab.com/api/v4/projects/${projectId}/repository/tree?ref=${gl.ref}&path=${gl.path || ""}&per_page=100`;
 
-	const result = await loadPage(apiUrl, { timeout });
+	const result = await loadPage(apiUrl, { timeout, signal });
 	if (!result.ok) return { content: "", ok: false };
 
 	try {
@@ -222,10 +228,11 @@ async function renderGitLabIssue(
 	gl: GitLabUrl,
 	projectId: number,
 	timeout: number,
+	signal?: AbortSignal,
 ): Promise<{ content: string; ok: boolean }> {
 	const apiUrl = `https://gitlab.com/api/v4/projects/${projectId}/issues/${gl.id}`;
 
-	const result = await loadPage(apiUrl, { timeout });
+	const result = await loadPage(apiUrl, { timeout, signal });
 	if (!result.ok) return { content: "", ok: false };
 
 	try {
@@ -272,10 +279,11 @@ async function renderGitLabMR(
 	gl: GitLabUrl,
 	projectId: number,
 	timeout: number,
+	signal?: AbortSignal,
 ): Promise<{ content: string; ok: boolean }> {
 	const apiUrl = `https://gitlab.com/api/v4/projects/${projectId}/merge_requests/${gl.id}`;
 
-	const result = await loadPage(apiUrl, { timeout });
+	const result = await loadPage(apiUrl, { timeout, signal });
 	if (!result.ok) return { content: "", ok: false };
 
 	try {
@@ -324,7 +332,11 @@ async function renderGitLabMR(
 /**
  * Handle GitLab URLs specially
  */
-export const handleGitLab: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleGitLab: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	const gl = parseGitLabUrl(url);
 	if (!gl) return null;
 
@@ -333,11 +345,11 @@ export const handleGitLab: SpecialHandler = async (url: string, timeout: number)
 
 	switch (gl.type) {
 		case "blob": {
-			const projectId = await getProjectId(gl, timeout);
+			const projectId = await getProjectId(gl, timeout, signal);
 			if (!projectId) break;
 
 			notes.push(`Fetched raw file via GitLab API`);
-			const result = await renderGitLabFile(gl, projectId, timeout);
+			const result = await renderGitLabFile(gl, projectId, timeout, signal);
 			if (result.ok) {
 				const output = finalizeOutput(result.content);
 				return {
@@ -355,11 +367,11 @@ export const handleGitLab: SpecialHandler = async (url: string, timeout: number)
 		}
 
 		case "tree": {
-			const projectId = await getProjectId(gl, timeout);
+			const projectId = await getProjectId(gl, timeout, signal);
 			if (!projectId) break;
 
 			notes.push(`Fetched directory tree via GitLab API`);
-			const result = await renderGitLabTree(gl, projectId, timeout);
+			const result = await renderGitLabTree(gl, projectId, timeout, signal);
 			if (result.ok) {
 				const output = finalizeOutput(result.content);
 				return {
@@ -377,11 +389,11 @@ export const handleGitLab: SpecialHandler = async (url: string, timeout: number)
 		}
 
 		case "issue": {
-			const projectId = await getProjectId(gl, timeout);
+			const projectId = await getProjectId(gl, timeout, signal);
 			if (!projectId) break;
 
 			notes.push(`Fetched issue via GitLab API`);
-			const result = await renderGitLabIssue(gl, projectId, timeout);
+			const result = await renderGitLabIssue(gl, projectId, timeout, signal);
 			if (result.ok) {
 				const output = finalizeOutput(result.content);
 				return {
@@ -399,11 +411,11 @@ export const handleGitLab: SpecialHandler = async (url: string, timeout: number)
 		}
 
 		case "merge_request": {
-			const projectId = await getProjectId(gl, timeout);
+			const projectId = await getProjectId(gl, timeout, signal);
 			if (!projectId) break;
 
 			notes.push(`Fetched merge request via GitLab API`);
-			const result = await renderGitLabMR(gl, projectId, timeout);
+			const result = await renderGitLabMR(gl, projectId, timeout, signal);
 			if (result.ok) {
 				const output = finalizeOutput(result.content);
 				return {
@@ -422,7 +434,7 @@ export const handleGitLab: SpecialHandler = async (url: string, timeout: number)
 
 		case "repo": {
 			notes.push(`Fetched repository via GitLab API`);
-			const result = await renderGitLabRepo(gl, timeout);
+			const result = await renderGitLabRepo(gl, timeout, signal);
 			if (result.ok) {
 				const output = finalizeOutput(result.content);
 				return {

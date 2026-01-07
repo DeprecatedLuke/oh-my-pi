@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Container, Editor, isCtrlG, isEscape, Spacer, Text, type TUI } from "@oh-my-pi/pi-tui";
+import { nanoid } from "nanoid";
 import { getEditorTheme, theme } from "../theme/theme";
 import { DynamicBorder } from "./dynamic-border";
 
@@ -90,7 +91,7 @@ export class HookEditorComponent extends Container {
 		}
 
 		const currentText = this.editor.getText();
-		const tmpFile = path.join(os.tmpdir(), `omp-hook-editor-${Date.now()}.md`);
+		const tmpFile = path.join(os.tmpdir(), `omp-hook-editor-${nanoid()}.md`);
 
 		try {
 			fs.writeFileSync(tmpFile, currentText, "utf-8");

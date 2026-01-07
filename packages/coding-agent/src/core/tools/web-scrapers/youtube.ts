@@ -1,6 +1,8 @@
 import { unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { FileSink } from "bun";
+import { nanoid } from "nanoid";
 import { ensureTool } from "../../../utils/tools-manager";
 import type { RenderResult, SpecialHandler } from "./types";
 import { finalizeOutput } from "./types";
@@ -8,20 +10,44 @@ import { finalizeOutput } from "./types";
 /**
  * Execute a command and return stdout
  */
-function exec(
+async function exec(
 	cmd: string,
 	args: string[],
-	options?: { timeout?: number; input?: string | Buffer },
-): { stdout: string; stderr: string; ok: boolean } {
-	const result = Bun.spawnSync([cmd, ...args], {
-		stdin: options?.input ? (options.input as any) : "ignore",
+	options?: { timeout?: number; input?: string | Buffer; signal?: AbortSignal },
+): Promise<{ stdout: string; stderr: string; ok: boolean; exitCode: number | null }> {
+	const proc = Bun.spawn([cmd, ...args], {
+		stdin: options?.input ? "pipe" : "ignore",
 		stdout: "pipe",
 		stderr: "pipe",
+		timeout: options?.timeout,
+		signal: options?.signal,
 	});
+
+	if (options?.input && proc.stdin) {
+		const stdin = proc.stdin as FileSink;
+		const payload = typeof options.input === "string" ? new TextEncoder().encode(options.input) : options.input;
+		stdin.write(payload);
+		const flushed = stdin.flush();
+		if (flushed instanceof Promise) {
+			await flushed;
+		}
+		const ended = stdin.end();
+		if (ended instanceof Promise) {
+			await ended;
+		}
+	}
+
+	const [stdout, stderr] = await Promise.all([
+		(proc.stdout as ReadableStream<Uint8Array>).text(),
+		(proc.stderr as ReadableStream<Uint8Array>).text(),
+	]);
+	const exitCode = await proc.exited;
+
 	return {
-		stdout: result.stdout?.toString() ?? "",
-		stderr: result.stderr?.toString() ?? "",
-		ok: result.exitCode === 0,
+		stdout,
+		stderr,
+		ok: exitCode === 0,
+		exitCode,
 	};
 }
 
@@ -124,12 +150,18 @@ function formatDuration(seconds: number): string {
 /**
  * Handle YouTube URLs - fetch metadata and transcript
  */
-export const handleYouTube: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleYouTube: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
+	signal?.throwIfAborted();
 	const yt = parseYouTubeUrl(url);
 	if (!yt) return null;
 
 	// Ensure yt-dlp is available (auto-download if missing)
 	const ytdlp = await ensureTool("yt-dlp", true);
+	signal?.throwIfAborted();
 	if (!ytdlp) {
 		return {
 			url,
@@ -148,9 +180,16 @@ export const handleYouTube: SpecialHandler = async (url: string, timeout: number
 	const videoUrl = `https://www.youtube.com/watch?v=${yt.videoId}`;
 
 	// Fetch video metadata
-	const metaResult = exec(ytdlp, ["--dump-json", "--no-warnings", "--no-playlist", "--skip-download", videoUrl], {
-		timeout: timeout * 1000,
-	});
+	signal?.throwIfAborted();
+	const metaResult = await exec(
+		ytdlp,
+		["--dump-json", "--no-warnings", "--no-playlist", "--skip-download", videoUrl],
+		{
+			timeout: timeout * 1000,
+			signal,
+		},
+	);
+	signal?.throwIfAborted();
 
 	let title = "YouTube Video";
 	let channel = "";
@@ -190,21 +229,29 @@ export const handleYouTube: SpecialHandler = async (url: string, timeout: number
 	let transcriptSource = "";
 
 	// First, list available subtitles
-	const listResult = exec(ytdlp, ["--list-subs", "--no-warnings", "--no-playlist", "--skip-download", videoUrl], {
-		timeout: timeout * 1000,
-	});
+	signal?.throwIfAborted();
+	const listResult = await exec(
+		ytdlp,
+		["--list-subs", "--no-warnings", "--no-playlist", "--skip-download", videoUrl],
+		{
+			timeout: timeout * 1000,
+			signal,
+		},
+	);
+	signal?.throwIfAborted();
 
 	const hasManualSubs = listResult.stdout.includes("[info] Available subtitles");
 	const hasAutoSubs = listResult.stdout.includes("[info] Available automatic captions");
 
 	// Create temp directory for subtitle download
 	const tmpDir = tmpdir();
-	const tmpBase = path.join(tmpDir, `yt-${yt.videoId}-${Date.now()}`);
+	const tmpBase = path.join(tmpDir, `yt-${yt.videoId}-${nanoid()}`);
 
 	try {
 		// Try manual subtitles first (English preferred)
 		if (hasManualSubs) {
-			const subResult = exec(
+			signal?.throwIfAborted();
+			const subResult = await exec(
 				ytdlp,
 				[
 					"--write-sub",
@@ -219,13 +266,15 @@ export const handleYouTube: SpecialHandler = async (url: string, timeout: number
 					tmpBase,
 					videoUrl,
 				],
-				{ timeout: timeout * 1000 },
+				{ timeout: timeout * 1000, signal },
 			);
 
 			if (subResult.ok) {
 				// Find the downloaded subtitle file using glob
+				signal?.throwIfAborted();
 				const subFiles = await Array.fromAsync(new Bun.Glob(`${tmpBase}*.vtt`).scan({ absolute: true }));
 				if (subFiles.length > 0) {
+					signal?.throwIfAborted();
 					const vttContent = await Bun.file(subFiles[0]).text();
 					transcript = cleanVttToText(vttContent);
 					transcriptSource = "manual";
@@ -236,7 +285,8 @@ export const handleYouTube: SpecialHandler = async (url: string, timeout: number
 
 		// Fall back to auto-generated captions
 		if (!transcript && hasAutoSubs) {
-			const autoResult = exec(
+			signal?.throwIfAborted();
+			const autoResult = await exec(
 				ytdlp,
 				[
 					"--write-auto-sub",
@@ -251,12 +301,14 @@ export const handleYouTube: SpecialHandler = async (url: string, timeout: number
 					tmpBase,
 					videoUrl,
 				],
-				{ timeout: timeout * 1000 },
+				{ timeout: timeout * 1000, signal },
 			);
 
 			if (autoResult.ok) {
+				signal?.throwIfAborted();
 				const subFiles = await Array.fromAsync(new Bun.Glob(`${tmpBase}*.vtt`).scan({ absolute: true }));
 				if (subFiles.length > 0) {
+					signal?.throwIfAborted();
 					const vttContent = await Bun.file(subFiles[0]).text();
 					transcript = cleanVttToText(vttContent);
 					transcriptSource = "auto-generated";

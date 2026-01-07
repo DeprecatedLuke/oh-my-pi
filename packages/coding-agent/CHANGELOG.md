@@ -3,6 +3,13 @@
 ## [Unreleased]
 ### Added
 
+- Added in-memory session storage implementation for testing and ephemeral sessions
+- Added `createToolUIKit` helper to consolidate common UI formatting utilities across tool renderers
+- Added configurable bash interceptor rules via `bashInterceptor.patterns` setting for custom command blocking
+- Added `bashInterceptor.simpleLs` setting to control interception of bare ls commands
+- Added LSP server configuration via external JSON defaults file for easier customization
+- Added abort signal propagation to web scrapers for improved cancellation handling
+- Added `diagnosticsVersion` tracking to LSP client for more reliable diagnostic polling
 - Added 80+ specialized web scrapers for structured content extraction from popular sites including GitHub, GitLab, npm, PyPI, crates.io, Wikipedia, YouTube, Stack Overflow, Hacker News, Reddit, arXiv, PubMed, and many more
 - Added site-specific API integrations for package registries (npm, PyPI, crates.io, Hex, Hackage, NuGet, Maven, RubyGems, Packagist, pub.dev, Go packages)
 - Added scrapers for social platforms (Mastodon, Bluesky, Lemmy, Lobsters, Dev.to, Discourse)
@@ -17,7 +24,30 @@
 
 ### Changed
 
+- Changed task tool to require explicit task `id` field instead of auto-generating names from agent type
+- Changed grep and find tools to use native Bun file APIs instead of Node.js fs module for improved performance
+- Changed YouTube scraper to use async command execution with proper stream handling
+- Improved rust-analyzer diagnostic polling to use version-based stability detection instead of time-based delays
+- Changed theme icons for extension types to use Unicode symbols (✧, ⚒) instead of text abbreviations (SK, TL, MCP)
+- Changed task tool to use short CamelCase task IDs instead of agent-based naming (e.g., 'SessionStore' instead of 'explore_0')
+- Changed task tool to accept single `agent` parameter at top level instead of per-task agent specification
+- Changed reviewer agent to use `complete` tool instead of `submit_review` for finishing reviews
+- Changed theme icons for extensions to use Unicode symbols instead of text abbreviations
+- Changed LSP file type matching to support exact filename matches in addition to extensions
+- Improved rust-analyzer diagnostic polling to use version-based stability detection
 - Refactored web-fetch tool to use modular scraper architecture for improved maintainability
+
+### Removed
+
+- Removed `submit_review` tool - reviewers now finish via `complete` tool with structured output
+
+### Fixed
+
+- Fixed byte counting in task output truncation to correctly handle multi-byte Unicode characters
+- Fixed parallel task execution to propagate abort signals and fail fast on first error
+- Fixed task worker abort handling to properly clean up on cancellation
+- Fixed parallel task execution to fail fast on first error instead of waiting for all workers
+- Fixed byte counting in task output truncation to handle multi-byte Unicode characters correctly
 
 ## [3.30.0] - 2026-01-07
 ### Added

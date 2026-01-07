@@ -67,7 +67,11 @@ function formatCodeBlock(
 	return `\n\n\`\`\`${fence}\n${displayLines.join("\n")}\n\`\`\`\n`;
 }
 
-export const handleSearchcode: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleSearchcode: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (!VALID_HOSTS.has(parsed.hostname)) return null;
@@ -77,7 +81,7 @@ export const handleSearchcode: SpecialHandler = async (url: string, timeout: num
 		if (viewMatch) {
 			const id = viewMatch[1];
 			const apiUrl = `https://searchcode.com/api/result/${encodeURIComponent(id)}/`;
-			const result = await loadPage(apiUrl, { timeout, headers: { Accept: "application/json" } });
+			const result = await loadPage(apiUrl, { timeout, signal, headers: { Accept: "application/json" } });
 			if (!result.ok) return null;
 
 			let data: SearchcodeResult;
@@ -134,7 +138,7 @@ export const handleSearchcode: SpecialHandler = async (url: string, timeout: num
 		const pageNumber = pageRaw ? Number.parseInt(pageRaw, 10) : 0;
 		const page = Number.isFinite(pageNumber) && pageNumber >= 0 ? pageNumber : 0;
 		const apiUrl = `https://searchcode.com/api/codesearch_I/?q=${encodeURIComponent(query)}&p=${page}`;
-		const result = await loadPage(apiUrl, { timeout, headers: { Accept: "application/json" } });
+		const result = await loadPage(apiUrl, { timeout, signal, headers: { Accept: "application/json" } });
 		if (!result.ok) return null;
 
 		let data: SearchcodeSearchResponse;

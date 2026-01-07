@@ -4,7 +4,6 @@
  * Runs each subagent in a Bun Worker and forwards AgentEvents for progress tracking.
  */
 
-import { writeFileSync } from "node:fs";
 import type { AgentEvent } from "@oh-my-pi/pi-agent-core";
 import type { EventBus } from "../../event-bus";
 import { ensureArtifactsDir, getArtifactPaths } from "./artifacts";
@@ -50,20 +49,26 @@ function truncateOutput(output: string): { text: string; truncated: boolean } {
 
 	let i = 0;
 	let lastNewlineIndex = -1;
-	while (i < output.length && byteBudget > 0) {
-		const ch = output.charCodeAt(i);
-		byteBudget--;
+	while (i < output.length) {
+		const codePoint = output.codePointAt(i);
+		if (codePoint === undefined) break;
+		const codeUnitLength = codePoint > 0xffff ? 2 : 1;
+		const byteLen = codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+		if (byteBudget - byteLen < 0) {
+			truncated = true;
+			break;
+		}
+		byteBudget -= byteLen;
+		i += codeUnitLength;
 
-		if (ch === 10 /* \n */) {
+		if (codePoint === 0x0a) {
 			lineBudget--;
-			lastNewlineIndex = i;
+			lastNewlineIndex = i - 1;
 			if (lineBudget <= 0) {
 				truncated = true;
 				break;
 			}
 		}
-
-		i++;
 	}
 
 	if (i < output.length) {
@@ -186,7 +191,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 		// Write input file immediately (real-time visibility)
 		try {
-			writeFileSync(artifactPaths.inputPath, fullTask, "utf-8");
+			await Bun.write(artifactPaths.inputPath, fullTask);
 		} catch {
 			// Non-fatal, continue without input artifact
 		}
@@ -229,17 +234,18 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		};
 	}
 
-	let output = "";
+	const outputChunks: string[] = [];
+	const finalOutputChunks: string[] = [];
 	let stderr = "";
-	let finalOutput = "";
 	let resolved = false;
-	let pendingTermination = false; // Set when shouldTerminate fires, wait for message_end
 	type AbortReason = "signal" | "terminate";
 	let abortSent = false;
 	let abortReason: AbortReason | undefined;
-	let abortTerminateTimer: ReturnType<typeof setTimeout> | undefined;
-	let pendingTerminationTimer: ReturnType<typeof setTimeout> | undefined;
+	let terminationScheduled = false;
+	let pendingTerminationController: AbortController | null = null;
 	let finalize: ((message: Extract<SubagentWorkerResponse, { type: "done" }>) => void) | null = null;
+	const listenerController = new AbortController();
+	const listenerSignal = listenerController.signal;
 
 	// Accumulate usage incrementally from message_end events (no memory for streaming events)
 	const accumulatedUsage = {
@@ -252,11 +258,31 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	};
 	let hasUsage = false;
 
-	const clearTimers = (): void => {
-		if (abortTerminateTimer) clearTimeout(abortTerminateTimer);
-		abortTerminateTimer = undefined;
-		if (pendingTerminationTimer) clearTimeout(pendingTerminationTimer);
-		pendingTerminationTimer = undefined;
+	const scheduleTermination = () => {
+		if (terminationScheduled) return;
+		terminationScheduled = true;
+		const timeoutSignal = AbortSignal.timeout(2000);
+		timeoutSignal.addEventListener(
+			"abort",
+			() => {
+				if (resolved) return;
+				try {
+					worker.terminate();
+				} catch {
+					// Ignore termination errors
+				}
+				if (finalize && !resolved) {
+					finalize({
+						type: "done",
+						exitCode: 1,
+						durationMs: Date.now() - startTime,
+						error: abortReason === "signal" ? "Aborted" : "Worker terminated after tool completion",
+						aborted: abortReason === "signal",
+					});
+				}
+			},
+			{ once: true, signal: listenerSignal },
+		);
 	};
 
 	const requestAbort = (reason: AbortReason) => {
@@ -269,33 +295,35 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		if (resolved) return;
 		abortSent = true;
 		abortReason = reason;
-		if (pendingTerminationTimer) clearTimeout(pendingTerminationTimer);
-		pendingTerminationTimer = undefined;
 		const abortMessage: SubagentWorkerRequest = { type: "abort" };
 		try {
 			worker.postMessage(abortMessage);
 		} catch {
 			// Worker already terminated, nothing to do
 		}
-		if (abortTerminateTimer) clearTimeout(abortTerminateTimer);
-		abortTerminateTimer = setTimeout(() => {
-			if (!resolved) {
-				try {
-					worker.terminate();
-				} catch {
-					// Ignore termination errors
+		// Cancel pending termination if it exists
+		if (pendingTerminationController) {
+			pendingTerminationController.abort();
+			pendingTerminationController = null;
+		}
+		scheduleTermination();
+	};
+
+	const schedulePendingTermination = () => {
+		if (pendingTerminationController || abortSent || terminationScheduled || resolved) return;
+		const readyController = new AbortController();
+		pendingTerminationController = readyController;
+		const pendingSignal = AbortSignal.any([AbortSignal.timeout(2000), readyController.signal]);
+		pendingSignal.addEventListener(
+			"abort",
+			() => {
+				pendingTerminationController = null;
+				if (!resolved) {
+					requestAbort("terminate");
 				}
-				if (finalize && !resolved) {
-					finalize({
-						type: "done",
-						exitCode: 1,
-						durationMs: Date.now() - startTime,
-						error: reason === "signal" ? "Aborted" : "Worker terminated after tool completion",
-						aborted: reason === "signal",
-					});
-				}
-			}
-		}, 2000);
+			},
+			{ once: true, signal: listenerSignal },
+		);
 	};
 
 	// Handle abort signal
@@ -303,7 +331,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		if (!resolved) requestAbort("signal");
 	};
 	if (signal) {
-		signal.addEventListener("abort", onAbort, { once: true });
+		signal.addEventListener("abort", onAbort, { once: true, signal: listenerSignal });
 	}
 
 	const emitProgress = () => {
@@ -406,14 +434,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						})
 					) {
 						// Don't terminate immediately - wait for message_end to get token counts
-						pendingTermination = true;
-						// Safety timeout in case message_end never arrives
-						if (pendingTerminationTimer) clearTimeout(pendingTerminationTimer);
-						pendingTerminationTimer = setTimeout(() => {
-							if (!resolved) {
-								requestAbort("terminate");
-							}
-						}, 2000);
+						schedulePendingTermination();
 					}
 				}
 				break;
@@ -446,7 +467,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					if (messageContent && Array.isArray(messageContent)) {
 						for (const block of messageContent) {
 							if (block.type === "text" && block.text) {
-								output += block.text;
+								outputChunks.push(block.text);
 							}
 						}
 					}
@@ -455,33 +476,29 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				const messageUsage = getMessageUsage(event.message) || (event as AgentEvent & { usage?: unknown }).usage;
 				if (messageUsage && typeof messageUsage === "object") {
 					// Only count assistant messages (not tool results, etc.)
-					if (
-						role === "assistant" &&
-						event.message?.stopReason !== "aborted" &&
-						event.message?.stopReason !== "error"
-					) {
-						const usageRecord = messageUsage as Record<string, number | undefined>;
-						const costRecord = (messageUsage as { cost?: Record<string, number | undefined> }).cost;
+					if (role === "assistant") {
+						const usageRecord = messageUsage as Record<string, unknown>;
+						const costRecord = (messageUsage as { cost?: Record<string, unknown> }).cost;
 						hasUsage = true;
-						accumulatedUsage.input += usageRecord.input ?? 0;
-						accumulatedUsage.output += usageRecord.output ?? 0;
-						accumulatedUsage.cacheRead += usageRecord.cacheRead ?? 0;
-						accumulatedUsage.cacheWrite += usageRecord.cacheWrite ?? 0;
-						accumulatedUsage.totalTokens += usageRecord.totalTokens ?? 0;
+						accumulatedUsage.input += getNumberField(usageRecord, "input") ?? 0;
+						accumulatedUsage.output += getNumberField(usageRecord, "output") ?? 0;
+						accumulatedUsage.cacheRead += getNumberField(usageRecord, "cacheRead") ?? 0;
+						accumulatedUsage.cacheWrite += getNumberField(usageRecord, "cacheWrite") ?? 0;
+						accumulatedUsage.totalTokens += getNumberField(usageRecord, "totalTokens") ?? 0;
 						if (costRecord) {
-							accumulatedUsage.cost.input += costRecord.input ?? 0;
-							accumulatedUsage.cost.output += costRecord.output ?? 0;
-							accumulatedUsage.cost.cacheRead += costRecord.cacheRead ?? 0;
-							accumulatedUsage.cost.cacheWrite += costRecord.cacheWrite ?? 0;
-							accumulatedUsage.cost.total += costRecord.total ?? 0;
+							accumulatedUsage.cost.input += getNumberField(costRecord, "input") ?? 0;
+							accumulatedUsage.cost.output += getNumberField(costRecord, "output") ?? 0;
+							accumulatedUsage.cost.cacheRead += getNumberField(costRecord, "cacheRead") ?? 0;
+							accumulatedUsage.cost.cacheWrite += getNumberField(costRecord, "cacheWrite") ?? 0;
+							accumulatedUsage.cost.total += getNumberField(costRecord, "total") ?? 0;
 						}
 					}
 					// Accumulate tokens for progress display
 					progress.tokens += getUsageTokens(messageUsage);
 				}
 				// If pending termination, now we have tokens - terminate
-				if (pendingTermination && !resolved) {
-					requestAbort("terminate");
+				if (pendingTerminationController) {
+					pendingTerminationController.abort();
 				}
 				break;
 			}
@@ -495,7 +512,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						if (messageContent && Array.isArray(messageContent)) {
 							for (const block of messageContent) {
 								if (block.type === "text" && block.text) {
-									finalOutput += block.text;
+									finalOutputChunks.push(block.text);
 								}
 							}
 						}
@@ -530,11 +547,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 	const done = await new Promise<Extract<SubagentWorkerResponse, { type: "done" }>>((resolve) => {
 		const cleanup = () => {
-			worker.removeEventListener("message", onMessage);
-			worker.removeEventListener("error", onError);
-			worker.removeEventListener("close", onClose);
-			worker.removeEventListener("messageerror", onMessageError);
-			clearTimers();
+			pendingTerminationController = null;
+			listenerController.abort();
 		};
 		finalize = (message) => {
 			if (resolved) return;
@@ -594,10 +608,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				aborted: abortReason === "signal",
 			});
 		};
-		worker.addEventListener("message", onMessage);
-		worker.addEventListener("error", onError);
-		worker.addEventListener("close", onClose);
-		worker.addEventListener("messageerror", onMessageError);
+		worker.addEventListener("message", onMessage, { signal: listenerSignal });
+		worker.addEventListener("error", onError, { signal: listenerSignal });
+		worker.addEventListener("close", onClose, { signal: listenerSignal });
+		worker.addEventListener("messageerror", onMessageError, { signal: listenerSignal });
 		try {
 			worker.postMessage(startMessage);
 		} catch (err) {
@@ -611,9 +625,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	});
 
 	// Cleanup
-	if (signal) {
-		signal.removeEventListener("abort", onAbort);
-	}
 	try {
 		worker.terminate();
 	} catch {
@@ -626,7 +637,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	}
 
 	// Use final output if available, otherwise accumulated output
-	let rawOutput = finalOutput || output;
+	let rawOutput = finalOutputChunks.length > 0 ? finalOutputChunks.join("") : outputChunks.join("");
 	let abortedViaComplete = false;
 	const completeItems = progress.extractedToolData?.complete as
 		| Array<{ data?: unknown; status?: "success" | "aborted"; error?: string }>
@@ -675,7 +686,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	let outputMeta: { lineCount: number; charCount: number } | undefined;
 	if (artifactPaths) {
 		try {
-			writeFileSync(artifactPaths.outputPath, rawOutput, "utf-8");
+			await Bun.write(artifactPaths.outputPath, rawOutput);
 			outputMeta = {
 				lineCount: rawOutput.split("\n").length,
 				charCount: rawOutput.length,

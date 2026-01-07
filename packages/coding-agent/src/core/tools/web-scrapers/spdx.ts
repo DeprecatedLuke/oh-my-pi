@@ -42,7 +42,11 @@ function collectCrossReferences(license: SpdxLicense): string[] {
 /**
  * Handle SPDX license URLs via SPDX JSON API
  */
-export const handleSpdx: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleSpdx: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "spdx.org" && parsed.hostname !== "www.spdx.org") return null;
@@ -58,6 +62,7 @@ export const handleSpdx: SpecialHandler = async (url: string, timeout: number): 
 		const result = await loadPage(apiUrl, {
 			timeout,
 			headers: { Accept: "application/json" },
+			signal,
 		});
 
 		if (!result.ok) return null;

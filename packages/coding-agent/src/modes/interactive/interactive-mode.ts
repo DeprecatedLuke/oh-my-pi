@@ -23,6 +23,7 @@ import {
 	TUI,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
+import { nanoid } from "nanoid";
 import { getAuthPath, getDebugLogPath } from "../../config";
 import type { AgentSession, AgentSessionEvent } from "../../core/agent-session";
 import type { ExtensionUIContext } from "../../core/extensions/index";
@@ -2068,7 +2069,7 @@ export class InteractiveMode {
 		}
 
 		const currentText = this.editor.getText();
-		const tmpFile = path.join(os.tmpdir(), `omp-editor-${Date.now()}.omp.md`);
+		const tmpFile = path.join(os.tmpdir(), `omp-editor-${nanoid()}.omp.md`);
 
 		try {
 			// Write current content to temp file

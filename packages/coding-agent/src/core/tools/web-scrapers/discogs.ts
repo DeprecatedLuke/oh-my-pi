@@ -248,7 +248,11 @@ function buildMasterMarkdown(master: DiscogsMaster): string {
 	return sections.join("\n");
 }
 
-export const handleDiscogs: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleDiscogs: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (!parsed.hostname.includes("discogs.com")) return null;
@@ -269,6 +273,7 @@ export const handleDiscogs: SpecialHandler = async (url: string, timeout: number
 
 		const result = await loadPage(apiUrl, {
 			timeout,
+			signal,
 			headers: {
 				Accept: "application/json",
 				"User-Agent": "CodingAgent/1.0 +https://github.com/can1357/oh-my-pi",

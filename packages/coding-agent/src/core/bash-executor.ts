@@ -10,6 +10,7 @@ import { createWriteStream, type WriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
+import { nanoid } from "nanoid";
 import stripAnsi from "strip-ansi";
 import { getShellConfig, killProcessTree, sanitizeBinaryOutput } from "../utils/shell";
 import { getOrCreateSnapshot, getSnapshotSourceCommand } from "../utils/shell-snapshot";
@@ -77,7 +78,7 @@ function createOutputSink(
 
 			// Spill to temp file if needed
 			if (totalBytes > spillThreshold && !fullOutputPath) {
-				fullOutputPath = join(tmpdir(), `omp-${crypto.randomUUID()}.buffer`);
+				fullOutputPath = join(tmpdir(), `omp-${nanoid()}.buffer`);
 				const ts = createWriteStream(fullOutputPath);
 				chunks.forEach((c) => {
 					ts.write(c);

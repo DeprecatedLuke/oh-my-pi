@@ -41,20 +41,29 @@ export const TASK_SUBAGENT_PROGRESS_CHANNEL = "task:subagent:progress";
 
 /** Single task item for parallel execution */
 export const taskItemSchema = Type.Object({
-	agent: Type.String({ description: "Agent name" }),
+	id: Type.String({
+		description: "Short task identifier for display (max 32 chars, CamelCase, e.g. 'SessionStore', 'WebFetchFix')",
+		maxLength: 32,
+		pattern: "^[A-Za-z][A-Za-z0-9]*$",
+	}),
 	task: Type.String({ description: "Task description for the agent" }),
-	description: Type.Optional(Type.String({ description: "Short description for UI display" })),
-	model: Type.Optional(Type.String({ description: "Model override for this task" })),
+	description: Type.String({ description: "Short description for UI display" }),
 });
 
 export type TaskItem = Static<typeof taskItemSchema>;
 
 /** Task tool parameters */
 export const taskSchema = Type.Object({
-	context: Type.Optional(Type.String({ description: "Shared context prepended to all task prompts" })),
-	output_schema: Type.Optional(
+	agent: Type.String({ description: "Agent type to use for all tasks" }),
+	context: Type.String({ description: "Shared context prepended to all task prompts" }),
+	model: Type.Optional(
+		Type.String({
+			description: "Model override for all tasks (fuzzy matching, e.g. 'sonnet', 'opus')",
+		}),
+	),
+	output: Type.Optional(
 		Type.Any({
-			description: "JSON schema for structured subagent output (used by the complete tool)",
+			description: "JTD schema for structured subagent output (used by the complete tool)",
 		}),
 	),
 	tasks: Type.Array(taskItemSchema, {

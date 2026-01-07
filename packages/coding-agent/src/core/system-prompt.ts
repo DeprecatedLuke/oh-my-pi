@@ -83,8 +83,48 @@ const toolDescriptions: Record<ToolName, string> = {
 	web_fetch: "Fetch and render URLs into clean text for LLM consumption",
 	web_search: "Search the web for information",
 	report_finding: "Report a finding during code review",
-	submit_review: "Submit the final code review with all findings",
 };
+
+function applyTemplate(template: string, values: Record<string, string>): string {
+	let output = template;
+	for (const [key, value] of Object.entries(values)) {
+		output = output.replaceAll(`{{${key}}}`, value);
+	}
+	return output;
+}
+
+function appendBlock(prompt: string, block: string | null | undefined, separator = "\n\n"): string {
+	if (!block) return prompt;
+	if (block.startsWith("\n")) {
+		return `${prompt}${block}`;
+	}
+	return `${prompt}${separator}${block}`;
+}
+
+function appendSection(prompt: string, title: string, content: string | null | undefined): string {
+	if (!content) return prompt;
+	return `${prompt}\n\n# ${title}\n\n${content}`;
+}
+
+function formatProjectContext(contextFiles: Array<{ path: string; content: string; depth?: number }>): string | null {
+	if (contextFiles.length === 0) return null;
+	const parts: string[] = ["The following project context files have been loaded:", ""];
+	for (const { path: filePath, content } of contextFiles) {
+		parts.push(`## ${filePath}`, "", content, "");
+	}
+	return parts.join("\n").trimEnd();
+}
+
+function formatToolDescriptions(tools: Map<string, { description: string; label: string }> | undefined): string | null {
+	if (!tools || tools.size === 0) return null;
+	return Array.from(tools.entries())
+		.map(([name, { description }]) => `- ${name}: ${description}`)
+		.join("\n");
+}
+
+function buildPromptFooter(dateTime: string, cwd: string): string {
+	return `Current date and time: ${dateTime}\nCurrent working directory: ${cwd}`;
+}
 
 /**
  * Generate anti-bash rules section if the agent has both bash and specialized tools.
@@ -306,8 +346,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		timeZoneName: "short",
 	});
 
-	const appendSection = resolvedAppendPrompt ? `\n\n${resolvedAppendPrompt}` : "";
-
 	// Resolve context files: use provided or discover
 	const contextFiles = providedContextFiles ?? loadProjectContextFiles({ cwd: resolvedCwd });
 
@@ -324,46 +362,22 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 			? `${systemPromptCustomization}\n\n${resolvedCustomPrompt}`
 			: resolvedCustomPrompt;
 
-		if (appendSection) {
-			prompt += appendSection;
-		}
+		prompt = appendBlock(prompt, resolvedAppendPrompt);
+		prompt = appendSection(prompt, "Project Context", formatProjectContext(contextFiles));
+		prompt = appendSection(prompt, "Tools", formatToolDescriptions(tools));
 
-		// Append project context files
-		if (contextFiles.length > 0) {
-			prompt += "\n\n# Project Context\n\n";
-			prompt += "The following project context files have been loaded:\n\n";
-			for (const { path: filePath, content } of contextFiles) {
-				prompt += `## ${filePath}\n\n${content}\n\n`;
-			}
-		}
-
-		// Append custom tool descriptions if provided
-		if (tools && tools.size > 0) {
-			prompt += "\n\n# Tools\n\n";
-			prompt += Array.from(tools.entries())
-				.map(([name, { description }]) => `- ${name}: ${description}`)
-				.join("\n");
-		}
-
-		// Append git context if in a git repo
 		const gitContext = loadGitContext(resolvedCwd);
-		if (gitContext) {
-			prompt += `\n\n# Git Status\n\n${gitContext}`;
-		}
+		prompt = appendSection(prompt, "Git Status", gitContext);
 
-		// Append skills section (only if read tool is available)
 		if (tools?.has("read") && skills.length > 0) {
-			prompt += formatSkillsForPrompt(skills);
+			prompt = appendBlock(prompt, formatSkillsForPrompt(skills));
 		}
 
-		// Append rules section (always enabled when rules exist)
 		if (rulebookRules && rulebookRules.length > 0) {
-			prompt += formatRulesForPrompt(rulebookRules);
+			prompt = appendBlock(prompt, formatRulesForPrompt(rulebookRules));
 		}
 
-		// Add date/time and working directory last
-		prompt += `\nCurrent date and time: ${dateTime}`;
-		prompt += `\nCurrent working directory: ${resolvedCwd}`;
+		prompt = appendBlock(prompt, buildPromptFooter(dateTime, resolvedCwd), "\n");
 
 		return prompt;
 	}
@@ -428,46 +442,30 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 
 	// Build the prompt with anti-bash rules prominently placed
 	const antiBashBlock = antiBashSection ? `\n${antiBashSection}\n` : "";
-	let prompt = systemPromptTemplate
-		.replaceAll("{{toolsList}}", toolsList)
-		.replaceAll("{{antiBashSection}}", antiBashBlock)
-		.replaceAll("{{guidelines}}", guidelines)
-		.replaceAll("{{readmePath}}", readmePath)
-		.replaceAll("{{docsPath}}", docsPath)
-		.replaceAll("{{examplesPath}}", examplesPath);
+	let prompt = applyTemplate(systemPromptTemplate, {
+		toolsList,
+		antiBashSection: antiBashBlock,
+		guidelines,
+		readmePath,
+		docsPath,
+		examplesPath,
+	});
 
-	if (appendSection) {
-		prompt += appendSection;
-	}
+	prompt = appendBlock(prompt, resolvedAppendPrompt);
+	prompt = appendSection(prompt, "Project Context", formatProjectContext(contextFiles));
 
-	// Append project context files
-	if (contextFiles.length > 0) {
-		prompt += "\n\n# Project Context\n\n";
-		prompt += "The following project context files have been loaded:\n\n";
-		for (const { path: filePath, content } of contextFiles) {
-			prompt += `## ${filePath}\n\n${content}\n\n`;
-		}
-	}
-
-	// Append git context if in a git repo
 	const gitContext = loadGitContext(resolvedCwd);
-	if (gitContext) {
-		prompt += `\n\n# Git Status\n\n${gitContext}`;
-	}
+	prompt = appendSection(prompt, "Git Status", gitContext);
 
-	// Append skills section (only if read tool is available)
 	if (hasRead && skills.length > 0) {
-		prompt += formatSkillsForPrompt(skills);
+		prompt = appendBlock(prompt, formatSkillsForPrompt(skills));
 	}
 
-	// Append rules section (always enabled when rules exist)
 	if (rulebookRules && rulebookRules.length > 0) {
-		prompt += formatRulesForPrompt(rulebookRules);
+		prompt = appendBlock(prompt, formatRulesForPrompt(rulebookRules));
 	}
 
-	// Add date/time and working directory last
-	prompt += `\nCurrent date and time: ${dateTime}`;
-	prompt += `\nCurrent working directory: ${resolvedCwd}`;
+	prompt = appendBlock(prompt, buildPromptFooter(dateTime, resolvedCwd), "\n");
 
 	// Prepend SYSTEM.md customization if present
 	if (systemPromptCustomization) {

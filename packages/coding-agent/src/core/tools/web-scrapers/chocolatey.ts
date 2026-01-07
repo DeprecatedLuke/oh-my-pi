@@ -28,7 +28,11 @@ interface NuGetODataResponse {
 /**
  * Handle Chocolatey package URLs via NuGet v2 OData API
  */
-export const handleChocolatey: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handleChocolatey: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (!parsed.hostname.includes("chocolatey.org")) return null;
@@ -53,6 +57,7 @@ export const handleChocolatey: SpecialHandler = async (url: string, timeout: num
 
 		const result = await loadPage(apiUrl, {
 			timeout,
+			signal,
 			headers: {
 				Accept: "application/json",
 			},

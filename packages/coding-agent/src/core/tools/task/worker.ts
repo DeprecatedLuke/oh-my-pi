@@ -19,6 +19,7 @@ import type { AgentSessionEvent } from "../../agent-session";
 import { parseModelPattern, parseModelString } from "../../model-resolver";
 import { createAgentSession, discoverAuthStorage, discoverModels } from "../../sdk";
 import { SessionManager } from "../../session-manager";
+import { untilAborted } from "../../utils";
 import type { SubagentWorkerRequest, SubagentWorkerResponse, SubagentWorkerStartPayload } from "./worker-protocol";
 
 type PostMessageFn = (message: SubagentWorkerResponse) => void;
@@ -53,11 +54,33 @@ const isAgentEvent = (event: AgentSessionEvent): event is AgentEvent => {
 	return agentEventTypes.has(event.type as AgentEvent["type"]);
 };
 
-let running = false;
-let abortRequested = false;
-let doneSent = false;
-let activeSession: { abort: () => Promise<void>; dispose: () => Promise<void> } | null = null;
-let unsubscribe: (() => void) | null = null;
+interface RunState {
+	abortController: AbortController;
+	startTime: number;
+	session: { abort: () => Promise<void>; dispose: () => Promise<void> } | null;
+	unsubscribe: (() => void) | null;
+	sendDoneOnce: (message: Extract<SubagentWorkerResponse, { type: "done" }>) => void;
+}
+
+const createSendDoneOnce = (): RunState["sendDoneOnce"] => {
+	let sent = false;
+	return (message) => {
+		if (sent) return;
+		sent = true;
+		postMessageSafe(message);
+	};
+};
+
+const createRunState = (): RunState => ({
+	abortController: new AbortController(),
+	startTime: Date.now(),
+	session: null,
+	unsubscribe: null,
+	sendDoneOnce: createSendDoneOnce(),
+});
+
+let activeRun: RunState | null = null;
+let pendingAbort = false;
 
 /**
  * Resolve model string to Model object with optional thinking level.
@@ -98,26 +121,35 @@ function resolveModelOverride(
  * - OMP_BLOCKED_AGENT: payload.blockedAgent (prevents same-agent recursion)
  * - OMP_SPAWNS: payload.spawnsEnv (controls nested spawn permissions)
  */
-async function runTask(payload: SubagentWorkerStartPayload): Promise<void> {
-	const startTime = Date.now();
+async function runTask(runState: RunState, payload: SubagentWorkerStartPayload): Promise<void> {
+	const { signal } = runState.abortController;
+	const startTime = runState.startTime;
 	let exitCode = 0;
 	let error: string | undefined;
 	let aborted = false;
+	const sessionAbortController = new AbortController();
+
+	// Helper to check abort status - throws if aborted to exit early
+	const checkAbort = (): void => {
+		if (signal.aborted) {
+			aborted = true;
+			exitCode = 1;
+			throw new Error("Aborted");
+		}
+	};
 
 	try {
 		// Check for pre-start abort
-		if (abortRequested) {
-			aborted = true;
-			exitCode = 1;
-			return;
-		}
+		checkAbort();
 
 		// Set working directory (CLI does this implicitly)
 		process.chdir(payload.cwd);
 
 		// Discover auth and models (equivalent to CLI's discoverAuthStorage/discoverModels)
 		const authStorage = await discoverAuthStorage();
+		checkAbort();
 		const modelRegistry = await discoverModels(authStorage);
+		checkAbort();
 
 		// Resolve model override (equivalent to CLI's parseModelPattern with --model)
 		const { model, thinkingLevel } = resolveModelOverride(payload.model, modelRegistry);
@@ -126,6 +158,7 @@ async function runTask(payload: SubagentWorkerStartPayload): Promise<void> {
 		const sessionManager = payload.sessionFile
 			? await SessionManager.open(payload.sessionFile)
 			: SessionManager.inMemory(payload.cwd);
+		checkAbort();
 
 		// Create agent session (equivalent to CLI's createAgentSession)
 		// Note: hasUI: false disables interactive features
@@ -149,18 +182,16 @@ async function runTask(payload: SubagentWorkerStartPayload): Promise<void> {
 			spawns: payload.spawnsEnv,
 		});
 
-		activeSession = session;
+		runState.session = session;
+		checkAbort();
 
-		if (abortRequested) {
-			aborted = true;
-			exitCode = 1;
-			try {
-				await session.abort();
-			} catch {
-				// Ignore abort errors
-			}
-			return;
-		}
+		signal.addEventListener(
+			"abort",
+			() => {
+				void session.abort();
+			},
+			{ once: true, signal: sessionAbortController.signal },
+		);
 
 		// Initialize extensions (equivalent to CLI's extension initialization)
 		// Note: Does not support --extension CLI flag or extension CLI flags
@@ -191,7 +222,7 @@ async function runTask(payload: SubagentWorkerStartPayload): Promise<void> {
 		let completeCalled = false;
 
 		// Subscribe to events and forward to parent (equivalent to --mode json output)
-		unsubscribe = session.subscribe((event: AgentSessionEvent) => {
+		runState.unsubscribe = session.subscribe((event: AgentSessionEvent) => {
 			if (isAgentEvent(event)) {
 				postMessageSafe({ type: "event", event });
 				// Track when complete tool is called
@@ -206,7 +237,7 @@ async function runTask(payload: SubagentWorkerStartPayload): Promise<void> {
 
 		// Retry loop if complete was not called
 		let retryCount = 0;
-		while (!completeCalled && retryCount < MAX_COMPLETE_RETRIES && !abortRequested) {
+		while (!completeCalled && retryCount < MAX_COMPLETE_RETRIES && !signal.aborted) {
 			retryCount++;
 			const reminder = `<system-reminder>
 CRITICAL: You stopped without calling the complete tool. This is reminder ${retryCount} of ${MAX_COMPLETE_RETRIES}.
@@ -231,57 +262,92 @@ Call complete now.`;
 		}
 	} catch (err) {
 		exitCode = 1;
-		error = err instanceof Error ? err.stack || err.message : String(err);
+		// Don't record abort as error - it's handled via the aborted flag
+		if (!signal.aborted) {
+			error = err instanceof Error ? err.stack || err.message : String(err);
+		}
 	} finally {
 		// Handle abort requested during execution
-		if (abortRequested) {
+		if (signal.aborted) {
 			aborted = true;
 			if (exitCode === 0) exitCode = 1;
 		}
 
-		if (unsubscribe) {
+		sessionAbortController.abort();
+
+		if (runState.unsubscribe) {
 			try {
-				unsubscribe();
+				runState.unsubscribe();
 			} catch {
 				// Ignore unsubscribe errors
 			}
-			unsubscribe = null;
+			runState.unsubscribe = null;
 		}
 
 		// Cleanup session with timeout to prevent hanging
-		if (activeSession) {
-			const session = activeSession;
-			activeSession = null;
+		if (runState.session) {
+			const session = runState.session;
+			runState.session = null;
 			try {
-				await Promise.race([session.dispose(), new Promise<void>((resolve) => setTimeout(resolve, 5000))]);
+				await untilAborted(AbortSignal.timeout(5000), () => session.dispose());
 			} catch {
 				// Ignore cleanup errors
 			}
 		}
 
-		running = false;
+		if (activeRun === runState) {
+			activeRun = null;
+		}
 
 		// Send completion message to parent (only once)
-		if (!doneSent) {
-			doneSent = true;
-			postMessageSafe({
-				type: "done",
-				exitCode,
-				durationMs: Date.now() - startTime,
-				error,
-				aborted,
-			});
-		}
+		runState.sendDoneOnce({
+			type: "done",
+			exitCode,
+			durationMs: Date.now() - startTime,
+			error,
+			aborted,
+		});
 	}
 }
 
 /** Handle abort request from parent */
 function handleAbort(): void {
-	abortRequested = true;
-	if (activeSession) {
-		void activeSession.abort();
+	const runState = activeRun;
+	if (!runState) {
+		pendingAbort = true;
+		return;
+	}
+	runState.abortController.abort();
+	if (runState.session) {
+		void runState.session.abort();
 	}
 }
+
+const reportFatal = (message: string): void => {
+	const runState = activeRun;
+	if (runState) {
+		runState.abortController.abort();
+		if (runState.session) {
+			void runState.session.abort();
+		}
+		runState.sendDoneOnce({
+			type: "done",
+			exitCode: 1,
+			durationMs: Date.now() - runState.startTime,
+			error: message,
+			aborted: false,
+		});
+		return;
+	}
+
+	postMessageSafe({
+		type: "done",
+		exitCode: 1,
+		durationMs: 0,
+		error: message,
+		aborted: false,
+	});
+};
 
 // Global error handlers to ensure we always send a done message
 // Using self instead of globalThis for proper worker scope typing
@@ -292,53 +358,17 @@ declare const self: {
 };
 
 self.addEventListener("error", (event) => {
-	if (!running || doneSent) return;
-	doneSent = true;
-	abortRequested = true;
-	if (activeSession) {
-		void activeSession.abort();
-	}
-	postMessageSafe({
-		type: "done",
-		exitCode: 1,
-		durationMs: 0,
-		error: `Uncaught error: ${event.message || "Unknown error"}`,
-		aborted: false,
-	});
+	reportFatal(`Uncaught error: ${event.message || "Unknown error"}`);
 });
 
 self.addEventListener("unhandledrejection", (event) => {
-	if (!running || doneSent) return;
-	doneSent = true;
-	abortRequested = true;
-	if (activeSession) {
-		void activeSession.abort();
-	}
 	const reason = event.reason;
 	const message = reason instanceof Error ? reason.stack || reason.message : String(reason);
-	postMessageSafe({
-		type: "done",
-		exitCode: 1,
-		durationMs: 0,
-		error: `Unhandled rejection: ${message}`,
-		aborted: false,
-	});
+	reportFatal(`Unhandled rejection: ${message}`);
 });
 
 self.addEventListener("messageerror", () => {
-	if (doneSent) return;
-	doneSent = true;
-	abortRequested = true;
-	if (activeSession) {
-		void activeSession.abort();
-	}
-	postMessageSafe({
-		type: "done",
-		exitCode: 1,
-		durationMs: 0,
-		error: "Failed to deserialize parent message",
-		aborted: false,
-	});
+	reportFatal("Failed to deserialize parent message");
 });
 
 // Message handler - receives start/abort commands from parent
@@ -353,8 +383,13 @@ globalThis.addEventListener("message", (event: WorkerMessageEvent<SubagentWorker
 
 	if (message.type === "start") {
 		// Only allow one task per worker
-		if (running) return;
-		running = true;
-		void runTask(message.payload);
+		if (activeRun) return;
+		const runState = createRunState();
+		if (pendingAbort) {
+			pendingAbort = false;
+			runState.abortController.abort();
+		}
+		activeRun = runState;
+		void runTask(runState, message.payload);
 	}
 });

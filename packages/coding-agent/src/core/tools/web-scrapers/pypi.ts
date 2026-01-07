@@ -4,7 +4,11 @@ import { finalizeOutput, formatCount, loadPage } from "./types";
 /**
  * Handle PyPI URLs via JSON API
  */
-export const handlePyPI: SpecialHandler = async (url: string, timeout: number): Promise<RenderResult | null> => {
+export const handlePyPI: SpecialHandler = async (
+	url: string,
+	timeout: number,
+	signal?: AbortSignal,
+): Promise<RenderResult | null> => {
 	try {
 		const parsed = new URL(url);
 		if (parsed.hostname !== "pypi.org" && parsed.hostname !== "www.pypi.org") return null;
@@ -22,8 +26,8 @@ export const handlePyPI: SpecialHandler = async (url: string, timeout: number): 
 
 		// Fetch package info and download stats in parallel
 		const [result, downloadsResult] = await Promise.all([
-			loadPage(apiUrl, { timeout }),
-			loadPage(downloadsUrl, { timeout: Math.min(timeout, 5) }),
+			loadPage(apiUrl, { timeout, signal }),
+			loadPage(downloadsUrl, { timeout: Math.min(timeout, 5), signal }),
 		]);
 
 		if (!result.ok) return null;
