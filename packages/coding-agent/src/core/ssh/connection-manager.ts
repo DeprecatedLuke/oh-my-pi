@@ -17,6 +17,7 @@ export type SSHHostOs = "windows" | "linux" | "macos" | "unknown";
 export type SSHHostShell = "cmd" | "powershell" | "bash" | "zsh" | "sh" | "unknown";
 
 export interface SSHHostInfo {
+	version: number;
 	os: SSHHostOs;
 	shell: SSHHostShell;
 	compatShell?: "bash" | "sh";
@@ -26,6 +27,7 @@ export interface SSHHostInfo {
 const CONTROL_DIR = join(homedir(), CONFIG_DIR_NAME, "ssh-control");
 const CONTROL_PATH = join(CONTROL_DIR, "%h.sock");
 const HOST_INFO_DIR = join(homedir(), CONFIG_DIR_NAME, "remote-host");
+const HOST_INFO_VERSION = 2;
 
 const activeHosts = new Map<string, SSHConnectionTarget>();
 const pendingConnections = new Map<string, Promise<void>>();
@@ -190,7 +192,7 @@ function applyCompatOverride(host: SSHConnectionTarget, info: SSHHostInfo): SSHH
 			shell: info.shell,
 		});
 	}
-	return { ...info, compatShell, compatEnabled };
+	return { ...info, version: info.version ?? 0, compatShell, compatEnabled };
 }
 
 function parseHostInfo(value: unknown): SSHHostInfo | null {
@@ -200,7 +202,9 @@ function parseHostInfo(value: unknown): SSHHostInfo | null {
 	const shell = parseShell(record.shell) ?? "unknown";
 	const compatShell = parseCompatShell(record.compatShell);
 	const compatEnabled = typeof record.compatEnabled === "boolean" ? record.compatEnabled : false;
+	const version = typeof record.version === "number" ? record.version : 0;
 	return {
+		version,
 		os,
 		shell,
 		compatShell,
@@ -209,6 +213,7 @@ function parseHostInfo(value: unknown): SSHHostInfo | null {
 }
 
 function shouldRefreshHostInfo(host: SSHConnectionTarget, info: SSHHostInfo): boolean {
+	if (info.version !== HOST_INFO_VERSION) return true;
 	if (info.os === "unknown") return true;
 	if (info.os !== "windows" && info.compatEnabled) return true;
 	if (info.os === "windows" && info.compatEnabled && !info.compatShell) return true;
@@ -251,7 +256,9 @@ async function persistHostInfo(host: SSHConnectionTarget, info: SSHHostInfo): Pr
 	try {
 		ensureHostInfoDir();
 		const path = getHostInfoPath(host.name);
-		await Bun.write(path, JSON.stringify(info, null, 2), { createPath: true });
+		const payload = { ...info, version: HOST_INFO_VERSION };
+		hostInfoCache.set(host.name, payload);
+		await Bun.write(path, JSON.stringify(payload, null, 2), { createPath: true });
 	} catch (err) {
 		logger.warn("Failed to persist SSH host info", { host: host.name, error: String(err) });
 	}
@@ -263,6 +270,7 @@ async function probeHostInfo(host: SSHConnectionTarget): Promise<SSHHostInfo> {
 	if (result.exitCode !== 0 && !result.stdout) {
 		logger.debug("SSH host probe failed", { host: host.name, error: result.stderr });
 		const fallback: SSHHostInfo = {
+			version: HOST_INFO_VERSION,
 			os: "unknown",
 			shell: "unknown",
 			compatShell: undefined,
@@ -319,10 +327,26 @@ async function probeHostInfo(host: SSHConnectionTarget): Promise<SSHHostInfo> {
 	}
 
 	const hasBash = !unexpandedPosixVars && (Boolean(bashVersion) || shell === "bash");
-	const compatShell = os === "windows" && hasBash ? "bash" : os === "windows" && shell === "sh" ? "sh" : undefined;
+	let compatShell: SSHHostInfo["compatShell"];
+	if (os === "windows" && host.compat !== false) {
+		const bashProbe = runSshCaptureSync(buildRemoteCommand(host, 'bash -lc "echo OMP_BASH_OK"'));
+		if (bashProbe.exitCode === 0 && bashProbe.stdout.includes("OMP_BASH_OK")) {
+			compatShell = "bash";
+		} else {
+			const shProbe = runSshCaptureSync(buildRemoteCommand(host, 'sh -lc "echo OMP_SH_OK"'));
+			if (shProbe.exitCode === 0 && shProbe.stdout.includes("OMP_SH_OK")) {
+				compatShell = "sh";
+			}
+		}
+	} else if (os === "windows" && hasBash) {
+		compatShell = "bash";
+	} else if (os === "windows" && shell === "sh") {
+		compatShell = "sh";
+	}
 	const compatEnabled = host.compat === false ? false : os === "windows" && compatShell !== undefined;
 
 	const info: SSHHostInfo = applyCompatOverride(host, {
+		version: HOST_INFO_VERSION,
 		os,
 		shell,
 		compatShell,

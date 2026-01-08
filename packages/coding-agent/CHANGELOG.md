@@ -1,9 +1,9 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added disk usage information to automatic environment detection in system prompt
 - Added `compat` option for SSH hosts to wrap commands in a POSIX shell on Windows systems
 - Added automatic working directory handling for PowerShell and cmd.exe on Windows SSH hosts
 - Added automatic environment detection to system prompt including OS, distro, kernel, CPU, GPU, shell, terminal, desktop environment, and window manager information
@@ -12,6 +12,8 @@
 
 ### Changed
 
+- Changed SSH host info cache to use versioned format for automatic refresh on schema changes
+- Changed SSH compat shell detection to actively probe for bash/sh availability on Windows hosts
 - Changed SSH tool description to show detected shell type and available commands per host
 
 ## [3.33.0] - 2026-01-08

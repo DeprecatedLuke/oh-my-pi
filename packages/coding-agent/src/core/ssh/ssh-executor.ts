@@ -107,12 +107,7 @@ function quoteForCompatShell(command: string): string {
 	return `'${escaped}'`;
 }
 
-async function buildCompatCommand(host: SSHConnectionTarget, command: string): Promise<string> {
-	const hostInfo = await ensureHostInfo(host);
-	const shell = hostInfo.compatShell ?? "bash";
-	if (!hostInfo.compatShell) {
-		logger.warn("SSH compat enabled without detected compat shell", { host: host.name });
-	}
+function buildCompatCommand(shell: "bash" | "sh", command: string): string {
 	return `${shell} -c ${quoteForCompatShell(command)}`;
 }
 
@@ -132,7 +127,15 @@ export async function executeSSH(
 
 	using signal = new ScopeSignal(options);
 
-	const resolvedCommand = options?.compatEnabled ? await buildCompatCommand(host, command) : command;
+	let resolvedCommand = command;
+	if (options?.compatEnabled) {
+		const info = await ensureHostInfo(host);
+		if (info.compatShell) {
+			resolvedCommand = buildCompatCommand(info.compatShell, command);
+		} else {
+			logger.warn("SSH compat enabled without detected compat shell", { host: host.name });
+		}
+	}
 	const child: Subprocess = Bun.spawn(["ssh", ...buildRemoteCommand(host, resolvedCommand)], {
 		stdin: "ignore",
 		stdout: "pipe",

@@ -27,31 +27,37 @@ export interface SSHToolDetails {
 	fullOutputPath?: string;
 }
 
-function formatHostShell(host: SSHHost): string {
+function formatHostEntry(host: SSHHost): string {
 	const info = getHostInfoForHost(host);
+
+	let shell: string;
 	if (!info) {
-		return "connecting...";
+		shell = "detecting...";
+	} else if (info.os === "windows") {
+		if (info.compatEnabled) {
+			const compatShell = info.compatShell || "bash";
+			shell = `windows/${compatShell}`;
+		} else if (info.shell === "powershell") {
+			shell = "windows/powershell";
+		} else {
+			shell = "windows/cmd";
+		}
+	} else if (info.os === "linux") {
+		shell = `linux/${info.shell}`;
+	} else if (info.os === "macos") {
+		shell = `macos/${info.shell}`;
+	} else {
+		shell = `unknown/${info.shell}`;
 	}
-	if (info.compatEnabled || info.os !== "windows") {
-		return "bash: ls, cat, grep, find, ps, uname";
-	}
-	if (info.shell === "powershell") {
-		return "powershell: Get-ChildItem, Get-Content, Select-String";
-	}
-	return "cmd: dir, type, findstr, where, systeminfo";
+
+	return `- ${host.name} (${host.host}) | ${shell}`;
 }
 
 function formatDescription(hosts: SSHHost[]): string {
 	if (hosts.length === 0) {
 		return sshDescriptionBase;
 	}
-	const hostList = hosts
-		.map((host) => {
-			const shell = formatHostShell(host);
-			const label = host.description ? `${host.name}: ${host.description}` : host.name;
-			return `- ${label} [${shell}]`;
-		})
-		.join("\n");
+	const hostList = hosts.map(formatHostEntry).join("\n");
 	return `${sshDescriptionBase}\n\nAvailable hosts:\n${hostList}`;
 }
 

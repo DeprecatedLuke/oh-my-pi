@@ -382,6 +382,52 @@ function getWindowManager(): string {
 	return "unknown";
 }
 
+function formatBytes(bytes: number): string {
+	if (bytes < 1024) return `${bytes}B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+	if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+	if (bytes < 1024 * 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
+	return `${(bytes / (1024 * 1024 * 1024 * 1024)).toFixed(1)}TB`;
+}
+
+function getDiskInfo(): string | null {
+	switch (process.platform) {
+		case "win32": {
+			const output = execIfExists("wmic", ["logicaldisk", "get", "Caption,Size,FreeSpace", "/format:csv"]);
+			if (!output) return null;
+			const lines = output.split("\n").filter((l) => l.trim() && !l.startsWith("Node"));
+			const disks: string[] = [];
+			for (const line of lines) {
+				const parts = line.split(",");
+				if (parts.length < 4) continue;
+				const caption = parts[1]?.trim();
+				const freeSpace = Number.parseInt(parts[2]?.trim() ?? "", 10);
+				const size = Number.parseInt(parts[3]?.trim() ?? "", 10);
+				if (!caption || Number.isNaN(size) || size === 0) continue;
+				const used = size - (Number.isNaN(freeSpace) ? 0 : freeSpace);
+				const pct = Math.round((used / size) * 100);
+				disks.push(`${caption} ${formatBytes(used)}/${formatBytes(size)} (${pct}%)`);
+			}
+			return disks.length > 0 ? disks.join(", ") : null;
+		}
+		case "linux":
+		case "darwin": {
+			const output = execIfExists("df", ["-h", "/"]);
+			if (!output) return null;
+			const lines = output.split("\n");
+			if (lines.length < 2) return null;
+			const parts = lines[1].split(/\s+/);
+			if (parts.length < 5) return null;
+			const size = parts[1];
+			const used = parts[2];
+			const pct = parts[4];
+			return `/ ${used}/${size} (${pct})`;
+		}
+		default:
+			return null;
+	}
+}
+
 function formatEnvironmentInfo(): string {
 	const items: Array<[string, string]> = [
 		["OS", getOsName()],
@@ -390,6 +436,7 @@ function formatEnvironmentInfo(): string {
 		["Arch", getCpuArch()],
 		["CPU", getCpuModel() ?? "unknown"],
 		["GPU", getGpuModel() ?? "unknown"],
+		["Disk", getDiskInfo() ?? "unknown"],
 		["Shell", getShellName()],
 		["Terminal", getTerminalName()],
 		["DE", getDesktopEnvironment()],
@@ -476,7 +523,15 @@ function generateAntiBashRules(tools: ToolName[]): string | null {
 	// Add SSH remote filesystem guidance if available
 	const hasSSH = tools.includes("ssh");
 	if (hasSSH) {
-		lines.push("\n### SSH Filesystems");
+		lines.push("\n### SSH Command Execution");
+		lines.push("**Critical**: Each SSH host runs a specific shell. **You MUST match commands to the host's shell type**.");
+		lines.push("Check the host list in the ssh tool description. Shell types:");
+		lines.push("- linux/bash, linux/zsh, macos/bash, macos/zsh: ls, cat, grep, find, ps, df, uname");
+		lines.push("- windows/bash, windows/sh: ls, cat, grep, find (Windows with WSL/Cygwin — Unix commands)");
+		lines.push("- windows/cmd: dir, type, findstr, tasklist, systeminfo");
+		lines.push("- windows/powershell: Get-ChildItem, Get-Content, Select-String, Get-Process");
+		lines.push("");
+		lines.push("### SSH Filesystems");
 		lines.push("Mounted at `~/.omp/remote/<hostname>/` — use read/edit/write tools directly.");
 		lines.push("Windows paths need colon: `~/.omp/remote/host/C:/Users/...` not `C/Users/...`\n");
 	}

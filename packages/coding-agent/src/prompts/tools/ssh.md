@@ -1,10 +1,74 @@
 Execute commands on remote SSH hosts.
 
+## Critical: Match Commands to Host Shell
+
+Each host runs a specific shell. **You MUST use commands native to that shell.**
+
+### Command Reference
+
+**linux/bash, linux/zsh, macos/bash, macos/zsh** — Unix-like systems:
+- Files: `ls`, `cat`, `head`, `tail`, `grep`, `find`
+- System: `ps`, `top`, `df`, `uname`, `free` (Linux), `df`, `uname`, `top` (macOS)
+- Navigation: `cd`, `pwd`
+
+**windows/bash, windows/sh** — Windows with Unix compatibility layer (WSL, Cygwin, Git Bash):
+- Files: `ls`, `cat`, `head`, `tail`, `grep`, `find`
+- System: `ps`, `top`, `df`, `uname`
+- Navigation: `cd`, `pwd`
+- Note: These are Windows hosts but use Unix commands
+
+**windows/powershell** — Native Windows PowerShell:
+- Files: `Get-ChildItem`, `Get-Content`, `Select-String`
+- System: `Get-Process`, `Get-ComputerInfo`
+- Navigation: `Set-Location`, `Get-Location`
+
+**windows/cmd** — Native Windows Command Prompt:
+- Files: `dir`, `type`, `findstr`, `where`
+- System: `tasklist`, `systeminfo`
+- Navigation: `cd`, `echo %CD%`
+
+## Execution Pattern
+
+1. Check the host's shell type from "Available hosts" below
+2. Use ONLY commands for that shell type
+3. Construct your command using the reference above
+
+## Examples
+
+<example>
+Task: List files in /home/user on host "server1"
+Host: server1 (10.0.0.1) | linux/bash
+Command: `ls -la /home/user`
+</example>
+
+<example>
+Task: Show running processes on host "winbox"
+Host: winbox (192.168.1.5) | windows/cmd
+Command: `tasklist /v`
+</example>
+
+<example>
+Task: Check disk usage on host "wsl-dev"
+Host: wsl-dev (192.168.1.10) | windows/bash
+Command: `df -h`
+Note: Windows host with WSL — use Unix commands
+</example>
+
+<example>
+Task: Get system info on host "macbook"
+Host: macbook (10.0.0.20) | macos/zsh
+Command: `uname -a && sw_vers`
+</example>
+
 ## Parameters
-- host: Host name from Available hosts below
-- command: Command to execute
-- cwd: Working directory (optional)
-- timeout: Seconds (optional)
+
+- **host**: Host name from "Available hosts" below
+- **command**: Command to execute (see Command Reference above)
+- **cwd**: Working directory (optional)
+- **timeout**: Timeout in seconds (optional)
 
 ## Output
+
 Truncated at 50KB. Exit codes captured.
+
+**Before executing: verify host shell type below and use matching commands.**
