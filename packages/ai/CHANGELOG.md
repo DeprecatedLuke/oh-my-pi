@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [4.4.6] - 2026-01-11
 ### Fixed
 
 - Fixed tool parameter schema sanitization to only apply Google-specific transformations for Gemini models, preserving original schemas for other model types
