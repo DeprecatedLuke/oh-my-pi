@@ -19,6 +19,7 @@ import { grepToolRenderer } from "./grep";
 import { notebookToolRenderer } from "./notebook";
 import { pythonToolRenderer } from "./python";
 import { readToolRenderer } from "./read";
+import { runInteractiveTermToolRenderer } from "./run-interactive-term";
 import { sshToolRenderer } from "./ssh";
 import { todoWriteToolRenderer } from "./todo-write";
 import { writeToolRenderer } from "./write";
@@ -43,6 +44,7 @@ type ToolRenderer = {
 export const toolRenderers: Record<string, ToolRenderer> = {
 	ask: askToolRenderer as ToolRenderer,
 	bash: bashToolRenderer as ToolRenderer,
+	run_interactive_term: runInteractiveTermToolRenderer as ToolRenderer,
 	python: pythonToolRenderer as ToolRenderer,
 	calc: calculatorToolRenderer as ToolRenderer,
 	edit: editToolRenderer as ToolRenderer,

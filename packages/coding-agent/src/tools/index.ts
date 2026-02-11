@@ -28,6 +28,7 @@ import { wrapToolsWithMetaNotice } from "./output-meta";
 import { PythonTool } from "./python";
 import { ReadTool } from "./read";
 import { reportFindingTool } from "./review";
+import { RunInteractiveTermTool } from "./run-interactive-term";
 import { loadSshTool } from "./ssh";
 import { SubmitResultTool } from "./submit-result";
 import { TodoWriteTool } from "./todo-write";
@@ -79,6 +80,7 @@ export { NotebookTool, type NotebookToolDetails } from "./notebook";
 export { PythonTool, type PythonToolDetails, type PythonToolOptions } from "./python";
 export { ReadTool, type ReadToolDetails, type ReadToolInput } from "./read";
 export { reportFindingTool, type SubmitReviewDetails } from "./review";
+export { RunInteractiveTermTool, type RunInteractiveTermToolDetails } from "./run-interactive-term";
 export { loadSshTool, type SSHToolDetails, SshTool } from "./ssh";
 export { SubmitResultTool } from "./submit-result";
 export { type TodoItem, TodoWriteTool, type TodoWriteToolDetails } from "./todo-write";
@@ -164,6 +166,7 @@ type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
 export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	ask: AskTool.createIf,
 	bash: s => new BashTool(s),
+	run_interactive_term: RunInteractiveTermTool.createIf,
 	python: s => new PythonTool(s),
 	calc: s => new CalculatorTool(s),
 	ssh: loadSshTool,

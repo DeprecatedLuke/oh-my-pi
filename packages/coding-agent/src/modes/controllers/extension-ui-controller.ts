@@ -29,6 +29,14 @@ export class ExtensionUiController {
 		margin: 1,
 	} as const;
 
+	readonly #customOverlayOptions = {
+		anchor: "bottom-center",
+		width: "90%",
+		minWidth: 60,
+		maxHeight: "80%",
+		margin: 1,
+	} as const;
+
 	constructor(private ctx: InteractiveModeContext) {}
 
 	/**
@@ -45,7 +53,7 @@ export class ExtensionUiController {
 			setWorkingMessage: message => this.ctx.setWorkingMessage(message),
 			setWidget: (key, content) => this.setHookWidget(key, content),
 			setTitle: title => setTerminalTitle(title),
-			custom: (factory, _options) => this.showHookCustom(factory),
+			custom: (factory, options) => this.showHookCustom(factory, options),
 			setEditorText: text => this.ctx.editor.setText(text),
 			pasteToEditor: text => {
 				this.ctx.editor.handleInput(`\x1b[200~${text}\x1b[201~`);
@@ -696,30 +704,60 @@ export class ExtensionUiController {
 			keybindings: KeybindingsManager,
 			done: (result: T) => void,
 		) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>,
+		options?: { overlay?: boolean },
 	): Promise<T> {
 		const savedText = this.ctx.editor.getText();
 		const keybindings = KeybindingsManager.inMemory();
+		const useOverlay = options?.overlay === true;
 
-		const { promise, resolve } = Promise.withResolvers<T>();
-		let component: Component & { dispose?(): void };
+		const { promise, resolve, reject } = Promise.withResolvers<T>();
+		let component: (Component & { dispose?(): void }) | undefined;
+		let overlay: OverlayHandle | undefined;
+		let closed = false;
 
-		const close = (result: T) => {
-			component.dispose?.();
-			this.ctx.editorContainer.clear();
-			this.ctx.editorContainer.addChild(this.ctx.editor);
-			this.ctx.editor.setText(savedText);
+		const cleanup = () => {
+			if (overlay) {
+				overlay.hide();
+				overlay = undefined;
+			}
+			component?.dispose?.();
+			if (!useOverlay) {
+				this.ctx.editorContainer.clear();
+				this.ctx.editorContainer.addChild(this.ctx.editor);
+				this.ctx.editor.setText(savedText);
+			}
 			this.ctx.ui.setFocus(this.ctx.editor);
 			this.ctx.ui.requestRender();
+		};
+		const close = (result: T) => {
+			if (closed) return;
+			closed = true;
+			cleanup();
 			resolve(result);
 		};
 
-		Promise.try(() => factory(this.ctx.ui, theme, keybindings, close)).then(c => {
-			component = c;
-			this.ctx.editorContainer.clear();
-			this.ctx.editorContainer.addChild(component);
-			this.ctx.ui.setFocus(component);
-			this.ctx.ui.requestRender();
-		});
+		Promise.try(() => factory(this.ctx.ui, theme, keybindings, close))
+			.then(c => {
+				if (closed) {
+					c.dispose?.();
+					return;
+				}
+				component = c;
+				if (useOverlay) {
+					overlay = this.ctx.ui.showOverlay(component, this.#customOverlayOptions);
+				} else {
+					this.ctx.editorContainer.clear();
+					this.ctx.editorContainer.addChild(component);
+					this.ctx.ui.setFocus(component);
+				}
+				this.ctx.ui.requestRender();
+			})
+			.catch(error => {
+				if (closed) return;
+				closed = true;
+				cleanup();
+				reject(error instanceof Error ? error : new Error(String(error)));
+			});
 		return promise;
 	}
 

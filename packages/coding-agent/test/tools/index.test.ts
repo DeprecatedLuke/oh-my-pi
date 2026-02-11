@@ -44,6 +44,7 @@ describe("createTools", () => {
 		expect(names).toContain("fetch");
 		expect(names).toContain("web_search");
 		expect(names).toContain("exit_plan_mode");
+		expect(names).not.toContain("run_interactive_term");
 	});
 
 	it("includes bash and python when python mode is both", async () => {
@@ -122,12 +123,28 @@ describe("createTools", () => {
 		expect(names).not.toContain("ask");
 	});
 
+	it("excludes run_interactive_term when hasUI is false", async () => {
+		const session = createTestSession({ hasUI: false });
+		const tools = await createTools(session);
+		const names = tools.map(t => t.name);
+
+		expect(names).not.toContain("run_interactive_term");
+	});
+
 	it("includes ask tool when hasUI is true", async () => {
 		const session = createTestSession({ hasUI: true });
 		const tools = await createTools(session);
 		const names = tools.map(t => t.name);
 
 		expect(names).toContain("ask");
+	});
+
+	it("includes run_interactive_term when hasUI is true", async () => {
+		const session = createTestSession({ hasUI: true });
+		const tools = await createTools(session);
+		const names = tools.map(t => t.name);
+
+		expect(names).toContain("run_interactive_term");
 	});
 
 	it("HIDDEN_TOOLS contains review tools", () => {

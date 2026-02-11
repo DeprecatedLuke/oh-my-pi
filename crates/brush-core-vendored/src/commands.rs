@@ -431,6 +431,19 @@ pub(crate) fn execute_external_command(
         cmd.take_foreground();
     }
 
+    // Non-interactive shell: detach child from the controlling terminal so
+    // commands that open /dev/tty (sudo, ssh, su, passwd, etc.) get ENXIO
+    // and fail fast instead of silently blocking for user input.
+    #[cfg(unix)]
+    if !context.shell.options.interactive {
+        unsafe {
+            cmd.pre_exec(|| {
+                nix::unistd::setsid().map_err(std::io::Error::other)?;
+                Ok(())
+            });
+        }
+    }
+
     // When tracing is enabled, report.
     tracing::debug!(
         target: trace_categories::COMMANDS,
