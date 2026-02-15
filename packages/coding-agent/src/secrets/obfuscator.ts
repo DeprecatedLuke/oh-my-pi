@@ -10,6 +10,7 @@ export interface SecretEntry {
 	content: string;
 	mode?: "obfuscate" | "replace";
 	replacement?: string;
+	flags?: string;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -102,7 +103,7 @@ export class SecretObfuscator {
 			} else {
 				// regex type — compiled here, matches discovered during obfuscate()
 				try {
-					const regex = compileSecretRegex(entry.content);
+					const regex = compileSecretRegex(entry.content, entry.flags);
 					this.#regexEntries.push({ regex, mode, replacement: entry.replacement });
 				} catch {
 					// Invalid regex — skip silently (validation happens at load time)
@@ -201,8 +202,16 @@ export class SecretObfuscator {
 /** Obfuscate all text content in LLM messages (for outbound interception). */
 export function obfuscateMessages(obfuscator: SecretObfuscator, messages: Message[]): Message[] {
 	return messages.map(msg => {
-		if (!Array.isArray(msg.content)) return msg;
+		// Handle string content (e.g., user messages)
+		if (typeof msg.content === "string") {
+			const obfuscated = obfuscator.obfuscate(msg.content);
+			if (obfuscated !== msg.content) {
+				return { ...msg, content: obfuscated } as typeof msg;
+			}
+			return msg;
+		}
 
+		if (!Array.isArray(msg.content)) return msg;
 		let changed = false;
 		const content = msg.content.map(block => {
 			if (block.type === "text") {
@@ -214,7 +223,6 @@ export function obfuscateMessages(obfuscator: SecretObfuscator, messages: Messag
 			}
 			return block;
 		});
-
 		return changed ? ({ ...msg, content } as typeof msg) : msg;
 	});
 }

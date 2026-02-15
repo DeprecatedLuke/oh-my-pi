@@ -61,6 +61,7 @@ async function loadSecretsFile(filePath: string): Promise<SecretEntry[]> {
 				content: entry.content,
 				mode: entry.mode ?? "obfuscate",
 				replacement: entry.replacement,
+				flags: entry.flags,
 			});
 		}
 		return entries;
@@ -93,9 +94,13 @@ function validateEntry(entry: unknown, filePath: string, index: number): entry i
 		logger.warn(`secrets.json[${index}]: replacement must be a string`, { path: filePath });
 		return false;
 	}
+	if (e.flags !== undefined && typeof e.flags !== "string") {
+		logger.warn(`secrets.json[${index}]: flags must be a string`, { path: filePath });
+		return false;
+	}
 	if (e.type === "regex") {
 		try {
-			compileSecretRegex(e.content as string);
+			compileSecretRegex(e.content as string, e.flags as string | undefined);
 		} catch (error) {
 			logger.warn(`secrets.json[${index}]: invalid regex pattern`, {
 				path: filePath,

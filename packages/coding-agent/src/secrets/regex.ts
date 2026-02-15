@@ -53,8 +53,14 @@ function enforceGlobalFlag(flags: string): string {
 	return flags.includes("g") ? flags : `${flags}g`;
 }
 
-/** Compile a secret regex entry with global scanning enabled by default. */
-export function compileSecretRegex(content: string): RegExp {
+/** Compile a secret regex entry with global scanning enabled by default. Extra flags are merged with any flags from the content literal. */
+export function compileSecretRegex(content: string, extraFlags?: string): RegExp {
 	const { pattern, flags } = parseSecretRegex(content);
-	return new RegExp(pattern, enforceGlobalFlag(flags));
+	const merged = extraFlags ? deduplicateFlags(flags + extraFlags) : flags;
+	return new RegExp(pattern, enforceGlobalFlag(merged));
+}
+
+/** Deduplicate flag characters (e.g., "igi" → "ig"). */
+function deduplicateFlags(flags: string): string {
+	return [...new Set(flags)].join("");
 }
