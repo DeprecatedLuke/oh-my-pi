@@ -229,10 +229,18 @@ interface SshRenderContext {
 }
 
 export const sshToolRenderer = {
-	renderCall(args: SshRenderArgs, uiTheme: Theme): Component {
+	renderCall(args: SshRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const host = args.host || "…";
 		const command = args.command || "…";
-		const text = renderStatusLine({ icon: "pending", title: "SSH", description: `[${host}] $ ${command}` }, uiTheme);
+		const text = renderStatusLine(
+			{
+				icon: options.spinnerFrame != null ? "running" : "pending",
+				spinnerFrame: options.spinnerFrame,
+				title: "SSH",
+				description: `[${host}] $ ${command}`,
+			},
+			uiTheme,
+		);
 		return new Text(text, 0, 0);
 	},
 

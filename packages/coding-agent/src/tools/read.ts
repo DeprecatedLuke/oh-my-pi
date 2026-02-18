@@ -10,11 +10,11 @@ import { getRemoteDir } from "@oh-my-pi/pi-utils/dirs";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
-import { computeLineHash } from "../patch/hashline";
+import { getLanguageFromPath, highlightCode, type Theme } from "../modes/theme/theme";
+import { computeLineHash, formatHashLines } from "../patch/hashline";
 import readDescription from "../prompts/tools/read.md" with { type: "text" };
 import type { ToolSession } from "../sdk";
-import { renderCodeCell, renderStatusLine } from "../tui";
+import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
@@ -23,7 +23,7 @@ import { ensureTool } from "../utils/tools-manager";
 import { applyListLimit } from "./list-limit";
 import type { OutputMeta } from "./output-meta";
 import { resolveReadPath, resolveToCwd } from "./path-utils";
-import { formatAge, shortenPath, wrapBrackets } from "./render-utils";
+import { Ellipsis, formatAge, replaceTabs, shortenPath, truncateToWidth, wrapBrackets } from "./render-utils";
 import { ToolAbortError, ToolError, throwIfAborted } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import {
@@ -1077,7 +1077,7 @@ interface ReadRenderArgs {
 }
 
 export const readToolRenderer = {
-	renderCall(args: ReadRenderArgs, uiTheme: Theme): Component {
+	renderCall(args: ReadRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 		const rawPath = args.file_path || args.path || "";
 		const filePath = shortenPath(rawPath);
 		const offset = args.offset;
@@ -1157,29 +1157,29 @@ export const readToolRenderer = {
 			};
 		}
 
-		let title = filePath ? `Read ${filePath}` : "Read";
+		let description = filePath || "";
 		if (args?.offset !== undefined || args?.limit !== undefined) {
 			const startLine = args.offset ?? 1;
 			const endLine = args.limit !== undefined ? startLine + args.limit - 1 : "";
-			title += `:${startLine}${endLine ? `-${endLine}` : ""}`;
+			description += `:${startLine}${endLine ? `-${endLine}` : ""}`;
 		}
+
+		const header = renderStatusLine({ icon: "success", title: "Read", description }, uiTheme);
+
+		const codeLines = highlightCode(replaceTabs(contentText), lang);
 		let cachedWidth: number | undefined;
 		let cachedLines: string[] | undefined;
 		return {
 			render: (width: number) => {
 				if (cachedLines && cachedWidth === width) return cachedLines;
-				cachedLines = renderCodeCell(
-					{
-						code: contentText,
-						language: lang,
-						title,
-						status: "complete",
-						output: warningLines.length > 0 ? warningLines.join("\n") : undefined,
-						expanded: true,
-						width,
-					},
-					uiTheme,
-				);
+				const lines: string[] = [truncateToWidth(header, width, Ellipsis.Omit)];
+				for (const line of codeLines) {
+					lines.push(truncateToWidth(replaceTabs(line), width, Ellipsis.Omit));
+				}
+				for (const w of warningLines) {
+					lines.push(truncateToWidth(w, width, Ellipsis.Omit));
+				}
+				cachedLines = lines;
 				cachedWidth = width;
 				return cachedLines;
 			},

@@ -271,8 +271,8 @@ export const webSearchCustomTool: CustomTool<typeof webSearchSchema, SearchRende
 		return executeSearch(toolCallId, params);
 	},
 
-	renderCall(args: SearchParams, theme: Theme) {
-		return renderSearchCall(args, theme);
+	renderCall(args: SearchParams, options, theme: Theme) {
+		return renderSearchCall(args, options, theme);
 	},
 
 	renderResult(result, options: RenderResultOptions, theme: Theme) {
@@ -391,7 +391,7 @@ Parameters:
 		return executeExaTool("web_search_exa", args, "web_search_deep");
 	},
 
-	renderCall(args, theme) {
+	renderCall(args, _options, theme) {
 		return renderExaCall(args as Record<string, unknown>, "Deep Search", theme);
 	},
 
@@ -422,7 +422,7 @@ Parameters:
 		return executeExaTool("get_code_context_exa", params as Record<string, unknown>, "web_search_code_context");
 	},
 
-	renderCall(args, theme) {
+	renderCall(args, _options, theme) {
 		return renderExaCall(args as Record<string, unknown>, "Code Search", theme);
 	},
 
@@ -450,7 +450,7 @@ Parameters:
 		return executeExaTool("crawling", params as Record<string, unknown>, "web_search_crawl");
 	},
 
-	renderCall(args, theme) {
+	renderCall(args, _options, theme) {
 		const url = (args as { url: string }).url;
 		return renderExaCall({ query: url }, "Crawl URL", theme);
 	},
@@ -481,7 +481,7 @@ Parameters:
 		return executeExaTool("linkedin_search", params as Record<string, unknown>, "web_search_linkedin");
 	},
 
-	renderCall(args, theme) {
+	renderCall(args, _options, theme) {
 		return renderExaCall(args as Record<string, unknown>, "LinkedIn Search", theme);
 	},
 
@@ -511,7 +511,7 @@ Parameters:
 		return executeExaTool("company_research", params as Record<string, unknown>, "web_search_company");
 	},
 
-	renderCall(args, theme) {
+	renderCall(args, _options, theme) {
 		const name = (args as { company_name: string }).company_name;
 		return renderExaCall({ query: name }, "Company Research", theme);
 	},

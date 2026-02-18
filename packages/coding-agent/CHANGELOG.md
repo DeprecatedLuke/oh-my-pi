@@ -29,6 +29,16 @@
 ### Fixed
 
 - Fixed model discovery to use default refresh mode instead of explicit 'online' parameter
+- Fixed spinner not animating during tool execution: start on construction, rebuild display each tick
+- Fixed read tool status icon placement: use renderStatusLine instead of bordered renderCodeCell
+- Fixed ReadToolGroupComponent to show status icon before title instead of trailing
+
+### Changed
+
+- Unified renderCall/renderResult signatures to (args, options, theme) across all tool renderers
+- Replaced nerd font pie-chart spinner with clock-outline icons for smooth looping
+- Moved status icon to front of code-cell headers in formatHeader
+- Removed dead #argsComplete field from ToolExecutionComponent
 
 ## [12.10.1] - 2026-02-18
 

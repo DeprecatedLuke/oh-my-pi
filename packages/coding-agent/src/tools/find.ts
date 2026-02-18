@@ -407,12 +407,18 @@ const COLLAPSED_LIST_LIMIT = PREVIEW_LIMITS.COLLAPSED_ITEMS;
 
 export const findToolRenderer = {
 	inline: true,
-	renderCall(args: FindRenderArgs, uiTheme: Theme): Component {
+	renderCall(args: FindRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const meta: string[] = [];
 		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
 
 		const text = renderStatusLine(
-			{ icon: "pending", title: "Find", description: args.pattern || "*", meta },
+			{
+				icon: options.spinnerFrame != null ? "running" : "pending",
+				spinnerFrame: options.spinnerFrame,
+				title: "Find",
+				description: args.pattern || "*",
+				meta,
+			},
 			uiTheme,
 		);
 		return new Text(text, 0, 0);

@@ -174,7 +174,7 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		this.mcpServerName = connection.name;
 	}
 
-	renderCall(args: unknown, theme: Theme) {
+	renderCall(args: unknown, _options: RenderResultOptions, theme: Theme) {
 		return renderMCPCall((args ?? {}) as Record<string, unknown>, theme, this.label);
 	}
 
@@ -280,7 +280,7 @@ export class DeferredMCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		this.#fallbackProviderName = source?.providerName;
 	}
 
-	renderCall(args: unknown, theme: Theme) {
+	renderCall(args: unknown, _options: RenderResultOptions, theme: Theme) {
 		return renderMCPCall((args ?? {}) as Record<string, unknown>, theme, this.label);
 	}
 

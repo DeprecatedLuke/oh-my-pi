@@ -110,17 +110,15 @@ export class ToolExecutionComponent extends Container {
 	// Cached converted images for Kitty protocol (which requires PNG), keyed by index
 	#convertedImages: Map<number, { data: string; mimeType: string }> = new Map();
 	// Spinner animation for partial task results
-	#spinnerFrame = 0;
+	#spinnerFrame: number | undefined;
 	#spinnerInterval?: NodeJS.Timeout;
-	// Track if args are still being streamed (for edit/write spinner)
-	#argsComplete = false;
 	#renderState: {
-		spinnerFrame: number;
+		spinnerFrame?: number;
 		expanded: boolean;
 		isPartial: boolean;
 		renderContext?: Record<string, unknown>;
 	} = {
-		spinnerFrame: 0,
+		spinnerFrame: undefined,
 		expanded: false,
 		isPartial: true,
 	};
@@ -159,6 +157,7 @@ export class ToolExecutionComponent extends Container {
 			this.addChild(this.#contentText);
 		}
 
+		this.#updateSpinnerAnimation();
 		this.#updateDisplay();
 	}
 
@@ -173,7 +172,6 @@ export class ToolExecutionComponent extends Container {
 	 * This triggers diff computation for edit tool.
 	 */
 	setArgsComplete(_toolCallId?: string): void {
-		this.#argsComplete = true;
 		this.#updateSpinnerAnimation();
 		this.#maybeComputeEditDiff();
 	}
@@ -262,10 +260,6 @@ export class ToolExecutionComponent extends Container {
 	): void {
 		this.#result = result;
 		this.#isPartial = isPartial;
-		// When tool is complete, ensure args are marked complete so spinner stops
-		if (!isPartial) {
-			this.#argsComplete = true;
-		}
 		this.#updateSpinnerAnimation();
 		this.#updateDisplay();
 		// Convert non-PNG images to PNG for Kitty protocol (async)
@@ -318,25 +312,23 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/**
-	 * Start or stop spinner animation based on whether this is a partial task result.
+	 * Start or stop spinner animation based on tool completion state.
 	 */
 	#updateSpinnerAnimation(): void {
-		// Spinner for: task tool with partial result, or edit/write while args streaming
-		const isStreamingArgs = !this.#argsComplete && (this.#toolName === "edit" || this.#toolName === "write");
-		const isPartialTask = this.#isPartial && this.#toolName === "task";
-		const needsSpinner = isStreamingArgs || isPartialTask;
+		// Spin while tool is still in progress (no final result yet)
+		const needsSpinner = this.#isPartial;
 		if (needsSpinner && !this.#spinnerInterval) {
 			this.#spinnerInterval = setInterval(() => {
 				const frameCount = theme.spinnerFrames.length;
 				if (frameCount === 0) return;
-				this.#spinnerFrame = (this.#spinnerFrame + 1) % frameCount;
+				this.#spinnerFrame = ((this.#spinnerFrame ?? -1) + 1) % frameCount;
 				this.#renderState.spinnerFrame = this.#spinnerFrame;
-				this.#ui.requestRender();
-				// NO updateDisplay() — existing component closures read from renderState
+				this.#updateDisplay();
 			}, 80);
 		} else if (!needsSpinner && this.#spinnerInterval) {
 			clearInterval(this.#spinnerInterval);
 			this.#spinnerInterval = undefined;
+			this.#spinnerFrame = undefined;
 		}
 	}
 
@@ -387,11 +379,11 @@ export class ToolExecutionComponent extends Container {
 			this.#contentBox.setBgFn(inline ? undefined : bgFn);
 			this.#contentBox.clear();
 
-			// Render call component
-			const shouldRenderCall = !this.#result || !mergeCallAndResult;
-			if (shouldRenderCall && tool.renderCall) {
+			// Render call component (always render if custom renderCall exists,
+			// even when mergeCallAndResult — extension handles completed state)
+			if (tool.renderCall) {
 				try {
-					const callComponent = tool.renderCall(this.#getCallArgsForRender(), theme);
+					const callComponent = tool.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
 					if (callComponent) {
 						this.#contentBox.addChild(ensureInvalidate(callComponent));
 					}
@@ -400,8 +392,8 @@ export class ToolExecutionComponent extends Container {
 					// Fall back to default on error
 					this.#contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
 				}
-			} else {
-				// No custom renderCall, show tool name
+			} else if (!this.#result || !mergeCallAndResult) {
+				// No custom renderCall, show tool name (only when not merged away)
 				this.#contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
 			}
 
@@ -453,7 +445,7 @@ export class ToolExecutionComponent extends Container {
 			if (shouldRenderCall) {
 				// Render call component
 				try {
-					const callComponent = renderer.renderCall(this.#getCallArgsForRender(), theme, this.#renderState);
+					const callComponent = renderer.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
 					if (callComponent) {
 						this.#contentBox.addChild(ensureInvalidate(callComponent));
 					}

@@ -445,9 +445,19 @@ function formatOutputInline(data: unknown, theme: Theme, maxWidth = 80): string 
 /**
  * Render the tool call arguments.
  */
-export function renderCall(args: TaskParams, theme: Theme): Component {
+export function renderCall(args: TaskParams, options: RenderResultOptions, theme: Theme): Component {
 	const lines: string[] = [];
-	lines.push(renderStatusLine({ icon: "pending", title: "Task", description: args.agent }, theme));
+	lines.push(
+		renderStatusLine(
+			{
+				icon: options.spinnerFrame != null ? "running" : "pending",
+				spinnerFrame: options.spinnerFrame,
+				title: "Task",
+				description: args.agent,
+			},
+			theme,
+		),
+	);
 
 	const contextTemplate = args.context ?? "";
 	const context = contextTemplate.trim();

@@ -967,6 +967,7 @@ function countNonEmptyLines(text: string): number {
 /** Render fetch call (URL preview) */
 export function renderFetchCall(
 	args: { url: string; timeout?: number; raw?: boolean },
+	options: RenderResultOptions,
 	uiTheme: Theme = theme,
 ): Component {
 	const domain = getDomain(args.url);
@@ -975,7 +976,16 @@ export function renderFetchCall(
 	const meta: string[] = [];
 	if (args.raw) meta.push("raw");
 	if (args.timeout !== undefined) meta.push(`timeout:${args.timeout}s`);
-	const text = renderStatusLine({ icon: "pending", title: "Fetch", description, meta }, uiTheme);
+	const text = renderStatusLine(
+		{
+			icon: options.spinnerFrame != null ? "running" : "pending",
+			spinnerFrame: options.spinnerFrame,
+			title: "Fetch",
+			description,
+			meta,
+		},
+		uiTheme,
+	);
 	return new Text(text, 0, 0);
 }
 
