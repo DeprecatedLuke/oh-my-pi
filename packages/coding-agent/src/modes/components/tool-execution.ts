@@ -387,9 +387,9 @@ export class ToolExecutionComponent extends Container {
 			this.#contentBox.setBgFn(inline ? undefined : bgFn);
 			this.#contentBox.clear();
 
-			// Render call component
-			const shouldRenderCall = !this.#result || !mergeCallAndResult;
-			if (shouldRenderCall && tool.renderCall) {
+			// Render call component (always render if custom renderCall exists,
+			// even when mergeCallAndResult — extension handles completed state)
+			if (tool.renderCall) {
 				try {
 					const callComponent = tool.renderCall(this.#getCallArgsForRender(), this.#renderState, theme);
 					if (callComponent) {
@@ -400,8 +400,8 @@ export class ToolExecutionComponent extends Container {
 					// Fall back to default on error
 					this.#contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
 				}
-			} else {
-				// No custom renderCall, show tool name
+			} else if (!this.#result || !mergeCallAndResult) {
+				// No custom renderCall, show tool name (only when not merged away)
 				this.#contentBox.addChild(new Text(theme.fg("toolTitle", theme.bold(this.#toolLabel)), 0, 0));
 			}
 
