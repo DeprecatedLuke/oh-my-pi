@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Unified renderCall signatures to (args, options, theme) across all tool renderers and extension types
+
 ## [12.14.1] - 2026-02-19
 
 ### Fixed
