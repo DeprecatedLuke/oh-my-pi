@@ -203,7 +203,7 @@ interface NotebookRenderArgs {
 const COLLAPSED_TEXT_LIMIT = PREVIEW_LIMITS.COLLAPSED_LINES * 2;
 
 export const notebookToolRenderer = {
-	renderCall(args: NotebookRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
+	renderCall(args: NotebookRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const meta: string[] = [];
 		const notebookPath = args.notebookPath ?? args.notebook_path;
 		const cellNumber = args.cellNumber ?? args.cell_index;
@@ -213,7 +213,13 @@ export const notebookToolRenderer = {
 		if (cellType) meta.push(`type:${cellType}`);
 
 		const text = renderStatusLine(
-			{ icon: "pending", title: "Notebook", description: args.action || "?", meta },
+			{
+				icon: options.spinnerFrame != null ? "running" : "pending",
+				spinnerFrame: options.spinnerFrame,
+				title: "Notebook",
+				description: args.action || "?",
+				meta,
+			},
 			uiTheme,
 		);
 		return new Text(text, 0, 0);

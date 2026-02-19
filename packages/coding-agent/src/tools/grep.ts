@@ -309,7 +309,7 @@ const COLLAPSED_TEXT_LIMIT = PREVIEW_LIMITS.COLLAPSED_LINES * 2;
 
 export const grepToolRenderer = {
 	inline: true,
-	renderCall(args: GrepRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
+	renderCall(args: GrepRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
 		const meta: string[] = [];
 		if (args.path) meta.push(`in ${args.path}`);
 		if (args.glob) meta.push(`glob:${args.glob}`);
@@ -326,7 +326,13 @@ export const grepToolRenderer = {
 		if (args.offset !== undefined && args.offset > 0) meta.push(`offset:${args.offset}`);
 
 		const text = renderStatusLine(
-			{ icon: "pending", title: "Grep", description: args.pattern || "?", meta },
+			{
+				icon: options.spinnerFrame != null ? "running" : "pending",
+				spinnerFrame: options.spinnerFrame,
+				title: "Grep",
+				description: args.pattern || "?",
+				meta,
+			},
 			uiTheme,
 		);
 		return new Text(text, 0, 0);

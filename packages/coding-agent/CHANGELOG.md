@@ -5,6 +5,15 @@
 ### Changed
 
 - Unified renderCall signatures to (args, options, theme) across all tool renderers and extension types
+- Removed dead #argsComplete field from ToolExecutionComponent
+
+### Fixed
+
+- Fixed spinner not animating during tool execution: start on construction, spin while tool is in progress
+
+### Changed
+
+- Unified renderCall signatures to (args, options, theme) across all tool renderers and extension types
 
 ## [12.14.1] - 2026-02-19
 
