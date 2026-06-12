@@ -100,6 +100,24 @@ function stubSubprocessWritingFile(): void {
 	});
 }
 
+/** Stub the subagent: write `added.txt` into the worktree, then report aborted. */
+function stubSubprocessAbortedWithFile(): void {
+	vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+		const worktree = options.worktree;
+		if (!worktree) throw new Error("expected an isolation worktree for patch-tool mode");
+		await fs.writeFile(path.join(worktree, "added.txt"), "from aborted subagent\n");
+		return { ...makeResult(options.id ?? "?"), aborted: true };
+	});
+}
+
+/** Stub the subagent: change nothing in the worktree, then report aborted. */
+function stubSubprocessAbortedNoChanges(): void {
+	vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+		if (!options.worktree) throw new Error("expected an isolation worktree for patch-tool mode");
+		return { ...makeResult(options.id ?? "?"), aborted: true };
+	});
+}
+
 afterEach(async () => {
 	vi.restoreAllMocks();
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
@@ -157,5 +175,57 @@ describe("patch-tool merge strategy", () => {
 		expect(patch?.uri).toMatch(/^patch:\/\//);
 		expect(result.details?.results[0]?.error).toContain("dirty");
 		expect(firstText(result)).toContain("pending patches");
+	});
+
+	it("captures aborted-task edits as a recovery patch instead of applying them", async () => {
+		const repo = await createRepo();
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [editAgent], projectAgentsDir: null });
+		stubSubprocessAbortedWithFile();
+
+		const tool = await TaskTool.create(createSession(repo));
+		const result = await tool.execute("tc-abort", {
+			agent: "task",
+			id: "Patcher",
+			assignment: "Add a file.",
+			isolated: true,
+		} as TaskParams);
+
+		// Aborted work is NOT applied to the (clean) target repo...
+		const applied = await fs
+			.access(path.join(repo, "added.txt"))
+			.then(() => true)
+			.catch(() => false);
+		expect(applied).toBe(false);
+		expect(await runGit(repo, ["status", "--porcelain"])).toBe("");
+
+		// ...it is preserved as a durable, unapplied recovery patch instead.
+		const single = result.details?.results[0];
+		expect(single?.recoveryCaptureStatus).toBe("preserved");
+		const patch = single?.patches?.[0];
+		expect(patch?.recovery).toBe(true);
+		expect(patch?.status).toBe("pending");
+		expect(patch?.uri).toMatch(/^patch:\/\//);
+		// A recovery patch is not an apply failure: it must not populate `error`.
+		expect(single?.error).toBeUndefined();
+		expect(firstText(result)).toContain("preserved aborted task edits");
+	});
+
+	it("reports an empty recovery when an aborted task changed nothing", async () => {
+		const repo = await createRepo();
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: [editAgent], projectAgentsDir: null });
+		stubSubprocessAbortedNoChanges();
+
+		const tool = await TaskTool.create(createSession(repo));
+		const result = await tool.execute("tc-abort-empty", {
+			agent: "task",
+			id: "Patcher",
+			assignment: "Add a file.",
+			isolated: true,
+		} as TaskParams);
+
+		const single = result.details?.results[0];
+		expect(single?.recoveryCaptureStatus).toBe("empty");
+		expect(single?.patches).toBeUndefined();
+		expect(firstText(result)).toContain("no recovery patch");
 	});
 });

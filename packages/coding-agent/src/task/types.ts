@@ -488,6 +488,8 @@ export interface TaskPatchSummary {
 	commit?: string;
 	error?: string;
 	conflicts?: TaskPatchConflict[];
+	/** Set when this summary records edits captured from an aborted task (preserved, not applied). */
+	recovery?: boolean;
 }
 
 /** Result from a single agent execution */
@@ -544,6 +546,15 @@ export interface SingleResult {
 	nestedPatches?: NestedRepoPatch[];
 	/** Native patches captured from isolated task output (patch-tool merge strategy). */
 	patches?: TaskPatchSummary[];
+	/**
+	 * Outcome of native-patch recovery capture for an aborted patch-tool task.
+	 * `preserved` — edits captured into the durable store (see `patches`);
+	 * `empty` — the isolated worktree had no file changes;
+	 * `failed` — capture threw before a patch could be written (`recoveryCaptureError`).
+	 */
+	recoveryCaptureStatus?: "preserved" | "empty" | "failed";
+	/** Error message when `recoveryCaptureStatus` is `failed`. */
+	recoveryCaptureError?: string;
 	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
 	extractedToolData?: Record<string, unknown[]>;
 	/**
