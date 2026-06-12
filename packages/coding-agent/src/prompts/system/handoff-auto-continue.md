@@ -1,0 +1,1 @@
+Resume work on the user's most recent intent. The handoff document above captures the prior session's progress and pending next steps; if `### Last Session Message` is present, treat it as the user's latest request and follow it if it supersedes the handoff's plan. If there is nothing left to do, say so briefly instead of inventing further work.

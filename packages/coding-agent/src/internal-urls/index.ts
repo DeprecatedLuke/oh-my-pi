@@ -1,6 +1,6 @@
 /**
- * Internal URL routing system for internal protocols like agent://, memory://,
- * skill://, mcp://, local://, and xd://.
+ * Internal URL routing system for protocols like agent://, memory://,
+ * knowledge://, skill://, mcp://, local://, patch://, issues://, and xd://.
  *
  * One process-global `InternalUrlRouter` is shared across sessions. Handlers
  * are stateless; they pull whatever they need (active skills/rules, active
@@ -12,12 +12,15 @@ export * from "./agent-protocol";
 export * from "./artifact-protocol";
 export * from "./history-protocol";
 export * from "./issue-pr-protocol";
+export * from "./issues-protocol";
 export * from "./json-query";
+export * from "./knowledge-protocol";
 export * from "./local-protocol";
 export * from "./mcp-protocol";
 export * from "./memory-protocol";
 export * from "./omp-protocol";
 export * from "./parse";
+export * from "./patch-protocol";
 export * from "./router";
 export * from "./rule-protocol";
 export * from "./skill-protocol";

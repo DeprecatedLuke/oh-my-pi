@@ -1290,7 +1290,7 @@ describe("AgentSession handoff", () => {
 		expect(session.getLastAssistantText()).toBeUndefined();
 		expect(session.hasCopyCandidateAssistantMessage()).toBe(false);
 		expect(session.getLastVisibleHandoffText()).toBe(
-			`<handoff-context>\n${handoffText}\n</handoff-context>\n\nThe above is a handoff document from a previous session. Use this context to continue the work seamlessly.`,
+			`<handoff-context>\n${handoffText}\n</handoff-context>\n\nThe above is a handoff document from a previous session. Use this context to continue the work seamlessly.\n\n### Last Session Message\n\nseed response`,
 		);
 		expect(handoffSessionFile).not.toBe(previousSessionFile);
 		expect(handoffEntries.find(entry => entry.type === "session")).toMatchObject({
