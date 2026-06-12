@@ -15,6 +15,9 @@ This document is the operational contract for schema normalization/strictness in
 
 When strict mode is requested (`strict=true` at call site), the schema MUST satisfy all of the following after adaptation:
 
+0. **A root-level union is flattened to an object before enforcement**
+   - OpenAI strict structured outputs reject a root-level union: "the root level object of a schema must be an object, and not use anyOf". `z.discriminatedUnion(...)` tool parameters compile to a top-level `oneOf`/`anyOf`, so `adaptSchemaForStrict` runs `flattenTopLevelObjectUnion` first, merging the object-only branches into one object (union of branch properties, intersection of branch `required`). The discriminator survives as a nested `anyOf` of `const`s, which strict mode then normalizes to `enum` branches (allowed below the root). Non-object / unmergeable top-level combiners are stripped to guarantee an object root. No-op for schemas that are already a plain object. (The Anthropic native path applies the same helper in its own tool-schema builder, since Anthropic rejects top-level combiners regardless of strictness.)
+
 1. **Non-structural keywords are removed before strict enforcement**
    - Sanitization uses `sanitizeSchemaForStrictMode`.
    - Removed keys include formatting/validation/decorative keywords and unsupported structural extras:

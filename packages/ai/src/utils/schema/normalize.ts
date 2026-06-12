@@ -579,6 +579,36 @@ function mergeObjectCombinerVariants(schema: JsonObject, combiner: "anyOf" | "on
 	return nextSchema;
 }
 
+/**
+ * Flatten a top-level object-only `anyOf`/`oneOf` union into a single object
+ * schema (union of branch properties, intersection of branch `required`).
+ *
+ * Anthropic's tool `input_schema` validator rejects `oneOf`/`anyOf`/`allOf` at
+ * the *top* level ("input_schema does not support oneOf, allOf, or anyOf at the
+ * top level"), but `z.discriminatedUnion(...)` / `z.union(...)` tool parameters
+ * (e.g. the `patch` and `issues` tools) compile to exactly that shape. Merging
+ * collapses the union into a plain object; the discriminator literal survives as
+ * a nested `anyOf` of `const`s, which Anthropic accepts because only the top
+ * level is restricted. The precise per-branch contract is still enforced by the
+ * tool's own runtime parser.
+ *
+ * When a variant is not object-shaped (no lossless object merge exists) the
+ * unmergeable combiner is dropped rather than left in place, guaranteeing a
+ * combinator-free top level. `allOf` has no object-union merge and is stripped
+ * defensively (no tool uses a top-level intersection as parameters). Returns the
+ * input unchanged when there is no top-level combinator.
+ */
+export function flattenTopLevelObjectUnion(schema: JsonObject): JsonObject {
+	let current = schema;
+	for (const combiner of JSON_SCHEMA_COMBINERS) {
+		if (!Array.isArray(current[combiner])) continue;
+		const merged = mergeObjectCombinerVariants(current, combiner);
+		current = merged === current ? copySchemaWithout(current, combiner) : merged;
+	}
+	if (Array.isArray(current.allOf)) current = copySchemaWithout(current, "allOf");
+	return current;
+}
+
 function collapseMixedTypeCombinerVariants(schema: JsonObject, combiner: "anyOf" | "oneOf"): JsonObject {
 	const variantsRaw = schema[combiner];
 	if (!Array.isArray(variantsRaw) || variantsRaw.length === 0) {

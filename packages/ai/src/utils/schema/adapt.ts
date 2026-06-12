@@ -1,6 +1,6 @@
 import { $flag } from "@oh-my-pi/pi-utils";
 import { upgradeJsonSchemaTo202012 } from "./draft";
-import { tryEnforceStrictSchema } from "./normalize";
+import { flattenTopLevelObjectUnion, tryEnforceStrictSchema } from "./normalize";
 
 /**
  * Set when callers want to globally bypass OpenAI strict-mode enforcement
@@ -32,5 +32,11 @@ export function adaptSchemaForStrict(
 		return { schema: upgraded, strict: false };
 	}
 
-	return tryEnforceStrictSchema(upgraded);
+	// OpenAI strict structured outputs reject a root-level union: "the root level
+	// object of a schema must be an object, and not use anyOf". Zod discriminated
+	// unions (the `patch`/`issues` tools) compile to exactly that, so collapse a
+	// top-level union into a single object before enforcing strict constraints.
+	// No-op for schemas that are already a plain object.
+	const rooted = flattenTopLevelObjectUnion(upgraded);
+	return tryEnforceStrictSchema(rooted);
 }

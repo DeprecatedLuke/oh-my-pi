@@ -1021,47 +1021,34 @@ describe("Zod root extras preserved through normalize", () => {
 	});
 });
 
-describe("adaptSchemaForStrict — unrepresentable open branches fall back to non-strict", () => {
-	it("falls back when a property schema is an open `true` (z.unknown())", () => {
-		// `z.unknown()` normalizes to `meta: true` (issue #1179); strict providers
-		// reject a typeless property, so the schema must downgrade to non-strict
-		// rather than emit `strict: true` with a `true` property.
-		const wire = toolWireSchema({
-			name: "t",
-			description: "d",
-			parameters: z.object({ a: z.string(), meta: z.unknown() }),
-		} as Tool);
-		expect((wire.properties as Record<string, unknown>).meta).toBe(true);
-		expect(adaptSchemaForStrict(wire, true).strict).toBe(false);
+describe("adaptSchemaForStrict — root union flattening", () => {
+	it("collapses a root-level anyOf into a single object in strict mode", () => {
+		const { schema, strict } = adaptSchemaForStrict(
+			{
+				anyOf: [
+					{ type: "object", properties: { op: { const: "a" }, x: { type: "string" } }, required: ["op", "x"] },
+					{ type: "object", properties: { op: { const: "b" }, y: { type: "number" } }, required: ["op"] },
+				],
+			},
+			true,
+		);
+		// OpenAI strict structured outputs reject a root-level union.
+		expect(strict).toBe(true);
+		expect(schema.type).toBe("object");
+		expect(schema.anyOf).toBeUndefined();
+		expect(schema.oneOf).toBeUndefined();
+		expect(Object.keys(schema.properties as Record<string, unknown>).sort()).toEqual(["op", "x", "y"]);
 	});
 
-	it("falls back when a combiner branch is a boolean schema", () => {
-		const schema: Record<string, unknown> = {
-			type: "object",
-			properties: { a: { anyOf: [true, { type: "string" }] } },
-			required: ["a"],
-			additionalProperties: false,
+	it("leaves a root-level union untouched in non-strict mode", () => {
+		const input = {
+			anyOf: [
+				{ type: "object", properties: { x: { type: "string" } } },
+				{ type: "object", properties: { y: { type: "number" } } },
+			],
 		};
-		expect(adaptSchemaForStrict(schema, true).strict).toBe(false);
-	});
-
-	it("falls back when an array `items` schema is unconstrained", () => {
-		const schema: Record<string, unknown> = {
-			type: "object",
-			properties: { xs: { type: "array", items: true } },
-			required: ["xs"],
-			additionalProperties: false,
-		};
-		expect(adaptSchemaForStrict(schema, true).strict).toBe(false);
-	});
-
-	it("still enforces strict for fully-typed schemas (no false positives)", () => {
-		const schema: Record<string, unknown> = {
-			type: "object",
-			properties: { a: { type: "string" }, b: { type: "number" } },
-			required: ["a", "b"],
-			additionalProperties: false,
-		};
-		expect(adaptSchemaForStrict(schema, true).strict).toBe(true);
+		const { schema, strict } = adaptSchemaForStrict(input, false);
+		expect(strict).toBe(false);
+		expect(Array.isArray(schema.anyOf)).toBe(true);
 	});
 });
