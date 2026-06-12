@@ -26,10 +26,12 @@ export type ModelRole =
 	| "vision"
 	| "plan"
 	| "designer"
+	| "review"
 	| "commit"
 	| "tiny"
 	| "task"
-	| "advisor";
+	| "advisor"
+	| "uncensored";
 
 export interface ModelRoleInfo {
 	tag?: string;
@@ -46,10 +48,12 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	vision: { tag: "VISION", name: "Vision", color: "error" },
 	plan: { tag: "PLAN", name: "Architect", color: "muted" },
 	designer: { tag: "DESIGNER", name: "Designer", color: "muted" },
+	review: { tag: "REVIEW", name: "Reviewer", color: "muted" },
 	commit: { tag: "COMMIT", name: "Commit", color: "dim" },
 	tiny: { tag: "TINY", name: "Tiny", color: "dim" },
 	task: { tag: "TASK", name: "Subtask", color: "muted" },
 	advisor: { tag: "ADVISOR", name: "Advisor", color: "accent" },
+	uncensored: { tag: "UNCENS", name: "Uncensored", color: "error" },
 };
 
 export const MODEL_ROLE_IDS: ModelRole[] = [
@@ -59,11 +63,23 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"vision",
 	"plan",
 	"designer",
+	"review",
 	"commit",
 	"tiny",
 	"task",
 	"advisor",
+	"uncensored",
 ];
+
+/**
+ * Display metadata for fork-specific roles configured dynamically (via
+ * `modelRoles`) rather than living in `MODEL_ROLE_IDS`. Looked up by
+ * `getRoleInfo` so they render with a proper `TAG (Name)` badge/label in the
+ * selector instead of falling back to the bare lowercase role id.
+ */
+export const CUSTOM_ROLE_INFO: Record<string, ModelRoleInfo> = {
+	compaction: { tag: "COMPACT", name: "Compaction", color: "muted" },
+};
 
 export type RoleInfo = ModelRoleInfo;
 
@@ -84,8 +100,8 @@ export function getKnownRoleIds(settings: Settings): string[] {
 	};
 
 	for (const role of settings.get("cycleOrder")) addRole(role);
-	for (const role in settings.getModelRoles()) addRole(role);
-	for (const role in settings.get("modelTags")) addRole(role);
+	for (const role of Object.keys(settings.getModelRoles())) addRole(role);
+	for (const role of Object.keys(settings.get("modelTags"))) addRole(role);
 
 	return roles;
 }
@@ -95,7 +111,7 @@ export function getKnownRoleIds(settings: Settings): string[] {
  * Configured metadata overrides built-in defaults when present.
  */
 export function getRoleInfo(role: string, settings: Settings): RoleInfo {
-	const builtIn = role in MODEL_ROLES ? MODEL_ROLES[role as ModelRole] : undefined;
+	const builtIn = (role in MODEL_ROLES ? MODEL_ROLES[role as ModelRole] : undefined) ?? CUSTOM_ROLE_INFO[role];
 	const configured = settings.get("modelTags")[role];
 
 	if (configured) {
