@@ -373,6 +373,14 @@
       "types": "./src/eval/py/*.ts",
       "import": "./src/eval/py/*.ts"
     },
+    "./issues": {
+      "types": "./src/issues/index.ts",
+      "import": "./src/issues/index.ts"
+    },
+    "./issues/*": {
+      "types": "./src/issues/*.ts",
+      "import": "./src/issues/*.ts"
+    },
     "./lsp": {
       "types": "./src/lsp/index.ts",
       "import": "./src/lsp/index.ts"
