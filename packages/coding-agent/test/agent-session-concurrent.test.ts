@@ -1117,6 +1117,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		const asyncJobManager = new AsyncJobManager({
 			maxRunningJobs: 3,
 			retentionMs: 1_000,
+
 		});
 		AsyncJobManager.setInstance(asyncJobManager);
 

@@ -2560,6 +2560,7 @@
 ### Added
 
 - Added a `git` tool (`op: "status" | "checkpoint"`) and `/gitcheckpoint` slash command (alias `/checkpoint`) for inspecting repository status and creating local WIP checkpoint commits across the root and unlinked nested repositories without shelling out. The tool is top-level only (subagents own no Git state) and generates a per-repo commit message with a fast model.
+- Added batching of background async-job completions so multiple finished jobs land in one user turn instead of one turn per job: the job manager defers dispatching a completed job's delivery while sibling jobs are still running, then coalesces every due completion into a single dispatch. Task fan-out jobs (one `task` call) share a batch id, and a live same-batch sibling that keeps reporting progress extends the hold past the `async.batchSettleMs` cap (default `300000`), which then acts as a silence/hang bound. Set `async.batchSettleMs` to `0` to disable the extended window.
 
 ### Fixed
 

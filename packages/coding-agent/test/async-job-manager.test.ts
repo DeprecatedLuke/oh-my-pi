@@ -6,8 +6,8 @@ describe("AsyncJobManager", () => {
 		const progressEvents: Array<{ text: string; details?: Record<string, unknown> }> = [];
 		const completions: Array<{ jobId: string; text: string }> = [];
 		const manager = new AsyncJobManager({
-			onJobComplete: async (jobId, text) => {
-				completions.push({ jobId, text });
+			onJobComplete: async batch => {
+				for (const { jobId, text } of batch) completions.push({ jobId, text });
 			},
 		});
 
@@ -36,8 +36,8 @@ describe("AsyncJobManager", () => {
 	test("swallows progress callback errors without failing the job", async () => {
 		const completions: Array<{ jobId: string; text: string }> = [];
 		const manager = new AsyncJobManager({
-			onJobComplete: async (jobId, text) => {
-				completions.push({ jobId, text });
+			onJobComplete: async batch => {
+				for (const { jobId, text } of batch) completions.push({ jobId, text });
 			},
 		});
 
@@ -65,8 +65,8 @@ describe("AsyncJobManager", () => {
 	test("delivers error text when run fails", async () => {
 		const completions: Array<{ jobId: string; text: string }> = [];
 		const manager = new AsyncJobManager({
-			onJobComplete: async (jobId, text) => {
-				completions.push({ jobId, text });
+			onJobComplete: async batch => {
+				for (const { jobId, text } of batch) completions.push({ jobId, text });
 			},
 		});
 
@@ -85,8 +85,8 @@ describe("AsyncJobManager", () => {
 	test("cancels a running job by id", async () => {
 		const completions: Array<{ jobId: string; text: string }> = [];
 		const manager = new AsyncJobManager({
-			onJobComplete: async (jobId, text) => {
-				completions.push({ jobId, text });
+			onJobComplete: async batch => {
+				for (const { jobId, text } of batch) completions.push({ jobId, text });
 			},
 		});
 
@@ -434,8 +434,8 @@ describe("AsyncJobManager", () => {
 		const mainDeliveries: string[] = [];
 		const defaultDeliveries: string[] = [];
 		const manager = new AsyncJobManager({
-			onJobComplete: async jobId => {
-				defaultDeliveries.push(jobId);
+			onJobComplete: async completions => {
+				defaultDeliveries.push(...completions.map(completion => completion.jobId));
 			},
 		});
 		manager.registerDeliverySink("Main", jobId => {
@@ -454,8 +454,8 @@ describe("AsyncJobManager", () => {
 	test("dead-letters an owned delivery when its owner has no live sink", async () => {
 		const defaultDeliveries: string[] = [];
 		const manager = new AsyncJobManager({
-			onJobComplete: async jobId => {
-				defaultDeliveries.push(jobId);
+			onJobComplete: async completions => {
+				defaultDeliveries.push(...completions.map(completion => completion.jobId));
 			},
 		});
 		const unregister = manager.registerDeliverySink("Sub", () => {});
@@ -498,6 +498,115 @@ describe("AsyncJobManager", () => {
 		manager.cancelAll({ ownerId: "Sub" });
 		await expect(reap).resolves.toBe(true);
 		expect(manager.getJob("hung-1")?.status).toBe("cancelled");
+	});
+
+	test("live same-batch sibling extends the settle hold past deliveryBatchMaxWaitMs", async () => {
+		// Reproduces the user-visible bug: a task fan-out whose subagents run
+		// longer than the settle cap delivered one completion per turn — each
+		// finished task waited out the cap while siblings still ran, then
+		// dispatched alone. A running job that shares the spawn batch with a
+		// queued delivery and keeps reporting progress must extend the hold
+		// until the whole batch settles.
+		const dispatchBatches: string[][] = [];
+		const manager = new AsyncJobManager({
+			deliveryBatchMaxWaitMs: 300,
+			onJobComplete: async batch => {
+				dispatchBatches.push(batch.map(c => c.jobId));
+			},
+		});
+
+		const releaseB = Promise.withResolvers<void>();
+		const idA = manager.register("task", "a", async () => "a", { batchId: "fanout" });
+		const idB = manager.register(
+			"task",
+			"b",
+			async ({ reportProgress }) => {
+				// Stay alive well past the cap while emitting progress, like a
+				// long-running subagent streaming events.
+				const heartbeat = setInterval(() => void reportProgress("working"), 75);
+				try {
+					await releaseB.promise;
+				} finally {
+					clearInterval(heartbeat);
+				}
+				return "b";
+			},
+			{ batchId: "fanout" },
+		);
+
+		// Well past the 300ms cap: without the batch hold A would have
+		// dispatched alone by now.
+		await Bun.sleep(1_000);
+		expect(dispatchBatches).toHaveLength(0);
+
+		releaseB.resolve();
+		await manager.drainDeliveries({ timeoutMs: 2_000 });
+
+		expect(dispatchBatches).toHaveLength(1);
+		expect(dispatchBatches[0]?.slice().sort()).toEqual([idA, idB].sort());
+	});
+
+	test("silent same-batch sibling counts as hung and stops extending the hold", async () => {
+		const dispatchBatches: string[][] = [];
+		const manager = new AsyncJobManager({
+			deliveryBatchMaxWaitMs: 250,
+			onJobComplete: async batch => {
+				dispatchBatches.push(batch.map(c => c.jobId));
+			},
+		});
+
+		const neverRelease = Promise.withResolvers<void>();
+		const idA = manager.register("task", "a", async () => "a", { batchId: "fanout" });
+		manager.register(
+			"task",
+			"b",
+			async () => {
+				await neverRelease.promise;
+				return "b";
+			},
+			{ batchId: "fanout" },
+		);
+
+		// B shares the batch but never reports progress: once it has been
+		// silent for the whole cap it must stop holding A's delivery hostage.
+		await Bun.sleep(1_000);
+		expect(dispatchBatches).toEqual([[idA]]);
+
+		manager.cancelAll();
+		neverRelease.resolve();
+		await manager.waitForAll();
+	});
+
+	test("active job outside the batch cannot extend the hold past the cap", async () => {
+		// A perpetually-chatty job with no batchId (e.g. a dev server bash
+		// job streaming logs) must not block batch deliveries forever — only
+		// same-batch siblings earn the extended hold.
+		const dispatchBatches: string[][] = [];
+		const manager = new AsyncJobManager({
+			deliveryBatchMaxWaitMs: 250,
+			onJobComplete: async batch => {
+				dispatchBatches.push(batch.map(c => c.jobId));
+			},
+		});
+
+		const releaseServer = Promise.withResolvers<void>();
+		const idA = manager.register("task", "a", async () => "a", { batchId: "fanout" });
+		manager.register("bash", "dev server", async ({ reportProgress }) => {
+			const heartbeat = setInterval(() => void reportProgress("listening"), 50);
+			try {
+				await releaseServer.promise;
+			} finally {
+				clearInterval(heartbeat);
+			}
+			return "server";
+		});
+
+		await Bun.sleep(1_000);
+		expect(dispatchBatches).toEqual([[idA]]);
+
+		manager.cancelAll();
+		releaseServer.resolve();
+		await manager.waitForAll();
 	});
 });
 

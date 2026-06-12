@@ -1574,6 +1574,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const restrictToolNames = options.restrictToolNames === true;
 	const enableLsp = !restrictToolNames && (options.enableLsp ?? true);
 	const asyncMaxJobs = Math.min(100, Math.max(1, settings.get("async.maxJobs") ?? 100));
+	const asyncBatchSettleMs = Math.max(0, Math.floor(settings.get("async.batchSettleMs") ?? 300_000));
 	// Only the first top-level session in a process owns an AsyncJobManager.
 	// Subagents inherit the parent's manager via `AsyncJobManager.instance()`
 	// (set below), and any additional top-level session spun up in-process
@@ -1587,7 +1588,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// onJobComplete here.
 	const asyncJobManager =
 		!options.parentTaskPrefix && !AsyncJobManager.instance()
-			? new AsyncJobManager({ maxRunningJobs: asyncMaxJobs })
+			? new AsyncJobManager({
+					maxRunningJobs: asyncMaxJobs,
+					deliveryBatchMaxWaitMs: asyncBatchSettleMs,
+				})
 			: undefined;
 
 	const scopedAsyncJobManager = asyncJobManager ?? (options.parentTaskPrefix ? AsyncJobManager.instance() : undefined);
