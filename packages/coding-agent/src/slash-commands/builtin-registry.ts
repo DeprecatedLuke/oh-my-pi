@@ -635,6 +635,32 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
+		name: "gitcheckpoint",
+		description: "Commit outstanding work with the git tool",
+		aliases: ["checkpoint"],
+		inlineHint: "[reason]",
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const tool = runtime.session.getToolByName("git");
+			if (!tool) {
+				await runtime.output("git checkpoint is unavailable. Run inside a top-level Git-backed session.");
+				return commandConsumed();
+			}
+			const reason = command.args.trim() || "slash-invoked checkpoint";
+			try {
+				const result = await tool.execute("slash-gitcheckpoint", { op: "checkpoint", reason });
+				const text = result.content
+					.map(c => (c.type === "text" ? c.text : ""))
+					.join("\n")
+					.trim();
+				await runtime.output(text || "Checkpoint complete.");
+			} catch (err) {
+				await runtime.output(`Checkpoint failed: ${err instanceof Error ? err.message : String(err)}`);
+			}
+			return commandConsumed();
+		},
+	},
+	{
 		name: "computer",
 		description: "Toggle the native computer-use tool for this session",
 		acpDescription: "Toggle computer use",

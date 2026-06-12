@@ -2557,6 +2557,9 @@
 - Fixed JSON-mode startup notices (export/resume/session-picker messages) writing to stdout before the JSON event stream; they now route to stderr so stdout remains newline-delimited JSON.
 
 ## [16.0.4] - 2026-06-17
+### Added
+
+- Added a `git` tool (`op: "status" | "checkpoint"`) and `/gitcheckpoint` slash command (alias `/checkpoint`) for inspecting repository status and creating local WIP checkpoint commits across the root and unlinked nested repositories without shelling out. The tool is top-level only (subagents own no Git state) and generates a per-repo commit message with a fast model.
 
 ### Fixed
 
