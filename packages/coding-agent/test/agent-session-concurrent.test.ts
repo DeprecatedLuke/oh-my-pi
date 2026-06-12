@@ -1175,6 +1175,54 @@ describe("AgentSession concurrent prompt guard", () => {
 			await sessionB.dispose();
 		}
 	});
+
+	it("reports pending background jobs while one runs and clears once settled", async () => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-pending-bg.db"));
+		authStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models-pending-bg.yml"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		const settings = Settings.isolated();
+		const asyncJobManager = new AsyncJobManager({ retentionMs: 0, onJobComplete: async () => {} });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model, systemPrompt: ["Test"], tools: [] },
+			streamFn: createMockModel({ handler: () => ({ content: ["Done"] }) }).stream,
+		});
+		session = new AgentSession({
+			agent,
+			sessionManager: SessionManager.inMemory(),
+			settings,
+			modelRegistry,
+			agentId: "bg-owner",
+			ownedAsyncJobManager: asyncJobManager,
+		});
+
+		const release = Promise.withResolvers<void>();
+		try {
+			expect(session.hasPendingBackgroundJobs()).toBe(false);
+
+			asyncJobManager.register(
+				"bash",
+				"running",
+				async () => {
+					await release.promise;
+					return "done";
+				},
+				{ ownerId: "bg-owner" },
+			);
+			// A running job for this owner gates automated reruns.
+			expect(session.hasPendingBackgroundJobs()).toBe(true);
+
+			release.resolve();
+			await asyncJobManager.waitForAll();
+			expect(await asyncJobManager.drainDeliveries({ timeoutMs: 1_000 })).toBe(true);
+			// Settled and delivered: the gate clears so reruns may proceed.
+			expect(session.hasPendingBackgroundJobs()).toBe(false);
+		} finally {
+			release.resolve();
+		}
+	});
 });
 
 describe("AgentSession TTSR resume gate", () => {

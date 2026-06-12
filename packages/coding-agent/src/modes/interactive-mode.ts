@@ -1332,6 +1332,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		if ((this.editor.pendingImages?.length ?? 0) > 0) return;
 		const state = this.session.getGoalModeState();
 		if (!state?.enabled || state.goal.status !== "active") return;
+		// Background jobs still running: don't fire the goal continuation yet.
+		// Their completion delivers a follow-up turn whose agent_end re-schedules
+		// this, so the goal resumes once background work has settled.
+		if (this.session.hasPendingBackgroundJobs()) return;
 		const prompt = this.session.goalRuntime.buildContinuationPrompt();
 		if (!prompt) return;
 		this.#goalContinuationTimer = setTimeout(() => {
@@ -1351,6 +1355,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			if ((this.editor.pendingImages?.length ?? 0) > 0) return;
 			const latestState = this.session.getGoalModeState();
 			if (!latestState?.enabled || latestState.goal.status !== "active") return;
+			if (this.session.hasPendingBackgroundJobs()) return;
 			this.#goalContinuationTurnInFlight = true;
 			this.onInputCallback(
 				this.startPendingSubmission({
@@ -1370,7 +1375,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#isAutoSubmitBlocked(): boolean {
-		return this.session.isStreaming || this.session.isCompacting || this.session.hasPostPromptWork;
+		return (
+			this.session.isStreaming ||
+			this.session.isCompacting ||
+			this.session.hasPostPromptWork ||
+			this.session.hasPendingBackgroundJobs()
+		);
 	}
 
 	#submitLoopPromptWhenReady(prompt: string): void {

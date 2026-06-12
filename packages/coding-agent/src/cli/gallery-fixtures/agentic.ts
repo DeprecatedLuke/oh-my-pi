@@ -361,12 +361,11 @@ export const agenticFixtures: Record<string, GalleryFixture> = {
 		},
 	},
 
-	hub_jobs: {
-		label: "Hub jobs",
-		renderer: "hub",
-		// Streaming: waiting on a single job id; the second id is still arriving.
-		streamingArgs: { op: "wait", ids: ["job_a1"] },
-		args: { op: "wait", ids: ["job_a1", "job_b2", "job_c3"] },
+	job: {
+		label: "Job",
+		// Streaming: a list snapshot while job results are still arriving.
+		streamingArgs: { list: true },
+		args: { list: true },
 		result: {
 			content: [{ type: "text", text: "3 jobs settled." }],
 			details: {

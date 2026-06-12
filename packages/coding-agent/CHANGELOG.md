@@ -2562,6 +2562,10 @@
 - Added a `git` tool (`op: "status" | "checkpoint"`) and `/gitcheckpoint` slash command (alias `/checkpoint`) for inspecting repository status and creating local WIP checkpoint commits across the root and unlinked nested repositories without shelling out. The tool is top-level only (subagents own no Git state) and generates a per-repo commit message with a fast model.
 - Added batching of background async-job completions so multiple finished jobs land in one user turn instead of one turn per job: the job manager defers dispatching a completed job's delivery while sibling jobs are still running, then coalesces every due completion into a single dispatch. Task fan-out jobs (one `task` call) share a batch id, and a live same-batch sibling that keeps reporting progress extends the hold past the `async.batchSettleMs` cap (default `300000`), which then acts as a silence/hang bound. Set `async.batchSettleMs` to `0` to disable the extended window.
 
+### Changed
+
+- Automated turn restarts now wait for background jobs before re-prompting: goal-mode continuation, loop-mode auto-submit, autoresearch resume, and follow-up auto-continue all defer while this session has a background job running or a completed result not yet delivered. The job's completion lands as a follow-up turn that re-triggers the continuation, so a fan-out's results are incorporated before the next iteration. The `job` tool description and the `task`/orchestrate prompts now tell the agent to end its turn and wait for the automatic follow-up instead of polling.
+
 ### Fixed
 
 - Fixed RPC/ACP startup forcing todo settings back to host defaults, so project-level `todo.enabled`, `todo.reminders`, and `todo.eager` opt-outs now suppress protocol-mode todo prompt injection; enabled todo reminders are now persisted to the JSONL transcript so the log matches the model-visible context ([#2824](https://github.com/can1357/oh-my-pi/issues/2824)).
@@ -3259,6 +3263,10 @@
 - Fixed image generation ignoring `/login`-stored OpenRouter and Google API keys: provider selection and requests now resolve through the model registry (with env-var fallback) instead of environment variables only.
 - Fixed detached (`task` async spawn) progress snapshots repainting commit-eligible rows after the block leaves the live transcript region; later partial snapshots are dropped while the final completion snapshot still applies.
 - Fixed five consumers treating Zod tool-parameter schemas as plain JSON Schema objects, leaking schema-instance internals (`def`, `shape`, methods stringified as `undefined`) or silently reading nothing: `/dump` and the RPC `get_state` `dumpTools` payload now convert parameters through the same wire-schema conversion providers receive; context-usage token estimation no longer stringifies the Zod `def` tree (overcounting tool schema tokens in the status line); tool-discovery search indexing recovers `schemaKeys` from Zod tools (previously empty, weakening BM25 ranking); and the extension inspector panel renders Zod tool arguments instead of "(no arguments)".
+
+### Removed
+
+- Removed the `job` tool's `poll` operation and the `async.pollWaitDuration` setting. Background job results are delivered automatically as a follow-up turn, so the agent no longer blocks waiting on them; the `job` tool now only inspects (`list`) and cancels (`cancel`).
 
 ## [15.11.3] - 2026-06-11
 

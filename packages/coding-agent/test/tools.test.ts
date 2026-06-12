@@ -1671,7 +1671,8 @@ function b() {
 			});
 			const jobTool = new HubTool(session);
 
-			const jobId = manager.register("bash", "test job", async () => "success");
+			manager.register("bash", "test job", async () => "success");
+			await manager.waitForAll();
 
 			// Job is running, call poll
 			const resultPromise = jobTool.execute("test-call-poll-1", { op: "wait", ids: [jobId] });
@@ -1680,10 +1681,7 @@ function b() {
 			const result = await resultPromise;
 			expect(getTextOutput(result)).toContain("Completed");
 
-			// Wait for deliveries to be processed
 			await manager.drainDeliveries({ timeoutMs: 100 });
-
-			// If it correctly acknowledged, the delivery is suppressed.
 			expect(manager.hasPendingDeliveries()).toBe(false);
 		});
 

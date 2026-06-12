@@ -52,7 +52,7 @@ function createToolSession(asyncJobManager?: AsyncJobManager): ToolSession {
 		cwd: process.cwd(),
 		hasUI: false,
 		settings: {
-			get: (key: string) => (key === "async.pollWaitDuration" ? "5s" : undefined),
+			get: () => undefined,
 		},
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,
@@ -126,7 +126,7 @@ afterEach(async () => {
 });
 
 describe("async result yield queue delivery", () => {
-	test("job poll acknowledgement suppresses already staged completion", async () => {
+	test("job list acknowledgement suppresses already staged completion", async () => {
 		const harness = createHarness(true);
 		const jobId = harness.manager.register("bash", "race job", async () => "inline result");
 

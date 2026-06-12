@@ -1424,6 +1424,20 @@ export class AgentSession {
 		return this.#asyncJobManager;
 	}
 
+	/**
+	 * True when this session has background jobs still running or completed
+	 * results not yet delivered to the conversation. Automated turn restarts
+	 * (goal/loop/autoresearch continuation, follow-up auto-continue) gate on
+	 * this so they wait for background work to settle — its results land as a
+	 * follow-up turn — before re-prompting.
+	 */
+	hasPendingBackgroundJobs(): boolean {
+		const manager = this.#asyncJobManager;
+		if (!manager) return false;
+		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
+		return manager.getRunningJobs(ownerFilter).length > 0 || manager.hasPendingDeliveries(ownerFilter);
+	}
+
 	getAgentId(): string | undefined {
 		return this.#agentId;
 	}
@@ -5403,6 +5417,10 @@ export class AgentSession {
 		// existing context tail — which must itself be a valid provider tail. An injected
 		// non-conversational tail (advisor card → `developer`, bash/python execution) would make
 		// the first model call invalid, so leave the follow-up queued for the next explicit resume.
+		// Background jobs in flight: defer the eager follow-up continue so the
+		// turn waits for their results (delivered as a follow-up turn) before
+		// re-prompting. The queued follow-up still rides the next turn.
+		if (this.hasPendingBackgroundJobs()) return false;
 		const messages = this.agent.state.messages;
 		const last = messages[messages.length - 1];
 		return last?.role === "assistant" || last?.role === "toolResult";

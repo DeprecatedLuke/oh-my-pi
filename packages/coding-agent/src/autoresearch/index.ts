@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { AsyncJobManager } from "../async/job-manager";
 import type { ExtensionContext, ExtensionFactory } from "../extensibility/extensions";
 import * as git from "../utils/git";
 import commandResumeTemplate from "./command-resume.md" with { type: "text" };
@@ -262,6 +263,15 @@ export const createAutoresearchExtension: ExtensionFactory = api => {
 		if (!runtime.autoresearchMode) return;
 		if (ctx.hasPendingMessages()) {
 			runtime.autoResumeArmed = false;
+			return;
+		}
+		// Background jobs still running: don't resume autoresearch yet. Their
+		// completion delivers a follow-up turn whose agent_end re-runs this
+		// handler, so the run resumes once background work has settled. Leave
+		// autoResumeArmed / the pending-run cursor untouched so the resume
+		// intent survives the wait.
+		const jobManager = AsyncJobManager.instance();
+		if (jobManager && (jobManager.getRunningJobs().length > 0 || jobManager.hasPendingDeliveries())) {
 			return;
 		}
 		const { session } = await loadActiveSession(ctx);
