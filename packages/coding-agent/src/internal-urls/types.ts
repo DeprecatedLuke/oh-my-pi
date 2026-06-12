@@ -147,6 +147,11 @@ export interface WriteContext {
 	};
 }
 
+export interface WriteResult {
+	/** Optional human-readable status for tools to surface after a protocol write. */
+	text?: string;
+}
+
 /**
  * Handler for a specific internal URL scheme (e.g., agent://, memory://, skill://, xd://).
  */
@@ -178,7 +183,8 @@ export interface ProtocolHandler {
 	 * Handlers that omit this method are treated as read-only; the write tool
 	 * surfaces a clear "not writable" error when invoked against them.
 	 */
-	write?(url: InternalUrl, content: string, context?: WriteContext): Promise<void>;
+	// biome-ignore lint/suspicious/noConfusingVoidType: a write handler may surface a WriteResult status or nothing; void-returning handlers (vault/host-uris) cannot satisfy `| undefined` without a forced return.
+	write?(url: InternalUrl, content: string, context?: WriteContext): Promise<WriteResult | void>;
 	/**
 	 * Optional autocomplete hook. Returns candidate completions for the
 	 * host/path portion of a `scheme://` URL while the user composes a prompt.
