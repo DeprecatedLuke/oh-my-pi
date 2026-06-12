@@ -3565,3 +3565,87 @@ describe("deobfuscateAgentMessages (display restore)", () => {
 		expect(image.type === "image" && image.data).toBe(imageData);
 	});
 });
+
+describe("SecretObfuscator case hints", () => {
+	it("uses a shared base token with capitalization hints for case variants", () => {
+		const obfuscator = new SecretObfuscator([
+			{ type: "plain", content: "secret" },
+			{ type: "plain", content: "SECRET" },
+			{ type: "plain", content: "Secret" },
+			{ type: "plain", content: "SeCret" },
+		]);
+		const original = "secret SECRET Secret SeCret";
+		const obfuscated = obfuscator.obfuscate(original);
+		const tokens = obfuscated.match(/#[A-Z0-9]{4}:[ULCM]#/g);
+		if (!tokens) throw new Error("Expected capitalization-hinted placeholders");
+
+		expect(tokens).toHaveLength(4);
+		expect(new Set(tokens.map(token => token.slice(1, 5))).size).toBe(1);
+		expect(tokens[0]?.endsWith(":L#")).toBe(true);
+		expect(tokens[1]?.endsWith(":U#")).toBe(true);
+		expect(tokens[2]?.endsWith(":C#")).toBe(true);
+		expect(tokens[3]?.endsWith(":M#")).toBe(true);
+		expect(obfuscator.deobfuscate(obfuscated)).toBe(original);
+	});
+
+	it("falls back to a distinct random base when a capitalization hint would collide", () => {
+		const obfuscator = new SecretObfuscator([
+			{ type: "plain", content: "SeCret" },
+			{ type: "plain", content: "SecRet" },
+		]);
+		const original = "SeCret SecRet";
+		const obfuscated = obfuscator.obfuscate(original);
+		const tokens = obfuscated.match(/#[A-Z0-9]{4}:M#/g);
+		if (!tokens) throw new Error("Expected mixed-case placeholders");
+
+		expect(tokens).toHaveLength(2);
+		expect(new Set(tokens).size).toBe(2);
+		expect(obfuscator.deobfuscate(obfuscated)).toBe(original);
+	});
+});
+
+describe("SecretObfuscator friendlyName placeholders", () => {
+	it("prefixes a plain secret's placeholder with a sanitized uppercase friendlyName", () => {
+		const obf = new SecretObfuscator([{ type: "plain", content: "hunter2", friendlyName: "GitHub Token" }]);
+		const input = "login with hunter2 now";
+		const masked = obf.obfuscate(input);
+		const token = masked.match(/#GITHUBTOKEN_[A-Z0-9]{4}(?::[ULCM])?#/)?.[0];
+		if (!token) throw new Error("Expected a friendlyName-prefixed placeholder");
+		expect(masked).not.toContain("hunter2");
+		expect(obf.deobfuscate(masked)).toBe(input);
+	});
+
+	it("shares one casing hash across case variants under a friendlyName prefix", () => {
+		const obf = new SecretObfuscator([
+			{ type: "plain", content: "secret", friendlyName: "pw" },
+			{ type: "plain", content: "SECRET", friendlyName: "pw" },
+		]);
+		const input = "secret SECRET";
+		const masked = obf.obfuscate(input);
+		const tokens = masked.match(/#PW_[A-Z0-9]{4}:[ULCM]#/g);
+		if (!tokens) throw new Error("Expected friendlyName-prefixed hinted placeholders");
+		expect(tokens).toHaveLength(2);
+		const bases = tokens.map(token => /#PW_([A-Z0-9]{4})/.exec(token)?.[1]);
+		expect(new Set(bases).size).toBe(1);
+		expect(tokens[0]?.endsWith(":L#")).toBe(true);
+		expect(tokens[1]?.endsWith(":U#")).toBe(true);
+		expect(obf.deobfuscate(masked)).toBe(input);
+	});
+
+	it("applies the friendlyName to regex-discovered matches", () => {
+		const obf = new SecretObfuscator([{ type: "regex", content: "tok_[a-z0-9]+", friendlyName: "API Key" }]);
+		const input = "use tok_abc123 please";
+		const masked = obf.obfuscate(input);
+		expect(masked).toMatch(/#APIKEY_[A-Z0-9]{4}(?::[ULCM])?#/);
+		expect(masked).not.toContain("tok_abc123");
+		expect(obf.deobfuscate(masked)).toBe(input);
+	});
+
+	it("leaves the placeholder unprefixed when no friendlyName is set", () => {
+		const obf = new SecretObfuscator([{ type: "plain", content: "hunter2" }]);
+		const masked = obf.obfuscate("login with hunter2 now");
+		expect(masked).toMatch(/#[A-Z0-9]{4}(?::[ULCM])?#/);
+		expect(masked).not.toMatch(/#[A-Z0-9]+_[A-Z0-9]{4}/);
+		expect(obf.deobfuscate(masked)).toBe("login with hunter2 now");
+	});
+});

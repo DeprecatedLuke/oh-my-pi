@@ -221,6 +221,10 @@ function validateEntry(entry: unknown, filePath: string, index: number): entry i
 		logger.warn(`secrets.yml[${index}]: flags must be a string`, { path: filePath });
 		return false;
 	}
+	if (e.friendlyName !== undefined && typeof e.friendlyName !== "string") {
+		logger.warn(`secrets.yml[${index}]: friendlyName must be a string`, { path: filePath });
+		return false;
+	}
 	if (e.type === "regex") {
 		let regex: RegExp;
 		try {
