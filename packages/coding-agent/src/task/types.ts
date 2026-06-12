@@ -466,6 +466,30 @@ export interface AgentProgress {
 	inflightTaskDetails?: TaskToolDetails;
 }
 
+/** Status of a native patch captured/applied for an isolated task. */
+export type TaskPatchStatus = "pending" | "applied" | "conflicted" | "failed";
+
+/** A per-file conflict surfaced when a native patch could not be applied. */
+export interface TaskPatchConflict {
+	path: string;
+	reason: string;
+	expectedHash?: string;
+	actualHash?: string;
+}
+
+/** Summary of a native patch produced by the `patch-tool` merge strategy. */
+export interface TaskPatchSummary {
+	patchId: string;
+	status: TaskPatchStatus;
+	repoPath: string;
+	repoLabel: string;
+	uri: string;
+	message?: string;
+	commit?: string;
+	error?: string;
+	conflicts?: TaskPatchConflict[];
+}
+
 /** Result from a single agent execution */
 export interface SingleResult {
 	index: number;
@@ -518,6 +542,8 @@ export interface SingleResult {
 	branchBaseSha?: string;
 	/** Nested repo patches to apply after parent merge */
 	nestedPatches?: NestedRepoPatch[];
+	/** Native patches captured from isolated task output (patch-tool merge strategy). */
+	patches?: TaskPatchSummary[];
 	/** Data extracted by registered subprocess tool handlers (keyed by tool name) */
 	extractedToolData?: Record<string, unknown[]>;
 	/**

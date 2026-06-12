@@ -4410,16 +4410,22 @@ export const SETTINGS_SCHEMA = {
 
 	"task.isolation.merge": {
 		type: "enum",
-		values: ["patch", "branch"] as const,
+		values: ["patch", "branch", "patch-tool"] as const,
 		default: "patch",
 		ui: {
 			tab: "tasks",
 			group: "Isolation",
 			label: "Isolation Merge Strategy",
-			description: "How isolated task changes are integrated (patch apply or branch merge)",
+			description: "How isolated task changes are integrated (git apply, branch merge, or the native patch tool)",
 			options: [
 				{ value: "patch", label: "Patch", description: "Combine diffs and git apply" },
 				{ value: "branch", label: "Branch", description: "Commit per task, merge with --no-ff" },
+				{
+					value: "patch-tool",
+					label: "Patch tool",
+					description:
+						"Capture changes as native patches (patch://); auto-apply to clean repos, else surface for review",
+				},
 			],
 		},
 	},
