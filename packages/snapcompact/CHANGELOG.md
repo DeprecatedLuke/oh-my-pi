@@ -128,6 +128,9 @@
 ### Changed
 
 - **Changed the per-provider default shapes to the spacing-tuned cells.** The previous shapes were tuned on the SQuAD *prose* eval, where dense cells won; a new tool-result legibility benchmark (`research/toolbench.py` — real `search`/`read`/`find` output with structure-sensitive QA) showed the prose-era density erases the line numbers and indentation that code/search output depends on. Anthropic moves from `6x12-dim` to `11on16-bw` (opus-4.8 f1 .806 vs .755 for plain `8on16-bw` and .351 for `6x12-dim`, which fell below the OCR ~16px/char floor and abstained); OpenAI and Google move to `8on22-bw` (gemini-3.5-flash f1 .934 vs .807 for `8on16-bw` and .287 for `doc-8on16-sent-dim`; same leading win on gpt-5.5/gpt-5.4-mini). Kimi and GLM keep their measured `8on16-bw`. The bigger cells pack fewer chars per frame, so inline frame-swapping now breaks even at a larger tool-result size
+### Fixed
+
+- Reverted the 1932px "high-res" frame override for Claude Opus 4.7+/Fable/Mythos back to the safe 1568px family default. Anthropic downscales frames whose long edge exceeds 1568px, so the larger frame bought nothing on real Anthropic, while some Anthropic-compatible gateways reject oversized frames outright (`messages.N.content.M.image.source...` 400) instead of downscaling — which blocked compaction entirely. All Claude lines now render at 1568px.
 
 ## [15.12.1] - 2026-06-12
 
