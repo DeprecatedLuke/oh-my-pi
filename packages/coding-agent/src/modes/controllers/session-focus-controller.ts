@@ -113,5 +113,8 @@ export class SessionFocusController {
 		else setTerminalTitleState("idle");
 		this.ctx.updateEditorBorderColor();
 		this.ctx.ui.requestRender();
+		// Refresh the main-session background-jobs panel for the new focus:
+		// hidden while observing a subagent, restored on return to main.
+		this.ctx.eventController.refreshBackgroundJobs();
 	}
 }
