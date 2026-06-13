@@ -3566,6 +3566,55 @@ describe("deobfuscateAgentMessages (display restore)", () => {
 	});
 });
 
+describe("SecretObfuscator image payloads", () => {
+	it("never rewrites base64 image data when a secret coincidentally matches inside it", () => {
+		const secret = "S3cretToken";
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+		// A real PNG's base64 can contain the secret value as a byte run by
+		// pure coincidence. Substring-replacing it would splice a placeholder
+		// into the image and corrupt it (provider 400 on image.source).
+		const imageData = `iVBORw0KGgo${secret}AAANSUhEUgAA${secret}QmCC`;
+		const messages: Message[] = [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: `here is ${secret}` },
+					{ type: "image", data: imageData, mimeType: "image/png" },
+				],
+				timestamp: 1,
+			},
+		];
+
+		const result = obfuscateMessages(obfuscator, messages);
+		const content = result[0]?.content;
+		if (!Array.isArray(content)) throw new Error("expected array content");
+		const [textBlock, imageBlock] = content;
+
+		// Sibling text is still redacted...
+		expect(textBlock?.type).toBe("text");
+		if (textBlock?.type === "text") expect(textBlock.text).not.toContain(secret);
+		// ...but the binary image payload is preserved byte-for-byte.
+		expect(imageBlock?.type).toBe("image");
+		if (imageBlock?.type === "image") expect(imageBlock.data).toBe(imageData);
+	});
+
+	it("preserves wire-shape base64 image source data while redacting sibling fields", () => {
+		const secret = "S3cretToken";
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+		const data = `AAAA${secret}BBBB`;
+		const wire = {
+			type: "image",
+			source: { type: "base64", media_type: "image/png", data },
+			caption: `describes ${secret}`,
+		};
+
+		const out = obfuscator.obfuscateObject(wire);
+
+		expect(out.source.data).toBe(data);
+		expect(out.caption).not.toContain(secret);
+	});
+});
+
 describe("SecretObfuscator case hints", () => {
 	it("uses a shared base token with capitalization hints for case variants", () => {
 		const obfuscator = new SecretObfuscator([

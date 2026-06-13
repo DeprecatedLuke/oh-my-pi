@@ -336,13 +336,12 @@ export interface IdealShape {
  *  lines the mono evals measured; everything else falls back to the API
  *  family's winner at the standard 1568px frame. First match wins. */
 const MODEL_VARIANTS: readonly (readonly [RegExp, IdealShape])[] = [
-	// All Claude lines: 6x12-dim at the safe 1568px edge. Anthropic downscales
-	// frames whose long edge exceeds 1568px, and some Anthropic-compatible
-	// gateways reject oversized frames outright (`messages.N.content.M.image.
-	// source...`) instead of downscaling — which blocks compaction entirely.
-	// A 1932px "high-res" override for Opus 4.7+/Fable/Mythos was reverted for
-	// that reason: the larger frame is downscaled back to 1568 on real
-	// Anthropic anyway, so it bought nothing but a gateway-rejection risk.
+	// Opus 4.7+ and Fable/Mythos read high-res natively (2576px edge under a
+	// 4,784 visual-token cap → 1932px square sweet spot): same recall and
+	// cost as 1568, a third fewer frames (12 → 8 per 400k chars).
+	[/claude.*(fable|mythos)/i, { variant: "6x12-dim", frameSize: 1932 }],
+	[/claude-?opus-?4[.-][7-9]/i, { variant: "6x12-dim", frameSize: 1932 }],
+	// Older Claude lines downscale past 1568px — keep the safe size.
 	[/claude/i, { variant: "6x12-dim" }],
 	// Gemini 3.x bills a fixed 1,120-token budget per image regardless of
 	// pixels: 2048px packs more chars per frame at the same bill.

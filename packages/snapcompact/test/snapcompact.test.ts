@@ -273,17 +273,17 @@ describe("shape resolution", () => {
 	});
 
 	it("detects the ideal shape from the model id across gateways", () => {
-		// A Claude served through an OpenAI-compatible gateway keeps its own
-		// geometry (6x12-dim at the safe 1568px edge); billing follows the
-		// gateway family, computed for that frame size (32px patches × 1.2).
+		// A high-res Claude served through an OpenAI-compatible gateway keeps
+		// its own geometry AND its 1932px frame; billing follows the gateway
+		// family, computed for that frame size (32px patches × 1.2).
 		const claudeViaOpenRouter = snapcompact.resolveShape({
 			api: "openai-completions",
 			id: "anthropic/claude-fable-5",
 		});
 		expect(claudeViaOpenRouter.font).toBe("6x12");
 		expect(claudeViaOpenRouter.stopwordDim).toBe(true);
-		expect(claudeViaOpenRouter.frameSize).toBe(1568);
-		expect(claudeViaOpenRouter.frameTokenEstimate).toBe(Math.ceil(Math.ceil(1568 / 32) ** 2 * 1.2));
+		expect(claudeViaOpenRouter.frameSize).toBe(1932);
+		expect(claudeViaOpenRouter.frameTokenEstimate).toBe(Math.ceil(Math.ceil(1932 / 32) ** 2 * 1.2));
 		expect(claudeViaOpenRouter.imageDetail).toBe("original");
 
 		// Claude on Vertex must not inherit the Gemini shape; Gemini billing is
@@ -291,14 +291,12 @@ describe("shape resolution", () => {
 		const claudeOnVertex = snapcompact.resolveShape({ api: "google-vertex", id: "claude-fable-5@20250929" });
 		expect(claudeOnVertex.font).toBe("6x12");
 		expect(claudeOnVertex.columns).toBeUndefined();
-		expect(claudeOnVertex.frameSize).toBe(1568);
+		expect(claudeOnVertex.frameSize).toBe(1932);
 		expect(claudeOnVertex.frameTokenEstimate).toBe(snapcompact.SHAPES.google.frameTokenEstimate);
 
-		// All Claude lines now use the safe 1568px family default (the 1932px
-		// high-res override was reverted; Anthropic downscales past 1568 anyway).
-		expect(snapcompact.resolveShape({ api: "anthropic-messages", id: "claude-opus-4-8" })).toBe(
-			snapcompact.SHAPES.anthropic,
-		);
+		// High-res frames are reserved for the lines that read them natively;
+		// older Claude lines keep the safe 1568px family default.
+		expect(snapcompact.resolveShape({ api: "anthropic-messages", id: "claude-opus-4-8" }).frameSize).toBe(1932);
 		expect(snapcompact.resolveShape({ api: "anthropic-messages", id: "claude-3-5-sonnet" })).toBe(
 			snapcompact.SHAPES.anthropic,
 		);
