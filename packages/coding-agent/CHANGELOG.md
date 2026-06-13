@@ -2567,6 +2567,7 @@
 ### Changed
 
 - Automated turn restarts now wait for background jobs before re-prompting: goal-mode continuation, loop-mode auto-submit, autoresearch resume, and follow-up auto-continue all defer while this session has a background job running or a completed result not yet delivered. The job's completion lands as a follow-up turn that re-triggers the continuation, so a fan-out's results are incorporated before the next iteration. The `job` tool description and the `task`/orchestrate prompts now tell the agent to end its turn and wait for the automatic follow-up instead of polling.
+- Subagents granted the `issues` tool (the `reviewer`) now receive the catalogued issues (active and archived, with severity/status flags) injected into their system prompt at spawn, loaded from the project `.omp/issues/` store. The reviewer procedure cross-checks each candidate finding against this list, never re-files entries flagged `wontfix`/`duplicate` or shown `(archived)`, and edits an existing open issue instead of adding a duplicate — so repeat reviews stop re-reporting issues that are already tracked or settled.
 
 ### Fixed
 
