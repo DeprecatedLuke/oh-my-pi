@@ -154,7 +154,7 @@ describe("issues store: lifecycle", () => {
 		expect(moved.record.filePath).toContain(`${path.sep}correctness${path.sep}`);
 	});
 
-	it("archive moves to archive/<cat> and unarchive restores it", async () => {
+	it("archive moves to .archive/<cat> and unarchive restores it", async () => {
 		const { record } = await addIssue(tempDir, {
 			category: "security",
 			title: "Privilege leak",
@@ -165,7 +165,7 @@ describe("issues store: lifecycle", () => {
 		const archived = await archiveIssue(tempDir, record.id, { reason: "Fixed in #321" });
 		expect(archived.wasArchived).toBe(false);
 		expect(archived.record.archived).toBe(true);
-		expect(archived.record.filePath).toContain(`${path.sep}archive${path.sep}security${path.sep}`);
+		expect(archived.record.filePath).toContain(`${path.sep}.archive${path.sep}security${path.sep}`);
 		expect(archived.record.frontmatter.status).toBe("fixed");
 		expect(archived.record.frontmatter.archive_reason).toBe("Fixed in #321");
 		expect(await Bun.file(activePath).exists()).toBe(false);
@@ -207,7 +207,7 @@ describe("issues store: lifecycle", () => {
 		expect(archived.record.archived).toBe(true);
 		expect(archived.record.frontmatter.status).toBe("fixed");
 		expect(archived.record.frontmatter.archive_reason).toBe("handled in #99");
-		expect(archived.record.filePath).toContain(`${path.sep}archive${path.sep}security${path.sep}`);
+		expect(archived.record.filePath).toContain(`${path.sep}.archive${path.sep}security${path.sep}`);
 		expect(await Bun.file(activePath).exists()).toBe(false);
 
 		// Editing an archived issue is now allowed; metadata-only edits stay archived.
@@ -242,6 +242,19 @@ describe("issues store: lifecycle", () => {
 		expect(same.transitioned).toBe(false);
 		expect(same.record.archived).toBe(false);
 		expect(same.record.frontmatter.status).toBe("in-progress");
+	});
+
+	it("archives on any non-active status (wontfix, duplicate), not just fixed", async () => {
+		for (const status of ["wontfix", "duplicate"] as const) {
+			const { record } = await addIssue(tempDir, { category: "security", title: `Close ${status}`, body: "B." });
+			const res = await editVia(tempDir, record.id, fm => {
+				fm.status = status;
+			});
+			expect(res.transitioned).toBe(true);
+			expect(res.record.archived).toBe(true);
+			expect(res.record.frontmatter.status).toBe(status);
+			expect(res.record.filePath).toContain(`${path.sep}.archive${path.sep}`);
+		}
 	});
 });
 
@@ -346,7 +359,7 @@ describe("issues store: empty category directory pruning", () => {
 	});
 
 	it("removes the archived category dir and the archive root when the last archived issue is unarchived", async () => {
-		const archiveRoot = path.join(getIssuesRoot(tempDir), "archive");
+		const archiveRoot = path.join(getIssuesRoot(tempDir), ".archive");
 		const { record } = await addIssue(tempDir, { category: "security", title: "Round trip", body: "B." });
 		await archiveIssue(tempDir, record.id);
 		expect(await dirExists(path.join(archiveRoot, "security"))).toBe(true);
@@ -358,7 +371,7 @@ describe("issues store: empty category directory pruning", () => {
 	});
 
 	it("keeps the archive root when another archived category remains", async () => {
-		const archiveRoot = path.join(getIssuesRoot(tempDir), "archive");
+		const archiveRoot = path.join(getIssuesRoot(tempDir), ".archive");
 		const a = await addIssue(tempDir, { category: "security", title: "A", body: "B." });
 		const b = await addIssue(tempDir, { category: "correctness", title: "B", body: "B." });
 		await archiveIssue(tempDir, a.record.id);
@@ -370,5 +383,48 @@ describe("issues store: empty category directory pruning", () => {
 		expect(await dirExists(path.join(archiveRoot, "security"))).toBe(false);
 		expect(await dirExists(path.join(archiveRoot, "correctness"))).toBe(true);
 		expect(await dirExists(archiveRoot)).toBe(true);
+	});
+});
+
+describe("issues store: legacy archive migration", () => {
+	async function dirExists(dir: string): Promise<boolean> {
+		try {
+			return (await fs.stat(dir)).isDirectory();
+		} catch {
+			return false;
+		}
+	}
+
+	it("renames a legacy archive/ directory to .archive/ on first access", async () => {
+		const root = getIssuesRoot(tempDir);
+		const { record } = await addIssue(tempDir, { category: "security", title: "Legacy archived", body: "B." });
+		await archiveIssue(tempDir, record.id);
+		// Simulate a pre-migration store: the archive dir is the bare `archive/`.
+		await fs.rename(path.join(root, ".archive"), path.join(root, "archive"));
+		expect(await dirExists(path.join(root, "archive"))).toBe(true);
+		expect(await dirExists(path.join(root, ".archive"))).toBe(false);
+
+		// Any read triggers the migration through scanFilesystem.
+		const found = await findIssueById(tempDir, record.id);
+		expect(found?.archived).toBe(true);
+		expect(found?.frontmatter.title).toBe("Legacy archived");
+		expect(await dirExists(path.join(root, ".archive"))).toBe(true);
+		expect(await dirExists(path.join(root, "archive"))).toBe(false);
+	});
+
+	it("leaves a legacy archive/ untouched when .archive/ already exists, and never lists it as a category", async () => {
+		const root = getIssuesRoot(tempDir);
+		const live = await addIssue(tempDir, { category: "security", title: "Live one", body: "B." });
+		const archived = await addIssue(tempDir, { category: "security", title: "Archived one", body: "B." });
+		await archiveIssue(tempDir, archived.record.id);
+		// A stray legacy `archive/` alongside the canonical `.archive/`.
+		await fs.mkdir(path.join(root, "archive", "security"), { recursive: true });
+
+		const active = await listIssues(tempDir, { archived: false });
+		// The stray `archive/` dir must never surface as an active category.
+		expect(active.map(s => s.category)).not.toContain("archive");
+		expect(active.map(s => s.id)).toEqual([live.record.id]);
+		// Canonical `.archive/` preserved (not clobbered by the stray legacy dir).
+		expect(await dirExists(path.join(root, ".archive"))).toBe(true);
 	});
 });

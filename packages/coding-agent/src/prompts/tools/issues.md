@@ -3,7 +3,7 @@ Project-local issue tracker. Persists findings to `.omp/issues/<category>/<id>-<
 <instruction>
 The `issues` tool creates and lifecycles issues; **editing an existing issue (body or metadata) is done by rewriting its `issues://<id>.md` file with the `write` tool**, not through this tool. Pick the op via `op`:
 - `add` — Create a new issue. Required: `category`, `title`, `body`. Optional: `severity` (`low|medium|high|critical`), `status` (`open|in-progress|fixed|wontfix|duplicate`; default `open`), `location[]` (paths or `path:line` refs), `extra` (free-form frontmatter merged into the file).
-- `archive` — Move an active issue to `.omp/issues/archive/<category>/`. Required: `id`. Optional: `reason` (recorded in frontmatter), `status` (default `fixed`). A shortcut for setting a terminal status that also records a `reason`.
+- `archive` — Move an active issue to `.omp/issues/.archive/<category>/`. Required: `id`. Optional: `reason` (recorded in frontmatter), `status` (default `fixed`). A shortcut for setting a terminal status that also records a `reason`.
 - `unarchive` — Move an archived issue back to active. Required: `id`. Optional: `status` (default `open`). A shortcut for reopening (setting a non-terminal status).
 - `list` — Return a summary listing. All params optional: `category`, `archived` (`true`/`false`; default both), `severity`, `status`, `query` (substring search across title/body/frontmatter), `limit`.
 

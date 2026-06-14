@@ -3,7 +3,7 @@
  *
  * Layout under `<cwd>/.omp/issues`:
  *   <category>/<id>-<slug>.md       active issues
- *   archive/<category>/<id>-<slug>.md  archived issues
+ *   .archive/<category>/<id>-<slug>.md archived issues
  *   .next-id                        single-line decimal counter
  *
  * The id is **global**: one counter across every category and across
@@ -88,9 +88,10 @@ export interface ListIssuesOptions {
 }
 
 const ISSUES_DIR = path.join(".omp", "issues");
-const ARCHIVE_SEGMENT = "archive";
+const ARCHIVE_SEGMENT = ".archive";
+const LEGACY_ARCHIVE_SEGMENT = "archive";
 const COUNTER_FILE = ".next-id";
-const RESERVED_SEGMENTS = new Set([ARCHIVE_SEGMENT, ".", "..", ""]);
+const RESERVED_SEGMENTS = new Set([ARCHIVE_SEGMENT, LEGACY_ARCHIVE_SEGMENT, ".", "..", ""]);
 
 const SLUG_MAX_WORDS = 5;
 const SLUG_MAX_CHARS = 50;
@@ -176,6 +177,31 @@ async function listMarkdownFiles(dir: string): Promise<string[]> {
 	}
 }
 
+/**
+ * Migrate a legacy `archive/` directory to the hidden `.archive/` layout. Runs
+ * before every scan so all reads/writes see the canonical archive root. Only
+ * renames when the legacy dir exists and `.archive/` does not, so a
+ * partially-migrated or hand-edited store is never clobbered (a leftover legacy
+ * dir is also filtered out of active categories as a safeguard).
+ */
+async function migrateLegacyArchive(cwd: string): Promise<void> {
+	const legacyRoot = path.join(getIssuesRoot(cwd), LEGACY_ARCHIVE_SEGMENT);
+	const archiveRoot = getArchiveRoot(cwd);
+	try {
+		if (!(await fs.stat(legacyRoot)).isDirectory()) return;
+	} catch (err) {
+		if (isEnoent(err)) return;
+		throw err;
+	}
+	try {
+		await fs.stat(archiveRoot);
+		return; // `.archive/` already present — leave the legacy dir untouched.
+	} catch (err) {
+		if (!isEnoent(err)) throw err;
+	}
+	await fs.rename(legacyRoot, archiveRoot);
+}
+
 interface FilesystemScan {
 	/** All issue records found, regardless of archive state. */
 	records: Array<{ id: number; filePath: string; filename: string; category: string; archived: boolean }>;
@@ -184,12 +210,15 @@ interface FilesystemScan {
 }
 
 async function scanFilesystem(cwd: string): Promise<FilesystemScan> {
+	await migrateLegacyArchive(cwd);
 	const issuesRoot = getIssuesRoot(cwd);
 	const archiveRoot = getArchiveRoot(cwd);
 	const records: FilesystemScan["records"] = [];
 	let maxId = 0;
 
-	const activeCategories = (await listSubdirs(issuesRoot)).filter(name => name !== ARCHIVE_SEGMENT);
+	const activeCategories = (await listSubdirs(issuesRoot)).filter(
+		name => name !== ARCHIVE_SEGMENT && name !== LEGACY_ARCHIVE_SEGMENT,
+	);
 	for (const category of activeCategories) {
 		const dir = path.join(issuesRoot, category);
 		const files = await listMarkdownFiles(dir);
@@ -501,12 +530,13 @@ export interface EditIssueResult {
 }
 
 /**
- * Statuses that mean "this issue is closed and belongs in the archive". A
- * status edit that crosses this boundary auto-moves the file. Mirrors the
- * defaults used by {@link archiveIssue} (status: fixed) and {@link unarchiveIssue}
- * (status: open).
+ * Statuses that keep an issue on the active side. Anything else — `fixed`,
+ * `wontfix`, `duplicate`, or any future non-active status — belongs in the
+ * archive, so a status edit that leaves this set auto-moves the file. Mirrors
+ * the defaults used by {@link archiveIssue} (status: fixed) and
+ * {@link unarchiveIssue} (status: open).
  */
-const TERMINAL_STATUSES: ReadonlySet<IssueStatus> = new Set(["fixed", "wontfix", "duplicate"]);
+const ACTIVE_STATUSES: ReadonlySet<IssueStatus> = new Set(["open", "in-progress"]);
 
 /** Statuses accepted in issue frontmatter (the metadata-edit validation set). */
 const ISSUE_STATUSES: ReadonlySet<string> = new Set<IssueStatus>([
@@ -521,7 +551,7 @@ const ISSUE_SEVERITIES: ReadonlySet<string> = new Set<IssueSeverity>(["low", "me
 
 function shouldBeArchived(status: IssueStatus | undefined, currentArchived: boolean): boolean {
 	if (!status) return currentArchived;
-	return TERMINAL_STATUSES.has(status);
+	return !ACTIVE_STATUSES.has(status);
 }
 
 /**

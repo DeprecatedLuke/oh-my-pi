@@ -104,7 +104,7 @@ describe("IssuesProtocolHandler", () => {
 			cwd: tempDir,
 		});
 		expect(found.content).toContain("Quick fix");
-		expect(found.sourcePath).toContain(`${path.sep}archive${path.sep}`);
+		expect(found.sourcePath).toContain(`${path.sep}.archive${path.sep}`);
 	});
 
 	it("rejects malformed URLs with a clear message", async () => {
