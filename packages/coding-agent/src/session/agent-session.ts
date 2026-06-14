@@ -4217,6 +4217,26 @@ export class AgentSession {
 		return this.#providerBoundary.convertToLlmForSideRequest(messages);
 	}
 
+	/**
+	 * Build a provider-format context (system prompt + converted messages)
+	 * mirroring a real outbound turn, with the session's existing secret
+	 * obfuscation applied. Used by `/fix-refusal` to re-probe the model.
+	 */
+	buildSideRequestContext(messages: AgentMessage[]): { systemPrompt: string[]; messages: Message[] } {
+		return {
+			systemPrompt: this.#obfuscateForProvider(this.systemPrompt),
+			messages: this.#convertToLlmForSideRequest(messages),
+		};
+	}
+
+	/**
+	 * Swap the active secret obfuscator so freshly loaded secrets apply
+	 * without a restart. Used by `/fix-refusal` after writing secrets-managed.yml.
+	 */
+	setObfuscator(obfuscator: SecretObfuscator | undefined): void {
+		this.#obfuscator = obfuscator;
+	}
+
 	/** Convert session messages using the same pre-LLM pipeline as the active session. */
 	async convertMessagesToLlm(messages: AgentMessage[], signal?: AbortSignal): Promise<Message[]> {
 		return await this.#providerBoundary.convertMessagesToLlm(messages, signal);

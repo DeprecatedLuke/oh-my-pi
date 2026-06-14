@@ -285,6 +285,8 @@ export interface InteractiveModeContext {
 	setWorkingMessage(message?: string): void;
 	applyPendingWorkingMessage(): void;
 	ensureLoadingAnimation(): void;
+	/** Stop and tear down the loading spinner started by {@link ensureLoadingAnimation}. */
+	stopLoadingAnimation(): void;
 	startPendingSubmission(input: {
 		text: string;
 		images?: ImageContent[];

@@ -4776,6 +4776,18 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"secrets.autoFixRefusal": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "providers",
+			group: "Privacy",
+			label: "Auto Fix Refusal",
+			description:
+				"When the model refuses, automatically run /fix-refusal (needs the `uncensored` model role) and re-send the prompt",
+		},
+	},
+
 	// Provider selection
 	"providers.ollama-cloud.maxConcurrency": {
 		type: "number",

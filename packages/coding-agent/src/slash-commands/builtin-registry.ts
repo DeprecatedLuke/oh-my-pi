@@ -56,6 +56,7 @@ import { copyToClipboard } from "../utils/clipboard";
 import type { InspectImageMode } from "../utils/inspect-image-mode";
 import { CollabQrCodeComponent } from "./helpers/collab-qrcode";
 import { buildContextReportText } from "./helpers/context-report";
+import { createTuiFixRefusalUi, executeFixRefusal } from "./helpers/fix-refusal";
 import { formatDuration } from "./helpers/format";
 import { createMarketplaceManager } from "./helpers/marketplace-manager";
 import { handleMcpAcp } from "./helpers/mcp";
@@ -963,6 +964,41 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: async (_command, runtime) => {
 			await runtime.ctx.handleShareCommand();
 			runtime.ctx.editor.setText("");
+		},
+	},
+	{
+		name: "fix-refusal",
+		description: "Mask whatever made the model refuse, then save the redaction patterns",
+		handleTui: async (_command, runtime) => {
+			const ctx = runtime.ctx;
+			ctx.editor.setText("");
+			const ui = createTuiFixRefusalUi(ctx);
+			try {
+				await executeFixRefusal({
+					session: ctx.session,
+					settings: ctx.settings,
+					cwd: ctx.sessionManager.getCwd(),
+					ui,
+				});
+			} catch (err) {
+				ui.step(`Failed: ${errorMessage(err)}`);
+			} finally {
+				ui.done();
+			}
+			return commandConsumed();
+		},
+		handle: async (_command, runtime) => {
+			try {
+				await executeFixRefusal({
+					session: runtime.session,
+					settings: runtime.settings,
+					cwd: runtime.cwd,
+					ui: { step: line => void runtime.output(line), working: () => {} },
+				});
+			} catch (err) {
+				await runtime.output(`/fix-refusal failed: ${errorMessage(err)}`);
+			}
+			return commandConsumed();
 		},
 	},
 	{

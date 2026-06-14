@@ -94,6 +94,7 @@ async function readPlaceholderKeyFile(keyPath: string, retry: boolean): Promise<
 
 type RawSecretEntry = Omit<SecretEntry, "friendlyName"> & { friendlyName?: unknown };
 
+export * from "./fix-refusal-state";
 export {
 	deobfuscateSessionContext,
 	deobfuscateToolArguments,
@@ -105,24 +106,98 @@ export {
 	secretEntryNeedsPlaceholderKey,
 } from "./obfuscator";
 
+/** Hand-authored secrets file basename (`<scope>/secrets.yml`). */
+const SECRETS_BASENAME = "secrets.yml";
+/** Machine-managed secrets file basename, written by `/fix-refusal`. */
+export const MANAGED_SECRETS_BASENAME = "secrets-managed.yml";
+
 /**
- * Load secrets from project-local and global secrets.yml files.
- * Project-local entries override global entries with matching content.
+ * Load secrets from the global and project-local `secrets.yml` files plus their
+ * machine-managed `secrets-managed.yml` siblings (written by `/fix-refusal`).
+ * Later files override earlier ones by content, so within a scope managed
+ * entries override hand-authored ones, and project entries override global.
  */
 export async function loadSecrets(cwd: string, agentDir: string): Promise<SecretEntry[]> {
-	const projectPath = path.join(cwd, ".omp", "secrets.yml");
-	const globalPath = path.join(agentDir, "secrets.yml");
+	const files = [
+		path.join(agentDir, SECRETS_BASENAME),
+		path.join(agentDir, MANAGED_SECRETS_BASENAME),
+		path.join(cwd, ".omp", SECRETS_BASENAME),
+		path.join(cwd, ".omp", MANAGED_SECRETS_BASENAME),
+	];
+	const groups = await Promise.all(files.map(loadSecretsFile));
+	const byContent = new Map<string, SecretEntry>();
+	for (const group of groups) {
+		for (const entry of group) byContent.set(entry.content, entry);
+	}
+	return [...byContent.values()];
+}
 
-	const globalEntries = await loadSecretsFile(globalPath);
-	const projectEntries = await loadSecretsFile(projectPath);
+/** Outcome of {@link appendManagedSecrets}. */
+export interface AppendManagedSecretsResult {
+	/** Absolute path of the managed secrets file written. */
+	path: string;
+	/** Number of entries newly appended (already-present ones are skipped). */
+	added: number;
+	/** Total entry count in the file after the write. */
+	total: number;
+}
 
-	if (globalEntries.length === 0) return projectEntries;
-	if (projectEntries.length === 0) return globalEntries;
+/**
+ * Append regex secret entries to the global machine-managed secrets file
+ * (`<agentDir>/secrets-managed.yml`), preserving existing raw entries. Entries
+ * whose (type, content, flags) triple already exists are skipped so repeated
+ * `/fix-refusal` runs never duplicate. Returns the path and counts.
+ */
+export async function appendManagedSecrets(
+	agentDir: string,
+	entries: SecretEntry[],
+): Promise<AppendManagedSecretsResult> {
+	const filePath = path.join(agentDir, MANAGED_SECRETS_BASENAME);
+	let raw: unknown[] = [];
+	try {
+		const parsed = YAML.parse(await Bun.file(filePath).text());
+		if (Array.isArray(parsed)) raw = parsed;
+	} catch (err) {
+		if (!isEnoent(err)) throw err;
+	}
 
-	// Merge: project overrides global by content match
-	const projectContents = new Set(projectEntries.map(e => e.content));
-	const merged = [...globalEntries.filter(e => !projectContents.has(e.content)), ...projectEntries];
-	return merged;
+	const seen = new Set<string>();
+	for (const item of raw) {
+		if (item !== null && typeof item === "object") {
+			const e = item as Record<string, unknown>;
+			if (typeof e.content === "string") seen.add(secretKey(String(e.type), e.content, e.flags));
+		}
+	}
+
+	const additions: Record<string, unknown>[] = [];
+	for (const entry of entries) {
+		const key = secretKey(entry.type, entry.content, entry.flags);
+		if (seen.has(key)) continue;
+		seen.add(key);
+		additions.push(toManagedRecord(entry));
+	}
+
+	if (additions.length === 0) return { path: filePath, added: 0, total: raw.length };
+	const merged = [...raw, ...additions];
+	await Bun.write(filePath, YAML.stringify(merged, null, 2));
+	return { path: filePath, added: additions.length, total: merged.length };
+}
+
+function secretKey(type: string, content: string, flags: unknown): string {
+	return `${type}\u0000${content}\u0000${typeof flags === "string" ? flags : ""}`;
+}
+
+/** Serialize a {@link SecretEntry} to a minimal YAML record (omitting empty optionals). */
+function toManagedRecord(entry: SecretEntry): Record<string, unknown> {
+	const record: Record<string, unknown> = {
+		type: entry.type,
+		content: entry.content,
+		mode: entry.mode ?? "obfuscate",
+	};
+	if (entry.flags) record.flags = entry.flags;
+	if (entry.friendlyName) record.friendlyName = entry.friendlyName;
+	if (entry.replacement) record.replacement = entry.replacement;
+	return record;
 }
 
 /** Minimum env var value length to consider as a secret. */
