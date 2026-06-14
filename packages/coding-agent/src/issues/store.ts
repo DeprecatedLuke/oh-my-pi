@@ -18,7 +18,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isEnoent, parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { isEnoent, isEnotempty, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 
 /** Severity bucket; matches the echophone ISSUES.md convention. */
@@ -523,6 +523,41 @@ function shouldBeArchived(status: IssueStatus | undefined, currentArchived: bool
 	return TERMINAL_STATUSES.has(status);
 }
 
+/**
+ * Remove a now-empty category directory after its last issue moved out. The
+ * issues/archive roots themselves are preserved (they anchor the tracker and
+ * hold the counter file); only per-category subdirectories are pruned, plus the
+ * archive root once its last category is gone. `rmdir` (non-recursive) only
+ * succeeds on an empty dir, so a category that still holds issues — or a same-dir
+ * slug rename, where the new file already landed — fails atomically with
+ * ENOTEMPTY and is left intact. Best-effort: a failure to prune never fails the
+ * move that already succeeded.
+ */
+async function pruneEmptyCategoryDir(cwd: string, categoryDir: string): Promise<void> {
+	const issuesRoot = getIssuesRoot(cwd);
+	const archiveRoot = getArchiveRoot(cwd);
+	// Never prune the roots via the category path (the archive root is handled
+	// as a follow-up below); only a true per-category subdirectory is eligible.
+	if (categoryDir === issuesRoot || categoryDir === archiveRoot) return;
+	try {
+		await fs.rmdir(categoryDir);
+	} catch (err) {
+		if (isEnotempty(err) || isEnoent(err)) return;
+		throw err;
+	}
+	// An archived category sits under the archive root; once the last category
+	// is pruned the archive root is empty too, so retire it (it is recreated on
+	// demand by the next archive). The issues root is never pruned.
+	if (path.dirname(categoryDir) === archiveRoot) {
+		try {
+			await fs.rmdir(archiveRoot);
+		} catch (err) {
+			if (isEnotempty(err) || isEnoent(err)) return;
+			throw err;
+		}
+	}
+}
+
 export async function editIssue(cwd: string, input: EditIssueInput): Promise<EditIssueResult> {
 	const current = await findIssueById(cwd, input.id);
 	if (!current) {
@@ -568,6 +603,8 @@ export async function editIssue(cwd: string, input: EditIssueInput): Promise<Edi
 	if (nextPath !== current.filePath) {
 		await Bun.write(nextPath, content);
 		await fs.rm(current.filePath, { force: true });
+		// A cross-category/archive move can leave the source category empty.
+		await pruneEmptyCategoryDir(cwd, path.dirname(current.filePath));
 	} else {
 		await Bun.write(current.filePath, content);
 	}
@@ -608,6 +645,8 @@ export async function archiveIssue(
 	const content = serializeIssue(frontmatter, current.body);
 	await Bun.write(targetPath, content);
 	await fs.rm(current.filePath, { force: true });
+	// Archiving the last active issue in a category empties its dir.
+	await pruneEmptyCategoryDir(cwd, path.dirname(current.filePath));
 
 	const record = await readIssueFromPath(targetPath, current.id, current.category, true);
 	return { record, wasArchived: false };
@@ -643,6 +682,9 @@ export async function unarchiveIssue(
 	const content = serializeIssue(frontmatter, current.body);
 	await Bun.write(targetPath, content);
 	await fs.rm(current.filePath, { force: true });
+	// Unarchiving the last issue in an archived category empties its dir (and
+	// possibly the archive root, which `pruneEmptyCategoryDir` handles).
+	await pruneEmptyCategoryDir(cwd, path.dirname(current.filePath));
 
 	const record = await readIssueFromPath(targetPath, current.id, current.category, false);
 	return { record, wasActive: false };

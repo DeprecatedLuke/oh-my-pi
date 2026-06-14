@@ -276,3 +276,80 @@ describe("issues store: listing + filtering", () => {
 		expect(limited[0].id).toBe(c.record.id);
 	});
 });
+
+describe("issues store: empty category directory pruning", () => {
+	async function dirExists(dir: string): Promise<boolean> {
+		try {
+			const stat = await fs.stat(dir);
+			return stat.isDirectory();
+		} catch {
+			return false;
+		}
+	}
+
+	it("removes the active category dir when its last issue is archived, keeping siblings", async () => {
+		const root = getIssuesRoot(tempDir);
+		const security = await addIssue(tempDir, { category: "security", title: "Lone", body: "B." });
+		const correctnessA = await addIssue(tempDir, { category: "correctness", title: "Keep A", body: "B." });
+		await addIssue(tempDir, { category: "correctness", title: "Keep B", body: "B." });
+
+		await archiveIssue(tempDir, security.record.id);
+		// security had a single issue → its active dir is gone.
+		expect(await dirExists(path.join(root, "security"))).toBe(false);
+		// correctness still holds an issue → untouched.
+		expect(await dirExists(path.join(root, "correctness"))).toBe(true);
+
+		// Archiving one of two issues in a category must NOT prune it.
+		await archiveIssue(tempDir, correctnessA.record.id);
+		expect(await dirExists(path.join(root, "correctness"))).toBe(true);
+		// The issues root itself is never pruned (anchors the counter + archive).
+		expect(await dirExists(root)).toBe(true);
+	});
+
+	it("removes the source category dir on a cross-category move", async () => {
+		const root = getIssuesRoot(tempDir);
+		const { record } = await addIssue(tempDir, { category: "security", title: "Movable", body: "B." });
+		expect(await dirExists(path.join(root, "security"))).toBe(true);
+
+		await editIssue(tempDir, { id: record.id, category: "correctness" });
+		expect(await dirExists(path.join(root, "security"))).toBe(false);
+		expect(await dirExists(path.join(root, "correctness"))).toBe(true);
+	});
+
+	it("keeps the category dir on a same-category slug rename", async () => {
+		const root = getIssuesRoot(tempDir);
+		const { record } = await addIssue(tempDir, { category: "security", title: "Old name", body: "B." });
+
+		await editIssue(tempDir, { id: record.id, title: "New name entirely" });
+		// The renamed file still lives in security/ → dir must survive (the new
+		// file landed before the old one was removed, so rmdir hits ENOTEMPTY).
+		expect(await dirExists(path.join(root, "security"))).toBe(true);
+	});
+
+	it("removes the archived category dir and the archive root when the last archived issue is unarchived", async () => {
+		const archiveRoot = path.join(getIssuesRoot(tempDir), "archive");
+		const { record } = await addIssue(tempDir, { category: "security", title: "Round trip", body: "B." });
+		await archiveIssue(tempDir, record.id);
+		expect(await dirExists(path.join(archiveRoot, "security"))).toBe(true);
+
+		await unarchiveIssue(tempDir, record.id);
+		// Archived category emptied → pruned; archive root now empty → also pruned.
+		expect(await dirExists(path.join(archiveRoot, "security"))).toBe(false);
+		expect(await dirExists(archiveRoot)).toBe(false);
+	});
+
+	it("keeps the archive root when another archived category remains", async () => {
+		const archiveRoot = path.join(getIssuesRoot(tempDir), "archive");
+		const a = await addIssue(tempDir, { category: "security", title: "A", body: "B." });
+		const b = await addIssue(tempDir, { category: "correctness", title: "B", body: "B." });
+		await archiveIssue(tempDir, a.record.id);
+		await archiveIssue(tempDir, b.record.id);
+
+		await unarchiveIssue(tempDir, a.record.id);
+		// security archive dir emptied → pruned, but correctness archive remains,
+		// so the archive root must survive.
+		expect(await dirExists(path.join(archiveRoot, "security"))).toBe(false);
+		expect(await dirExists(path.join(archiveRoot, "correctness"))).toBe(true);
+		expect(await dirExists(archiveRoot)).toBe(true);
+	});
+});

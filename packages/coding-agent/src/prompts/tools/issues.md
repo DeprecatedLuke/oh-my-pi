@@ -22,6 +22,6 @@ Read individual issues via the `issues://<filename>.md` URL (e.g. `issues://14-f
 - Categories are kebab-case (`security`, `network-isolation`, `data-correctness`). The reserved name `archive` is rejected.
 - Titles are short imperative phrases (~5-10 words); the slug is derived from the first 5 alphanumeric words.
 - Bodies are markdown. Recommended sections: a short description paragraph, then a `## Fix` or `## Recommendation` numbered list.
-- Use `archive` once the underlying defect is verified fixed (or won't-fix). Leave `status: in-progress` for items being worked on.
+- Use `archive` once the underlying defect is verified fixed (or won't-fix). Leave `status: in-progress` for items being actively worked on this session — an in-progress issue triggers an end-of-turn reminder, so move it to a terminal status (fixed/archived) when done or back to `open` when you set it down.
 - Use `edit` (or `archive`) to close an issue. Use `edit` with `status: open|in-progress` (or `unarchive`) to bring an archived one back.
 </conventions>
