@@ -550,6 +550,9 @@
 ### Fixed
 
 - Fixed issue #2088 viewport flash and repeated full rewrites during rapid terminal drags outside multiplexers by replaying the full transcript only after the resize settle window
+### Fixed
+
+- Detect tmux/screen via the `TERM` prefix in `isMultiplexerSession()`, not just the `TMUX`/`STY`/`ZELLIJ` env vars. When the multiplexer env was stripped but `TERM=tmux-256color`/`screen-*` survived (`sudo` without `-E`, `su`, env-sanitizing launchers/ssh), the renderer misclassified the pane as a direct terminal and emitted ED3 (`CSI 3 J`) on resize/replace/`resetDisplay`, which wipes tmux pane history — scrollback only reappeared after a full rerender (Ctrl+L). The check now matches every sibling multiplexer detector (`shouldEnableSynchronizedOutputByDefault`, `detectRectangularSgrSupport`, `getFallbackImageProtocol`).
 
 ## [15.12.4] - 2026-06-13
 
