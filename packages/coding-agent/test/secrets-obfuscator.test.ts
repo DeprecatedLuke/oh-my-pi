@@ -3613,6 +3613,34 @@ describe("SecretObfuscator image payloads", () => {
 		expect(out.source.data).toBe(data);
 		expect(out.caption).not.toContain(secret);
 	});
+
+	it("never rewrites snapcompact frame data carried in compaction preserveData", () => {
+		// Regression: snapcompact frames live under a compaction entry's
+		// `preserveData["snapcompact"].frames[]` as `{ data, mimeType, cols, ... }`
+		// with NO `type` field, and the whole preserveData is deep-obfuscated
+		// before each compaction. Keying the skip on `type` alone let a secret
+		// match inside the base64 splice a placeholder into a kept frame, which
+		// then shipped on the next request and tripped a provider 400 on
+		// `messages[n].content[m].image.source.base64`.
+		const secret = "BusMaster";
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret, friendlyName: "busmaster" }]);
+		const frameData = `iVBORw0KGgoAAAANSUhE${secret}UgAAB4wZkbA5Px44`;
+		const preserveData = {
+			snapcompact: {
+				frames: [{ data: frameData, mimeType: "image/png", chars: 100, cols: 322, rows: 161 }],
+				totalChars: 100,
+				truncatedChars: 0,
+			},
+			note: `archived ${secret} run`,
+		};
+
+		const out = obfuscator.obfuscateObject(preserveData);
+
+		// Frame binary preserved byte-for-byte...
+		expect(out.snapcompact.frames[0]?.data).toBe(frameData);
+		// ...while a sibling string field is still redacted.
+		expect(out.note).not.toContain(secret);
+	});
 });
 
 describe("SecretObfuscator case hints", () => {
