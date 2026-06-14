@@ -89,9 +89,7 @@ export interface ListIssuesOptions {
 
 const ISSUES_DIR = path.join(".omp", "issues");
 const ARCHIVE_SEGMENT = ".archive";
-const LEGACY_ARCHIVE_SEGMENT = "archive";
 const COUNTER_FILE = ".next-id";
-const RESERVED_SEGMENTS = new Set([ARCHIVE_SEGMENT, LEGACY_ARCHIVE_SEGMENT, ".", "..", ""]);
 
 const SLUG_MAX_WORDS = 5;
 const SLUG_MAX_CHARS = 50;
@@ -110,8 +108,9 @@ function getCounterPath(cwd: string): string {
 }
 
 /**
- * Normalize an arbitrary category string into a safe directory name. Throws
- * on segments that would alias the archive bucket or escape the issues root.
+ * Normalize an arbitrary category string into a safe directory name. Throws on
+ * segments that escape the issues root (path separators / `..`) or normalize to
+ * an empty name.
  */
 export function normalizeCategory(input: string): string {
 	const trimmed = input.trim();
@@ -122,7 +121,7 @@ export function normalizeCategory(input: string): string {
 		.toLowerCase()
 		.replace(/[^a-z0-9]+/g, "-")
 		.replace(/^-+|-+$/g, "");
-	if (!normalized || normalized.startsWith(".") || RESERVED_SEGMENTS.has(normalized)) {
+	if (!normalized) {
 		throw new Error(`Invalid issue category: ${JSON.stringify(input)}`);
 	}
 	return normalized;
@@ -177,31 +176,6 @@ async function listMarkdownFiles(dir: string): Promise<string[]> {
 	}
 }
 
-/**
- * Migrate a legacy `archive/` directory to the hidden `.archive/` layout. Runs
- * before every scan so all reads/writes see the canonical archive root. Only
- * renames when the legacy dir exists and `.archive/` does not, so a
- * partially-migrated or hand-edited store is never clobbered (a leftover legacy
- * dir is also filtered out of active categories as a safeguard).
- */
-async function migrateLegacyArchive(cwd: string): Promise<void> {
-	const legacyRoot = path.join(getIssuesRoot(cwd), LEGACY_ARCHIVE_SEGMENT);
-	const archiveRoot = getArchiveRoot(cwd);
-	try {
-		if (!(await fs.stat(legacyRoot)).isDirectory()) return;
-	} catch (err) {
-		if (isEnoent(err)) return;
-		throw err;
-	}
-	try {
-		await fs.stat(archiveRoot);
-		return; // `.archive/` already present — leave the legacy dir untouched.
-	} catch (err) {
-		if (!isEnoent(err)) throw err;
-	}
-	await fs.rename(legacyRoot, archiveRoot);
-}
-
 interface FilesystemScan {
 	/** All issue records found, regardless of archive state. */
 	records: Array<{ id: number; filePath: string; filename: string; category: string; archived: boolean }>;
@@ -210,15 +184,12 @@ interface FilesystemScan {
 }
 
 async function scanFilesystem(cwd: string): Promise<FilesystemScan> {
-	await migrateLegacyArchive(cwd);
 	const issuesRoot = getIssuesRoot(cwd);
 	const archiveRoot = getArchiveRoot(cwd);
 	const records: FilesystemScan["records"] = [];
 	let maxId = 0;
 
-	const activeCategories = (await listSubdirs(issuesRoot)).filter(
-		name => name !== ARCHIVE_SEGMENT && name !== LEGACY_ARCHIVE_SEGMENT,
-	);
+	const activeCategories = (await listSubdirs(issuesRoot)).filter(name => name !== ARCHIVE_SEGMENT);
 	for (const category of activeCategories) {
 		const dir = path.join(issuesRoot, category);
 		const files = await listMarkdownFiles(dir);

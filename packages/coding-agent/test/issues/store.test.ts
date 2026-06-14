@@ -52,11 +52,13 @@ describe("issues store: slug + category normalization", () => {
 		expect(slugifyTitle("a")).toBe("a");
 	});
 
-	it("normalizes categories and rejects reserved/escape names", () => {
+	it("normalizes categories and rejects escape/empty names", () => {
 		expect(normalizeCategory("Security Stuff")).toBe("security-stuff");
 		expect(normalizeCategory("Data Correctness!!")).toBe("data-correctness");
-		expect(() => normalizeCategory("archive")).toThrow(/Invalid issue category/);
+		expect(normalizeCategory("archive")).toBe("archive"); // no longer reserved — `.archive` is the (hidden) archive bucket
 		expect(() => normalizeCategory("../leak")).toThrow(/Invalid issue category/);
+		expect(() => normalizeCategory("a/b")).toThrow(/Invalid issue category/);
+		expect(() => normalizeCategory("!!!")).toThrow(/Invalid issue category/);
 		expect(() => normalizeCategory("")).toThrow(/Invalid issue category/);
 	});
 });
@@ -383,49 +385,6 @@ describe("issues store: empty category directory pruning", () => {
 		expect(await dirExists(path.join(archiveRoot, "security"))).toBe(false);
 		expect(await dirExists(path.join(archiveRoot, "correctness"))).toBe(true);
 		expect(await dirExists(archiveRoot)).toBe(true);
-	});
-});
-
-describe("issues store: legacy archive migration", () => {
-	async function dirExists(dir: string): Promise<boolean> {
-		try {
-			return (await fs.stat(dir)).isDirectory();
-		} catch {
-			return false;
-		}
-	}
-
-	it("renames a legacy archive/ directory to .archive/ on first access", async () => {
-		const root = getIssuesRoot(tempDir);
-		const { record } = await addIssue(tempDir, { category: "security", title: "Legacy archived", body: "B." });
-		await archiveIssue(tempDir, record.id);
-		// Simulate a pre-migration store: the archive dir is the bare `archive/`.
-		await fs.rename(path.join(root, ".archive"), path.join(root, "archive"));
-		expect(await dirExists(path.join(root, "archive"))).toBe(true);
-		expect(await dirExists(path.join(root, ".archive"))).toBe(false);
-
-		// Any read triggers the migration through scanFilesystem.
-		const found = await findIssueById(tempDir, record.id);
-		expect(found?.archived).toBe(true);
-		expect(found?.frontmatter.title).toBe("Legacy archived");
-		expect(await dirExists(path.join(root, ".archive"))).toBe(true);
-		expect(await dirExists(path.join(root, "archive"))).toBe(false);
-	});
-
-	it("leaves a legacy archive/ untouched when .archive/ already exists, and never lists it as a category", async () => {
-		const root = getIssuesRoot(tempDir);
-		const live = await addIssue(tempDir, { category: "security", title: "Live one", body: "B." });
-		const archived = await addIssue(tempDir, { category: "security", title: "Archived one", body: "B." });
-		await archiveIssue(tempDir, archived.record.id);
-		// A stray legacy `archive/` alongside the canonical `.archive/`.
-		await fs.mkdir(path.join(root, "archive", "security"), { recursive: true });
-
-		const active = await listIssues(tempDir, { archived: false });
-		// The stray `archive/` dir must never surface as an active category.
-		expect(active.map(s => s.category)).not.toContain("archive");
-		expect(active.map(s => s.id)).toEqual([live.record.id]);
-		// Canonical `.archive/` preserved (not clobbered by the stray legacy dir).
-		expect(await dirExists(path.join(root, ".archive"))).toBe(true);
 	});
 });
 
