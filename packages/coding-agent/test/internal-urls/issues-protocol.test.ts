@@ -8,7 +8,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { InternalUrlRouter, parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls";
-import { addIssue, archiveIssue } from "@oh-my-pi/pi-coding-agent/issues";
+import { addIssue, archiveIssue, findIssueById } from "@oh-my-pi/pi-coding-agent/issues";
 
 let tempDir: string;
 
@@ -157,7 +157,7 @@ describe("IssuesProtocolHandler", () => {
 		const broken = ["---", "title: [unclosed", "---", "", "Body."].join("\n");
 		await expect(
 			handler.write(parseInternalUrl(`issues://${record.filename}`), broken, { cwd: tempDir }),
-		).rejects.toThrow(/does not parse as YAML frontmatter/);
+		).rejects.toThrow(/does not parse as YAML/);
 	});
 
 	it("rejects writes to listing URLs and points at the tool", async () => {
@@ -169,5 +169,71 @@ describe("IssuesProtocolHandler", () => {
 		await expect(handler.write(parseInternalUrl("issues://archive"), "stuff", { cwd: tempDir })).rejects.toThrow(
 			/writes target a single issue file/i,
 		);
+	});
+
+	it("a status edit through the file write archives the issue", async () => {
+		const { record } = await addIssue(tempDir, { category: "security", title: "Closeable", body: "Body." });
+		const handler = InternalUrlRouter.instance().getHandler("issues");
+		if (!handler?.write) throw new Error("issues handler must define write");
+
+		const content = ["---", "title: Closeable", "category: security", "status: fixed", "---", "", "Body."].join("\n");
+		const result = await handler.write(parseInternalUrl(`issues://${record.id}.md`), content, { cwd: tempDir });
+		expect(result?.text).toMatch(/archive/i);
+
+		const found = await findIssueById(tempDir, record.id);
+		expect(found?.archived).toBe(true);
+		expect(found?.frontmatter.status).toBe("fixed");
+	});
+
+	it("a title edit through the file write re-derives the slug", async () => {
+		const { record } = await addIssue(tempDir, { category: "security", title: "Old name", body: "Body." });
+		const handler = InternalUrlRouter.instance().getHandler("issues");
+		if (!handler?.write) throw new Error("issues handler must define write");
+
+		const content = ["---", "title: Brand new title", "category: security", "---", "", "Body."].join("\n");
+		const result = await handler.write(parseInternalUrl(`issues://${record.id}.md`), content, { cwd: tempDir });
+		expect(result?.text).toContain(`issues://${record.id}-brand-new-title.md`);
+
+		const found = await findIssueById(tempDir, record.id);
+		expect(found?.filename).toBe(`${record.id}-brand-new-title.md`);
+	});
+
+	it("a category edit through the file write moves the file", async () => {
+		const { record } = await addIssue(tempDir, { category: "security", title: "Movable", body: "Body." });
+		const handler = InternalUrlRouter.instance().getHandler("issues");
+		if (!handler?.write) throw new Error("issues handler must define write");
+
+		const content = ["---", "title: Movable", "category: correctness", "---", "", "Body."].join("\n");
+		await handler.write(parseInternalUrl(`issues://${record.id}.md`), content, { cwd: tempDir });
+
+		const found = await findIssueById(tempDir, record.id);
+		expect(found?.category).toBe("correctness");
+		expect(found?.filePath).toContain(`${path.sep}correctness${path.sep}`);
+	});
+
+	it("rejects a write that drops the frontmatter fences", async () => {
+		const { record } = await addIssue(tempDir, { category: "security", title: "Needs fences", body: "Body." });
+		const handler = InternalUrlRouter.instance().getHandler("issues");
+		if (!handler?.write) throw new Error("issues handler must define write");
+
+		await expect(
+			handler.write(parseInternalUrl(`issues://${record.id}.md`), "Body with no frontmatter.", { cwd: tempDir }),
+		).rejects.toThrow(/must open with a/);
+	});
+
+	it("rejects a write with an out-of-enum status or severity", async () => {
+		const { record } = await addIssue(tempDir, { category: "security", title: "Enum guard", body: "Body." });
+		const handler = InternalUrlRouter.instance().getHandler("issues");
+		if (!handler?.write) throw new Error("issues handler must define write");
+
+		const badStatus = ["---", "title: Enum guard", "status: closed", "---", "", "Body."].join("\n");
+		await expect(
+			handler.write(parseInternalUrl(`issues://${record.id}.md`), badStatus, { cwd: tempDir }),
+		).rejects.toThrow(/invalid status/i);
+
+		const badSeverity = ["---", "title: Enum guard", "severity: spicy", "---", "", "Body."].join("\n");
+		await expect(
+			handler.write(parseInternalUrl(`issues://${record.id}.md`), badSeverity, { cwd: tempDir }),
+		).rejects.toThrow(/invalid severity/i);
 	});
 });

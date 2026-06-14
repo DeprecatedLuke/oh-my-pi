@@ -134,9 +134,9 @@ describe("task renderer: review verdict surfaces filed issues", () => {
 						url: "issues://9.md",
 						filename: "9.md",
 					},
-					// An `op: edit` is a dedup against an already-open issue (reviewer.md
-					// step 5), not a new finding — it must not surface in the count or list.
-					{ op: "edit", id: 3, title: "Pre-existing open issue restated", severity: "high" },
+					// A non-`add` op (e.g. an archive shortcut) is not a new finding — the
+					// review renderer counts and lists only `add` entries.
+					{ op: "archive", id: 3, title: "Pre-existing open issue restated", severity: "high" },
 				],
 			}),
 		);

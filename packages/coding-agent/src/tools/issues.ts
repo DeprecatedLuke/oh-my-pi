@@ -14,16 +14,8 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Container, Text } from "@oh-my-pi/pi-tui";
 import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
-import type { AddIssueInput, EditIssueInput, IssueRecord, IssueSeverity, IssueStatus, IssueSummary } from "../issues";
-import {
-	addIssue,
-	archiveIssue,
-	editIssue,
-	listIssues,
-	normalizeCategory,
-	renderIssueListing,
-	unarchiveIssue,
-} from "../issues";
+import type { AddIssueInput, IssueRecord, IssueSeverity, IssueStatus, IssueSummary } from "../issues";
+import { addIssue, archiveIssue, listIssues, normalizeCategory, renderIssueListing, unarchiveIssue } from "../issues";
 import type { Theme } from "../modes/theme/theme";
 import issuesDescription from "../prompts/tools/issues.md" with { type: "text" };
 import { subprocessToolRegistry } from "../task/subprocess-tool-registry";
@@ -44,21 +36,6 @@ const addParams = z.object({
 	status: statusEnum.optional(),
 	location: z.array(z.string()).optional().describe("`path` or `path:line[-line]` references"),
 	extra: z.record(z.string(), z.unknown()).optional().describe("extra frontmatter fields"),
-});
-
-const editParams = z.object({
-	op: z.literal("edit"),
-	id: z.number().int().positive().describe("global issue id"),
-	title: z.string().min(1).optional(),
-	category: z.string().min(1).optional().describe("move to a different category"),
-	severity: severityEnum.optional(),
-	status: statusEnum
-		.optional()
-		.describe(
-			"new lifecycle status. Setting it to `fixed`/`wontfix`/`duplicate` auto-archives an active issue; setting it to `open`/`in-progress` auto-unarchives an archived one.",
-		),
-	location: z.array(z.string()).optional(),
-	extra: z.record(z.string(), z.unknown()).optional(),
 });
 
 const archiveParams = z.object({
@@ -84,7 +61,7 @@ const listParams = z.object({
 	limit: z.number().int().positive().optional(),
 });
 
-const issuesSchema = z.discriminatedUnion("op", [addParams, editParams, archiveParams, unarchiveParams, listParams]);
+const issuesSchema = z.discriminatedUnion("op", [addParams, archiveParams, unarchiveParams, listParams]);
 export type IssuesToolParams = z.infer<typeof issuesSchema>;
 
 export interface IssuesToolDetails {
@@ -97,9 +74,6 @@ export interface IssuesToolDetails {
 	title?: string;
 	severity?: IssueSeverity;
 	status?: IssueStatus;
-	moved?: boolean;
-	renamed?: boolean;
-	transitioned?: boolean;
 	wasArchived?: boolean;
 	wasActive?: boolean;
 	listing?: IssueSummary[];
@@ -175,40 +149,6 @@ async function executeAdd(
 		.done();
 }
 
-async function executeEdit(
-	session: ToolSession,
-	params: z.infer<typeof editParams>,
-): Promise<AgentToolResult<IssuesToolDetails>> {
-	const input: EditIssueInput = {
-		id: params.id,
-		title: params.title,
-		category: params.category,
-		severity: params.severity,
-		status: params.status,
-		location: params.location,
-		extra: params.extra,
-	};
-	const { record, moved, renamed, transitioned, wasArchived } = await editIssue(session.cwd, input);
-	const movedNote = moved ? `moved → category ${record.category}` : null;
-	const renamedNote = renamed ? `renamed → ${record.filename}` : null;
-	const transitionNote = transitioned
-		? record.archived
-			? "moved → archive (status closed)"
-			: "restored → active (status reopened)"
-		: null;
-	const extras = [movedNote, renamedNote, transitionNote].filter((s): s is string => s !== null).join("; ");
-	const details: IssuesToolDetails = {
-		...detailsFromRecord("edit", record),
-		moved,
-		renamed,
-		transitioned,
-		wasArchived,
-	};
-	return toolResult<IssuesToolDetails>(details)
-		.text(summarizeRecord("Updated", record, extras || undefined))
-		.done();
-}
-
 async function executeArchive(
 	session: ToolSession,
 	params: z.infer<typeof archiveParams>,
@@ -268,7 +208,7 @@ export class IssuesTool implements AgentTool<typeof issuesSchema, IssuesToolDeta
 	readonly name = "issues";
 	readonly label = "Issues";
 	readonly approval = "write" as const;
-	readonly summary = "Add, edit, archive, and list project-local issues under .omp/issues/";
+	readonly summary = "Add, archive, unarchive, and list project-local issues under .omp/issues/";
 	readonly description = prompt.render(issuesDescription);
 	readonly parameters = issuesSchema;
 	readonly strict = true;
@@ -277,8 +217,6 @@ export class IssuesTool implements AgentTool<typeof issuesSchema, IssuesToolDeta
 		switch (args.op) {
 			case "add":
 				return args.title ? `filing issue: ${args.title}` : "filing issue";
-			case "edit":
-				return args.id ? `editing issue #${args.id}` : "editing issue";
 			case "archive":
 				return args.id ? `archiving issue #${args.id}` : "archiving issue";
 			case "unarchive":
@@ -309,8 +247,6 @@ export class IssuesTool implements AgentTool<typeof issuesSchema, IssuesToolDeta
 				switch (params.op) {
 					case "add":
 						return await executeAdd(this.session, params);
-					case "edit":
-						return await executeEdit(this.session, params);
 					case "archive":
 						return await executeArchive(this.session, params);
 					case "unarchive":
@@ -330,9 +266,7 @@ export class IssuesTool implements AgentTool<typeof issuesSchema, IssuesToolDeta
 		const op = args.op ?? "?";
 		const title = op === "add" && "title" in args && typeof args.title === "string" ? args.title : "";
 		const idLabel =
-			(op === "edit" || op === "archive" || op === "unarchive") && "id" in args && typeof args.id === "number"
-				? `#${args.id}`
-				: "";
+			(op === "archive" || op === "unarchive") && "id" in args && typeof args.id === "number" ? `#${args.id}` : "";
 		const label = title || idLabel || "";
 		return new Text(
 			`${theme.fg("toolTitle", theme.bold("issues "))}${theme.fg("accent", op)} ${theme.fg("dim", label)}`,

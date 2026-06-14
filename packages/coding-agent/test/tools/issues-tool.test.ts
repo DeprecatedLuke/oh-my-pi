@@ -66,7 +66,7 @@ describe("IssuesTool", () => {
 		expect(await Bun.file(filePath).exists()).toBe(true);
 	});
 
-	it("edit changes metadata and re-derives slug; archive then unarchive moves the file", async () => {
+	it("archive then unarchive moves the file and round-trips status", async () => {
 		const tool = makeTool(tempDir);
 		const created = await tool.execute("tc-1", {
 			op: "add",
@@ -77,19 +77,7 @@ describe("IssuesTool", () => {
 		});
 		const id = (created.details as IssuesToolDetails).id!;
 
-		const edited = await tool.execute("tc-2", {
-			op: "edit",
-			id,
-			title: "Renamed finding",
-			severity: "high",
-		});
-		const editDetails = edited.details as IssuesToolDetails;
-		expect(editDetails.renamed).toBe(true);
-		expect(editDetails.transitioned).toBe(false);
-		expect(editDetails.filename).toBe(`${id}-renamed-finding.md`);
-		expect(editDetails.severity).toBe("high");
-
-		const archived = await tool.execute("tc-3", {
+		const archived = await tool.execute("tc-2", {
 			op: "archive",
 			id,
 			reason: "fixed in #321",
@@ -100,7 +88,7 @@ describe("IssuesTool", () => {
 		expect(record?.archived).toBe(true);
 		expect(record?.frontmatter.archive_reason).toBe("fixed in #321");
 
-		const restored = await tool.execute("tc-4", {
+		const restored = await tool.execute("tc-3", {
 			op: "unarchive",
 			id,
 		});
@@ -109,34 +97,6 @@ describe("IssuesTool", () => {
 		const back = await findIssueById(tempDir, id);
 		expect(back?.archived).toBe(false);
 		expect(back?.frontmatter.status).toBe("open");
-	});
-
-	it("edit with a terminal status auto-archives; reopening status auto-restores", async () => {
-		const tool = makeTool(tempDir);
-		const created = await tool.execute("tx-1", {
-			op: "add",
-			category: "security",
-			title: "Status transition",
-			body: "Body.",
-		});
-		const id = (created.details as IssuesToolDetails).id!;
-
-		const closed = await tool.execute("tx-2", { op: "edit", id, status: "fixed" });
-		const closedDetails = closed.details as IssuesToolDetails;
-		expect(closedDetails.transitioned).toBe(true);
-		expect(closedDetails.archived).toBe(true);
-		const closedText = closed.content.find(c => c.type === "text")?.text ?? "";
-		expect(closedText).toMatch(/moved → archive/);
-		expect(closedText).toMatch(/\(archived\)/);
-		// Reachable through findIssueById (which scans both sides).
-		const onArchive = await findIssueById(tempDir, id);
-		expect(onArchive?.archived).toBe(true);
-
-		const reopened = await tool.execute("tx-3", { op: "edit", id, status: "open" });
-		const reopenedDetails = reopened.details as IssuesToolDetails;
-		expect(reopenedDetails.transitioned).toBe(true);
-		expect(reopenedDetails.archived).toBe(false);
-		expect((await findIssueById(tempDir, id))?.archived).toBe(false);
 	});
 
 	it("list returns scope-aware markdown and includes severity filters", async () => {
@@ -168,9 +128,8 @@ describe("IssuesTool", () => {
 		expect(listCriticalText).not.toContain("Minor nit");
 	});
 
-	it("rejects unknown ids on edit/archive/unarchive", async () => {
+	it("rejects unknown ids on archive/unarchive", async () => {
 		const tool = makeTool(tempDir);
-		await expect(tool.execute("e1", { op: "edit", id: 999, title: "x" })).rejects.toThrow(/Issue #999 not found/);
 		await expect(tool.execute("a1", { op: "archive", id: 999 })).rejects.toThrow(/Issue #999 not found/);
 		await expect(tool.execute("u1", { op: "unarchive", id: 999 })).rejects.toThrow(/Issue #999 not found/);
 	});

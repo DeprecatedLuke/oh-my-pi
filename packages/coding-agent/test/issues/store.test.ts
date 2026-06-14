@@ -5,12 +5,12 @@ import * as path from "node:path";
 import {
 	addIssue,
 	archiveIssue,
-	editIssue,
 	findIssueByFilename,
 	findIssueById,
 	getIssuesRoot,
 	listIssues,
 	normalizeCategory,
+	saveIssueContent,
 	slugifyTitle,
 	unarchiveIssue,
 } from "@oh-my-pi/pi-coding-agent/issues";
@@ -25,6 +25,22 @@ beforeEach(async () => {
 afterEach(async () => {
 	await fs.rm(tempDir, { recursive: true, force: true });
 });
+
+// The metadata-edit surface is the `issues://<id>.md` file write
+// (`saveIssueContent`). `editVia` mirrors what the `edit` tool does: read the
+// file, mutate the parsed frontmatter, and write the whole thing back through
+// the store's validating path.
+async function editVia(cwd: string, id: number, mutate: (frontmatter: Record<string, unknown>) => void) {
+	const record = await findIssueById(cwd, id);
+	if (!record) throw new Error(`Issue #${id} not found`);
+	const text = await Bun.file(record.filePath).text();
+	const { frontmatter, body } = parseFrontmatter(text, { normalize: false });
+	mutate(frontmatter);
+	const lines = Object.entries(frontmatter)
+		.filter(([, value]) => value !== undefined)
+		.map(([key, value]) => `${key}: ${JSON.stringify(value)}`);
+	return saveIssueContent(cwd, id, `---\n${lines.join("\n")}\n---\n\n${body}\n`);
+}
 
 describe("issues store: slug + category normalization", () => {
 	it("slugifies titles into ≤5-word lowercase kebab", () => {
@@ -118,9 +134,8 @@ describe("issues store: lifecycle", () => {
 		});
 		const oldPath = record.filePath;
 
-		const renamed = await editIssue(tempDir, {
-			id: record.id,
-			title: "New shorter title",
+		const renamed = await editVia(tempDir, record.id, fm => {
+			fm.title = "New shorter title";
 		});
 		expect(renamed.renamed).toBe(true);
 		expect(renamed.transitioned).toBe(false);
@@ -130,9 +145,8 @@ describe("issues store: lifecycle", () => {
 		// Body is preserved when the edit only touches metadata.
 		expect(renamed.record.body).toBe("Original body.");
 
-		const moved = await editIssue(tempDir, {
-			id: record.id,
-			category: "correctness",
+		const moved = await editVia(tempDir, record.id, fm => {
+			fm.category = "correctness";
 		});
 		expect(moved.moved).toBe(true);
 		expect(moved.transitioned).toBe(false);
@@ -175,7 +189,7 @@ describe("issues store: lifecycle", () => {
 		expect(second.record.archived).toBe(true);
 	});
 
-	it("editIssue auto-archives when status moves to a terminal state and restores on reopen", async () => {
+	it("editing status to a terminal value auto-archives, and reopening restores + drops archive_reason", async () => {
 		const { record } = await addIssue(tempDir, {
 			category: "security",
 			title: "Privilege leak",
@@ -183,31 +197,30 @@ describe("issues store: lifecycle", () => {
 		});
 		const activePath = record.filePath;
 
-		// `fixed` is a terminal status → auto-archive.
-		const archived = await editIssue(tempDir, {
-			id: record.id,
-			status: "fixed",
+		// `fixed` is a terminal status → auto-archive; stamp a reason to prove reopen drops it.
+		const archived = await editVia(tempDir, record.id, fm => {
+			fm.status = "fixed";
+			fm.archive_reason = "handled in #99";
 		});
 		expect(archived.transitioned).toBe(true);
 		expect(archived.wasArchived).toBe(false);
 		expect(archived.record.archived).toBe(true);
 		expect(archived.record.frontmatter.status).toBe("fixed");
+		expect(archived.record.frontmatter.archive_reason).toBe("handled in #99");
 		expect(archived.record.filePath).toContain(`${path.sep}archive${path.sep}security${path.sep}`);
 		expect(await Bun.file(activePath).exists()).toBe(false);
 
 		// Editing an archived issue is now allowed; metadata-only edits stay archived.
-		const metadataOnly = await editIssue(tempDir, {
-			id: record.id,
-			severity: "low",
+		const metadataOnly = await editVia(tempDir, record.id, fm => {
+			fm.severity = "low";
 		});
 		expect(metadataOnly.transitioned).toBe(false);
 		expect(metadataOnly.record.archived).toBe(true);
 		expect(metadataOnly.record.frontmatter.severity).toBe("low");
 
 		// `open` is a non-terminal status → auto-restore + drop archive_reason.
-		const restored = await editIssue(tempDir, {
-			id: record.id,
-			status: "open",
+		const restored = await editVia(tempDir, record.id, fm => {
+			fm.status = "open";
 		});
 		expect(restored.transitioned).toBe(true);
 		expect(restored.wasArchived).toBe(true);
@@ -216,14 +229,16 @@ describe("issues store: lifecycle", () => {
 		expect(restored.record.frontmatter.archive_reason).toBeUndefined();
 	});
 
-	it("editIssue treats same-side status changes as in-place edits", async () => {
+	it("editing a same-side status is an in-place edit (no archive transition)", async () => {
 		const { record } = await addIssue(tempDir, {
 			category: "security",
 			title: "WIP item",
 			body: "Body.",
 		});
 		// open → in-progress is still on the active side; no transition.
-		const same = await editIssue(tempDir, { id: record.id, status: "in-progress" });
+		const same = await editVia(tempDir, record.id, fm => {
+			fm.status = "in-progress";
+		});
 		expect(same.transitioned).toBe(false);
 		expect(same.record.archived).toBe(false);
 		expect(same.record.frontmatter.status).toBe("in-progress");
@@ -311,7 +326,9 @@ describe("issues store: empty category directory pruning", () => {
 		const { record } = await addIssue(tempDir, { category: "security", title: "Movable", body: "B." });
 		expect(await dirExists(path.join(root, "security"))).toBe(true);
 
-		await editIssue(tempDir, { id: record.id, category: "correctness" });
+		await editVia(tempDir, record.id, fm => {
+			fm.category = "correctness";
+		});
 		expect(await dirExists(path.join(root, "security"))).toBe(false);
 		expect(await dirExists(path.join(root, "correctness"))).toBe(true);
 	});
@@ -320,7 +337,9 @@ describe("issues store: empty category directory pruning", () => {
 		const root = getIssuesRoot(tempDir);
 		const { record } = await addIssue(tempDir, { category: "security", title: "Old name", body: "B." });
 
-		await editIssue(tempDir, { id: record.id, title: "New name entirely" });
+		await editVia(tempDir, record.id, fm => {
+			fm.title = "New name entirely";
+		});
 		// The renamed file still lives in security/ → dir must survive (the new
 		// file landed before the old one was removed, so rmdir hits ENOTEMPTY).
 		expect(await dirExists(path.join(root, "security"))).toBe(true);

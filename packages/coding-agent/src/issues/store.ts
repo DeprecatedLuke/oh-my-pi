@@ -76,16 +76,6 @@ export interface AddIssueInput {
 	extra?: Record<string, unknown>;
 }
 
-export interface EditIssueInput {
-	id: number;
-	title?: string;
-	severity?: IssueSeverity;
-	status?: IssueStatus;
-	location?: string[];
-	category?: string;
-	extra?: Record<string, unknown>;
-}
-
 export interface ListIssuesOptions {
 	category?: string;
 	archived?: boolean;
@@ -504,7 +494,7 @@ export interface EditIssueResult {
 	moved: boolean;
 	/** `true` when the on-disk filename slug changed. */
 	renamed: boolean;
-	/** `true` when `editIssue` toggled the active/archive side via status. */
+	/** `true` when the edit toggled the active/archive side via status. */
 	transitioned: boolean;
 	/** Archive side before the edit. Useful to render "→ archived"/"→ active". */
 	wasArchived: boolean;
@@ -517,6 +507,17 @@ export interface EditIssueResult {
  * (status: open).
  */
 const TERMINAL_STATUSES: ReadonlySet<IssueStatus> = new Set(["fixed", "wontfix", "duplicate"]);
+
+/** Statuses accepted in issue frontmatter (the metadata-edit validation set). */
+const ISSUE_STATUSES: ReadonlySet<string> = new Set<IssueStatus>([
+	"open",
+	"in-progress",
+	"fixed",
+	"wontfix",
+	"duplicate",
+]);
+/** Severities accepted in issue frontmatter (the metadata-edit validation set). */
+const ISSUE_SEVERITIES: ReadonlySet<string> = new Set<IssueSeverity>(["low", "medium", "high", "critical"]);
 
 function shouldBeArchived(status: IssueStatus | undefined, currentArchived: boolean): boolean {
 	if (!status) return currentArchived;
@@ -558,30 +559,80 @@ async function pruneEmptyCategoryDir(cwd: string, categoryDir: string): Promise<
 	}
 }
 
-export async function editIssue(cwd: string, input: EditIssueInput): Promise<EditIssueResult> {
-	const current = await findIssueById(cwd, input.id);
+/**
+ * Parse and validate an edited issue file (frontmatter + body). The frontmatter
+ * is the metadata layer the store derives title/status/category from, so a write
+ * that drops the `---` fences, ships unparseable YAML, or carries an out-of-enum
+ * `status`/`severity` is rejected before it can corrupt the record. Throws a
+ * descriptive `Error` naming the failure.
+ */
+function parseIssueFileContent(content: string, source: string): { frontmatter: IssueFrontmatter; body: string } {
+	const normalized = content.replace(/\r\n?/g, "\n");
+	if (!normalized.startsWith("---") || normalized.indexOf("\n---", 3) === -1) {
+		throw new Error(
+			"issues:// write rejected: the file must open with a `---` YAML frontmatter block and close it with a `---` line — title/status/severity live there. Keep both fences intact when editing.",
+		);
+	}
+	let parsed: { frontmatter: Record<string, unknown>; body: string };
+	try {
+		parsed = parseFrontmatter(normalized, { source, normalize: false, level: "fatal" });
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		throw new Error(
+			`issues:// write rejected: the frontmatter does not parse as YAML (${detail}). Keep the \`---\` fences and YAML block intact when editing.`,
+		);
+	}
+	const frontmatter = coerceFrontmatter(parsed.frontmatter);
+	const title = typeof parsed.frontmatter.title === "string" ? parsed.frontmatter.title.trim() : "";
+	if (!title) {
+		throw new Error("issues:// write rejected: the frontmatter `title` is required and must be a non-empty string.");
+	}
+	if (frontmatter.status !== undefined && !ISSUE_STATUSES.has(frontmatter.status)) {
+		throw new Error(
+			`issues:// write rejected: invalid status '${frontmatter.status}'. Use one of: open, in-progress, fixed, wontfix, duplicate.`,
+		);
+	}
+	if (frontmatter.severity !== undefined && !ISSUE_SEVERITIES.has(frontmatter.severity)) {
+		throw new Error(
+			`issues:// write rejected: invalid severity '${frontmatter.severity}'. Use one of: low, medium, high, critical.`,
+		);
+	}
+	frontmatter.title = title;
+	return { frontmatter, body: parsed.body };
+}
+
+/**
+ * Persist a full edited issue file by id. This is the single metadata-edit
+ * surface: the `issues://<id>.md` write path routes here, so editing the
+ * frontmatter drives the same lifecycle a structured edit once did — a terminal
+ * `status` archives the file, a `category` change moves it, a `title` change
+ * re-derives the slug — while the body is replaced from the same write. The
+ * file is authoritative for metadata; `created`/`updated` are managed here, not
+ * taken from the edited text.
+ */
+export async function saveIssueContent(cwd: string, id: number, content: string): Promise<EditIssueResult> {
+	const current = await findIssueById(cwd, id);
 	if (!current) {
-		throw new Error(`Issue #${input.id} not found.`);
+		throw new Error(`Issue #${id} not found.`);
 	}
 
-	const nextTitle = input.title?.trim() || current.frontmatter.title;
-	const nextCategory = input.category ? normalizeCategory(input.category) : current.category;
-	const nextStatus = input.status ?? current.frontmatter.status;
+	const { frontmatter: edited, body } = parseIssueFileContent(content, current.filePath);
+
+	const nextTitle = edited.title;
+	const nextCategory = edited.category ? normalizeCategory(edited.category) : current.category;
+	const nextStatus = edited.status ?? current.frontmatter.status;
 	const nextArchived = shouldBeArchived(nextStatus, current.archived);
 
 	const frontmatter: IssueFrontmatter = {
-		...current.frontmatter,
+		...edited,
 		title: nextTitle,
 		category: nextCategory,
-		severity: input.severity ?? current.frontmatter.severity,
 		status: nextStatus,
-		location: input.location ?? current.frontmatter.location,
+		created: current.frontmatter.created ?? edited.created,
 		updated: nowIso(),
-		...(input.extra ?? {}),
 	};
-	// `archive_reason` only makes sense while archived; drop it on the way
-	// back to active so the metadata layer stays consistent with the
-	// explicit `unarchiveIssue` path.
+	// `archive_reason` only makes sense while archived; drop it on the way back
+	// to active so the metadata layer stays consistent with `unarchiveIssue`.
 	if (!nextArchived) {
 		delete frontmatter.archive_reason;
 	}
@@ -598,15 +649,15 @@ export async function editIssue(cwd: string, input: EditIssueInput): Promise<Edi
 	const transitioned = nextArchived !== current.archived;
 
 	await fs.mkdir(nextRoot, { recursive: true });
-	const content = serializeIssue(frontmatter, current.body);
+	const serialized = serializeIssue(frontmatter, body);
 
 	if (nextPath !== current.filePath) {
-		await Bun.write(nextPath, content);
+		await Bun.write(nextPath, serialized);
 		await fs.rm(current.filePath, { force: true });
 		// A cross-category/archive move can leave the source category empty.
 		await pruneEmptyCategoryDir(cwd, path.dirname(current.filePath));
 	} else {
-		await Bun.write(current.filePath, content);
+		await Bun.write(current.filePath, serialized);
 	}
 
 	const record = await readIssueFromPath(nextPath, current.id, nextCategory, nextArchived);

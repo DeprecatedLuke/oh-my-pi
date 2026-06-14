@@ -10,15 +10,16 @@
  * - `issues://<id>-<slug>` / `issues://<id>-<slug>.md` — same; slug is
  *   accepted as a hint but not required for lookup
  *
- * Individual issue files are writable through the `edit`/`write` tools so
- * body changes go through the normal editing surface. Lifecycle and
- * metadata mutations (status-driven archive moves, slug renames, category
- * moves) live in the `issues` tool so ID allocation and structured
- * details stay in one place; raw writes to listing URLs (`issues://`,
- * `issues://archive`) are rejected.
+ * Individual issue files are edited by rewriting them with the `write` tool on
+ * the `issues://<id>.md` URL — the single metadata-and-body edit surface. Writing
+ * the frontmatter drives the lifecycle: a terminal `status` archives the file, a
+ * `category` change moves it, a `title` change re-derives the slug. The write is
+ * validated (intact `---` fences, parseable YAML, in-enum status/severity) and
+ * rejected on failure. The `issues` tool keeps only id-allocating/shortcut ops
+ * (`add`, `archive`, `unarchive`, `list`); raw writes to listing URLs
+ * (`issues://`, `issues://archive`) are rejected.
  */
-import { parseFrontmatter } from "@oh-my-pi/pi-utils";
-import { findIssueByFilename, getIssuesRoot, listIssues, renderIssueListing } from "../issues";
+import { findIssueByFilename, getIssuesRoot, listIssues, renderIssueListing, saveIssueContent } from "../issues";
 import { AgentRegistry } from "../registry/agent-registry";
 import type {
 	InternalResource,
@@ -96,8 +97,8 @@ async function buildListing(url: InternalUrl, cwd: string, archived: boolean): P
 
 	const body = renderIssueListing(summaries, { title, emptyText, group: true });
 	const footer = archived
-		? "\n\nUse `issues://` for active issues. Edit a body via the `edit` tool on `issues://<id>.md`; status/lifecycle via the `issues` tool."
-		: "\n\nUse `issues://archive` for archived issues. Edit a body via the `edit` tool on `issues://<id>.md`; status/lifecycle via the `issues` tool.";
+		? "\n\nUse `issues://` for active issues. Edit an issue (body or metadata) by rewriting `issues://<id>.md` with the `write` tool — frontmatter changes drive status/category/slug lifecycle."
+		: "\n\nUse `issues://archive` for archived issues. Edit an issue (body or metadata) by rewriting `issues://<id>.md` with the `write` tool — frontmatter changes drive status/category/slug lifecycle.";
 	const content = `${body}${footer}`;
 
 	return {
@@ -126,12 +127,12 @@ async function readIssueFile(url: InternalUrl, cwd: string, basename: string): P
 		sourcePath: record.filePath,
 		notes: [
 			`Issue #${record.id} (${record.category}${record.archived ? ", archived" : ""}).`,
-			"This file is writable: use the `edit`/`write` tools for body changes; use the `issues` tool (`op: edit` / `archive` / `unarchive`) for metadata and lifecycle.",
+			"This file is writable: edit it by rewriting the `issues://<id>.md` URL with the `write` tool (use the URL, not the on-disk path shown above) so frontmatter edits are validated and drive lifecycle — a terminal `status` archives, a `category` change moves, a `title` change renames; a malformed edit is rejected.",
 		],
 	};
 }
 
-async function writeIssueFile(cwd: string, url: InternalUrl, basename: string, content: string): Promise<WriteResult> {
+async function writeIssueFile(cwd: string, basename: string, content: string): Promise<WriteResult> {
 	const record = await findIssueByFilename(cwd, basename);
 	if (!record) {
 		throw new Error(
@@ -139,32 +140,30 @@ async function writeIssueFile(cwd: string, url: InternalUrl, basename: string, c
 		);
 	}
 
-	// Validate that the new content still parses with frontmatter so the
-	// model can't silently corrupt the metadata layer. The store relies on
-	// `---` fences staying intact (titles, status, archive flag are all
-	// derived from frontmatter, not the body).
-	try {
-		parseFrontmatter(content, { source: record.filePath, normalize: false, level: "fatal" });
-	} catch (err) {
-		const detail = err instanceof Error ? err.message : String(err);
-		throw new Error(
-			`issues:// write rejected: content does not parse as YAML frontmatter (${detail}). Keep the \`---\` fences and YAML block intact when editing.`,
-		);
+	// The store validates the edited content (intact `---` fences, parseable
+	// YAML, in-enum status/severity) and applies whatever lifecycle the new
+	// frontmatter implies — terminal status archives, category change moves,
+	// title change renames. A malformed edit throws here and is rejected before
+	// it can corrupt the metadata layer.
+	const { record: saved, moved, renamed, transitioned } = await saveIssueContent(cwd, record.id, content);
+	const notes: string[] = [];
+	if (transitioned) {
+		notes.push(saved.archived ? "moved → archive (status closed)" : "restored → active (status reopened)");
 	}
-
-	let normalized = content.replace(/\r\n?/g, "\n");
-	if (!normalized.endsWith("\n")) normalized += "\n";
-	await Bun.write(record.filePath, normalized);
+	if (moved) notes.push(`moved → category ${saved.category}`);
+	if (renamed) notes.push(`renamed → ${saved.filename}`);
+	const suffix = notes.length > 0 ? ` (${notes.join("; ")})` : "";
 	return {
-		text: `Wrote ${url.href} (${Buffer.byteLength(normalized, "utf-8")} bytes).`,
+		text: `Updated issue #${saved.id}${suffix}. Now at issues://${saved.filename}${saved.archived ? " (archived)" : ""}.`,
 	};
 }
 
 /**
  * Protocol handler for project-local `issues://` URLs.
  *
- * Individual issue files are mutable so the `edit`/`write` tools can
- * change body and frontmatter directly. Listing URLs (`issues://`,
+ * Individual issue files are mutable so the `write` tool can rewrite body and
+ * frontmatter via the `issues://<id>.md` URL (frontmatter edits drive lifecycle,
+ * validated in the store). Listing URLs (`issues://`,
  * `issues://archive`) and per-resource `buildListing()` responses stamp
  * themselves immutable explicitly so the listing pages stay read-only
  * even though the handler default is mutable.
@@ -192,10 +191,10 @@ export class IssuesProtocolHandler implements ProtocolHandler {
 		const parsed = parseIssuesUrl(url);
 		if (parsed.kind !== "file" || !parsed.basename) {
 			throw new Error(
-				"issues:// writes target a single issue file (e.g. `issues://14-fix-egress.md` or `issues://14.md`). Use the `issues` tool with `op: add` to create one, or `op: archive`/`unarchive`/`edit` for lifecycle and metadata.",
+				"issues:// writes target a single issue file (e.g. `issues://14-fix-egress.md` or `issues://14.md`). Use the `issues` tool with `op: add` to create one, or edit an existing issue (body or metadata) by rewriting `issues://<id>.md` with the `write` tool.",
 			);
 		}
-		return writeIssueFile(cwd, url, parsed.basename, content);
+		return writeIssueFile(cwd, parsed.basename, content);
 	}
 
 	async complete(query: string): Promise<UrlCompletion[]> {
