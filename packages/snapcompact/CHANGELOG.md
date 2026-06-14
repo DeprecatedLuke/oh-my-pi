@@ -131,6 +131,9 @@
 ### Fixed
 
 - Reverted the 1932px "high-res" frame override for Claude Opus 4.7+/Fable/Mythos back to the safe 1568px family default. Anthropic downscales frames whose long edge exceeds 1568px, so the larger frame bought nothing on real Anthropic, while some Anthropic-compatible gateways reject oversized frames outright (`messages.N.content.M.image.source...` 400) instead of downscaling — which blocked compaction entirely. All Claude lines now render at 1568px.
+### Fixed
+
+- `getPreservedArchive` now drops frames whose `data` is not well-formed standard base64, so a once-poisoned archive heals instead of failing forever. An older egress-secret-obfuscation bug could splice a `#…#` placeholder into a kept frame's base64 (frames in `preserveData` carry no `type` field for the scrubber's image-skip to key on) and persist it; every subsequent replay then shipped the corrupt frame and the provider rejected the whole request with a `400` on `messages[n].content[m].image.source.base64`. Validation lives in the single load gate used by both replay and the next compaction's frame carry-over, so a dropped frame is also evicted from the archive permanently. The companion obfuscation-side fix (never rewriting binary `data`) lives in the coding-agent secret scrubber.
 
 ## [15.12.1] - 2026-06-12
 
