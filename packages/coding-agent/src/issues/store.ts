@@ -262,9 +262,11 @@ async function writeCounter(cwd: string, next: number): Promise<void> {
 }
 
 /**
- * Reserve the next global id. Uses the counter file as a hint and falls back
- * to a full scan if the counter is missing, stale, or contended. Returns the
- * id we own — the caller must immediately use it to create a file.
+ * Reserve the next global id. Uses the counter file as a hint and falls back to
+ * a full scan if the counter is missing, stale, or contended. Returns the id the
+ * caller must immediately use to create a file. Callers serialize this with the
+ * file creation via {@link withIdAllocationLock} so concurrent in-process adds
+ * (e.g. several `issues add` calls in one turn) never hand out the same id.
  */
 async function allocateId(cwd: string): Promise<number> {
 	const counter = await readCounter(cwd);
@@ -460,6 +462,31 @@ export interface AddIssueResult {
 	created: true;
 }
 
+// Serialize id allocation + file creation per issues root. `allocateId` reads
+// the counter and scans the tree; without serialization two concurrent adds
+// race between scan and write and hand out the same id — the `wx` create does
+// not catch it because the filename embeds the slug, so same-id/different-slug
+// files never collide on disk. This in-process mutex (a per-root promise chain)
+// closes that window; cross-process races still fall back to the scan + `wx`
+// retry below.
+const idAllocationChains = new Map<string, Promise<unknown>>();
+function withIdAllocationLock<T>(cwd: string, fn: () => Promise<T>): Promise<T> {
+	const key = getIssuesRoot(cwd);
+	const prev = idAllocationChains.get(key) ?? Promise.resolve();
+	const run = prev.then(fn, fn);
+	// Tail swallows errors so one failed add never wedges the next.
+	idAllocationChains.set(
+		key,
+		run.then(
+			() => undefined,
+			() => undefined,
+		),
+	);
+	return run;
+}
+
+const MAX_ID_ALLOCATION_ATTEMPTS = 16;
+
 export async function addIssue(cwd: string, input: AddIssueInput): Promise<AddIssueResult> {
 	const category = normalizeCategory(input.category);
 	const title = input.title.trim();
@@ -472,49 +499,46 @@ export async function addIssue(cwd: string, input: AddIssueInput): Promise<AddIs
 	}
 
 	const slug = slugifyTitle(title);
-	const id = await allocateId(cwd);
-	const filename = buildFilename(id, slug);
 	const dir = path.join(getIssuesRoot(cwd), category);
-	await fs.mkdir(dir, { recursive: true });
-	const filePath = path.join(dir, filename);
-
-	const created = nowIso();
+	const createdAt = nowIso();
 	const frontmatter: IssueFrontmatter = {
 		title,
 		category,
 		severity: input.severity,
 		status: input.status ?? "open",
-		created,
-		updated: created,
+		created: createdAt,
+		updated: createdAt,
 		location: input.location && input.location.length > 0 ? input.location : undefined,
 		...input.extra,
 	};
-
 	const content = serializeIssue(frontmatter, body);
-	// `wx` ensures we never silently clobber an existing file if a racing
-	// session got the same id between scan and write; on EEXIST we re-allocate.
-	let handle: fs.FileHandle | undefined;
-	try {
-		handle = await fs.open(filePath, "wx");
-		await handle.writeFile(content);
-	} catch (err) {
-		if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-			// Retry exactly once with a fresh allocation; the scan-then-write
-			// loop in allocateId already deduplicates against the conflict.
-			return addIssue(cwd, input);
+
+	return withIdAllocationLock(cwd, async () => {
+		await fs.mkdir(dir, { recursive: true });
+		for (let attempt = 0; attempt < MAX_ID_ALLOCATION_ATTEMPTS; attempt++) {
+			const id = await allocateId(cwd);
+			const filePath = path.join(dir, buildFilename(id, slug));
+			let handle: fs.FileHandle | undefined;
+			try {
+				// `wx` fails with EEXIST if a racing *process* created the same
+				// file between our scan and write, so we never clobber it.
+				handle = await fs.open(filePath, "wx");
+				await handle.writeFile(content);
+			} catch (err) {
+				if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
+				throw err;
+			} finally {
+				await handle?.close();
+			}
+			await writeCounter(cwd, id + 1).catch(() => {
+				// Counter is a hint — failing to update it is not fatal; the next
+				// allocation falls back to a scan.
+			});
+			const record = await readIssueFromPath(filePath, id, category, false);
+			return { record, created: true };
 		}
-		throw err;
-	} finally {
-		await handle?.close();
-	}
-
-	await writeCounter(cwd, id + 1).catch(() => {
-		// Counter is a hint — failing to update it is not fatal; the next
-		// allocation will fall back to a scan.
+		throw new Error("Failed to allocate a unique issue id; the issues store may be contended.");
 	});
-
-	const record = await readIssueFromPath(filePath, id, category, false);
-	return { record, created: true };
 }
 
 export interface EditIssueResult {

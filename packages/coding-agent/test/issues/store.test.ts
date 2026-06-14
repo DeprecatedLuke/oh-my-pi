@@ -428,3 +428,25 @@ describe("issues store: legacy archive migration", () => {
 		expect(await dirExists(path.join(root, ".archive"))).toBe(true);
 	});
 });
+
+describe("issues store: concurrent add safety", () => {
+	it("hands out unique ids for many concurrent adds in one process", async () => {
+		const count = 12;
+		// Distinct titles → distinct slugs → distinct filenames, so a plain `wx`
+		// exclusive create cannot catch a same-id collision; only serialized
+		// allocation can. This is the exact shape that previously double-allocated.
+		const results = await Promise.all(
+			Array.from({ length: count }, (_, i) =>
+				addIssue(tempDir, { category: "security", title: `Concurrent finding ${i}`, body: "B." }),
+			),
+		);
+		const ids = results.map(r => r.record.id);
+		expect(new Set(ids).size).toBe(count);
+		// Every allocated id resolves back to its own record (files actually landed).
+		for (const r of results) {
+			expect((await findIssueById(tempDir, r.record.id))?.id).toBe(r.record.id);
+		}
+		const all = await listIssues(tempDir, { archived: false });
+		expect(all.length).toBe(count);
+	});
+});
