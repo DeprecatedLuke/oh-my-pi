@@ -3643,6 +3643,26 @@ describe("SecretObfuscator image payloads", () => {
 	});
 });
 
+describe("SecretObfuscator redacted thinking blocks", () => {
+	it("never rewrites a redacted-thinking block's opaque data, but still redacts co-resident content", () => {
+		// Anthropic `redacted_thinking` / OpenAI encrypted reasoning hand back an
+		// opaque `data` blob that must round-trip verbatim. A configured secret can
+		// coincidentally match a substring of the ciphertext; splicing a placeholder
+		// into it corrupts the payload, so the provider rejects the turn on replay.
+		const secret = "S3cretToken";
+		const obf = new SecretObfuscator([{ type: "plain", content: secret }]);
+		const data = `Eq3Ck${secret}rW9xPq${secret}Lm0z`;
+
+		// The opaque reasoning payload is preserved byte-for-byte...
+		const thinking = obf.obfuscateObject({ type: "redactedThinking", data });
+		expect(thinking.data).toBe(data);
+
+		// ...while a co-resident text block in the same assistant turn is still redacted.
+		const text = obf.obfuscateObject({ type: "text", text: `leaked ${secret}` });
+		expect(text.text).not.toContain(secret);
+	});
+});
+
 describe("SecretObfuscator case hints", () => {
 	it("uses a shared base token with capitalization hints for case variants", () => {
 		const obfuscator = new SecretObfuscator([
