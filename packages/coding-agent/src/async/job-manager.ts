@@ -199,6 +199,7 @@ export class AsyncJobManager {
 	readonly #deliveryBatchMaxWaitMs: number;
 	#deliveryLoop: Promise<void> | undefined;
 	#disposed = false;
+	readonly #changeListeners = new Set<() => void>();
 
 	#filterJobs(jobs: Iterable<AsyncJob>, filter?: AsyncJobFilter): AsyncJob[] {
 		const ownerId = filter?.ownerId;
@@ -318,11 +319,40 @@ export class AsyncJobManager {
 				job.errorText = errorText;
 				this.#enqueueDelivery(id, errorText);
 				this.#scheduleEviction(id);
+			} finally {
+				this.#emitChange();
 			}
 		})();
 
 		this.#jobs.set(id, job);
+		this.#emitChange();
 		return id;
+	}
+
+	/**
+	 * Subscribe to job-set changes: a job is registered, or reaches a terminal
+	 * state (completed/failed/cancelled). Fires regardless of whether the job
+	 * streamed progress, so UI surfaces (the anchored Background Jobs panel) can
+	 * refresh for jobs started outside a turn — e.g. slash-command spawns like
+	 * `/knowledge compact`. Returns an unsubscribe function.
+	 */
+	onChange(cb: () => void): () => void {
+		this.#changeListeners.add(cb);
+		return () => {
+			this.#changeListeners.delete(cb);
+		};
+	}
+
+	#emitChange(): void {
+		for (const cb of this.#changeListeners) {
+			try {
+				cb();
+			} catch (error) {
+				logger.warn("Async job change listener failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
 	}
 
 	/**
@@ -338,6 +368,7 @@ export class AsyncJobManager {
 		job.status = "cancelled";
 		job.abortController.abort();
 		this.#scheduleEviction(id);
+		this.#emitChange();
 		return true;
 	}
 

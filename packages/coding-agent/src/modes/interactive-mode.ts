@@ -992,6 +992,21 @@ export class InteractiveMode implements InteractiveModeContext {
 		// live subagent, matching the sticky HUD's active set (#5873).
 		setActiveTodoDescriptionsProvider(() => this.#getActiveSubagentDescriptions());
 
+		// Keep the anchored Background Jobs panel live for jobs started outside a
+		// turn (e.g. `/knowledge compact` / `/knowledge save`, which register a
+		// job from a slash command, not an agent turn). Without this the panel
+		// only refreshed on turn/focus/observer changes, so a job's start, live
+		// age, and completion stayed frozen until the user sent a message.
+		const jobManager = this.session.asyncJobManager;
+		if (jobManager) {
+			this.#eventBusUnsubscribers.push(
+				jobManager.onChange(() => {
+					this.#eventController.refreshBackgroundJobs();
+					this.ui.requestRender();
+				}),
+			);
+		}
+
 		// Load initial todos
 		await this.#loadTodoList();
 

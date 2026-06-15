@@ -608,6 +608,28 @@ describe("AsyncJobManager", () => {
 		releaseServer.resolve();
 		await manager.waitForAll();
 	});
+
+	test("onChange fires on register and terminal transition even with no progress", async () => {
+		const manager = new AsyncJobManager({ onJobComplete: async () => {} });
+		let changes = 0;
+		const unsubscribe = manager.onChange(() => {
+			changes++;
+		});
+
+		// A job that never calls reportProgress (mirrors the slash-command-spawned
+		// knowledge pass): the panel must still learn it started, then finished.
+		manager.register("task", "KnowledgeCompact", async () => "done");
+		// Registration notifies synchronously so the panel kicks immediately.
+		expect(changes).toBe(1);
+
+		await manager.waitForAll();
+		// The terminal transition (completed) notifies too.
+		expect(changes).toBe(2);
+
+		unsubscribe();
+		manager.register("task", "Other", async () => "done");
+		expect(changes).toBe(2);
+	});
 });
 
 describe("AsyncJobManager smart poll-wait escalation", () => {
