@@ -90,6 +90,7 @@ describe("runSessionKnowledgeAgent", () => {
 		const result = await runSessionKnowledgeAgent({
 			cwd: repo,
 			sourceTitle: "handoff session",
+			instruction: "Update the project knowledge base from this session.",
 			agent: {
 				initialState: {
 					systemPrompt: ["Base prompt"],
@@ -142,6 +143,7 @@ describe("runSessionKnowledgeAgent", () => {
 		const result = await runSessionKnowledgeAgent({
 			cwd: dir,
 			sourceTitle: "compaction session",
+			instruction: "Update the project knowledge base from this session.",
 			agent: {
 				initialState: {
 					systemPrompt: [masker.obfuscate(`Base prompt mentioning ${secret}`)],
@@ -163,23 +165,6 @@ describe("runSessionKnowledgeAgent", () => {
 		expect(result.committed).toBe(false);
 	});
 
-	it("skips an empty context without spawning the agent", async () => {
-		const dir = await tempDir("pi-knowledge-empty-");
-		const model = createMockModel({ responses: [] });
-
-		const result = await runSessionKnowledgeAgent({
-			cwd: dir,
-			sourceTitle: "handoff session",
-			agent: {
-				initialState: { systemPrompt: ["Base prompt"], messages: [], model, tools: [] },
-				streamFn: model.stream,
-			},
-		});
-
-		expect(result).toEqual({ committed: false });
-		expect(model.calls.length).toBe(0);
-	});
-
 	it("does nothing when the signal is already aborted", async () => {
 		const dir = await tempDir("pi-knowledge-abort-");
 		const model = createMockModel({ responses: [] });
@@ -189,6 +174,7 @@ describe("runSessionKnowledgeAgent", () => {
 		const result = await runSessionKnowledgeAgent({
 			cwd: dir,
 			sourceTitle: "handoff session",
+			instruction: "Update the project knowledge base from this session.",
 			signal: controller.signal,
 			agent: {
 				initialState: { systemPrompt: ["Base prompt"], messages: [userMessage("hi")], model, tools: [] },
@@ -198,6 +184,34 @@ describe("runSessionKnowledgeAgent", () => {
 
 		expect(result).toEqual({ committed: false });
 		expect(model.calls.length).toBe(0);
+	});
+
+	it("drives the loop from an empty seed context (compact-style pass)", async () => {
+		const repo = await initRepo("pi-knowledge-compact-");
+		const model = writeThenStopModel({
+			path: "knowledge://workflows/keep.md",
+			content: "---\ndescription: keep\n---\n\n# Keep\n\n- consolidated fact.\n",
+		});
+		const session = knowledgeToolSession(repo);
+
+		const result = await runSessionKnowledgeAgent({
+			cwd: repo,
+			sourceTitle: "/knowledge compact",
+			instruction: "Prune obsolete and duplicate knowledge files.",
+			agent: {
+				initialState: { systemPrompt: ["Base prompt"], messages: [], model, tools: [new WriteTool(session)] },
+				streamFn: model.stream,
+				getApiKey: () => "test-key",
+				convertToLlm,
+			},
+		});
+
+		// Empty seed no longer short-circuits: the loop runs and commits.
+		expect(model.calls.length).toBe(2);
+		expect(result.committed).toBe(true);
+		expect(await Bun.file(path.join(repo, ".omp", "knowledge", "workflows", "keep.md")).text()).toContain(
+			"consolidated fact",
+		);
 	});
 });
 

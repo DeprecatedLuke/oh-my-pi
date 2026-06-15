@@ -682,23 +682,35 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "knowledge",
-		description: "Regenerate project knowledge from this session",
-		subcommands: [{ name: "compact", description: "Regenerate .omp/knowledge from the current session" }],
+		description: "Save or compact the project knowledge base",
+		subcommands: [
+			{ name: "save", description: "Save durable knowledge from the current session to .omp/knowledge" },
+			{ name: "compact", description: "Background agent: prune obsolete/duplicate/outdated knowledge files" },
+		],
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			const { verb } = parseSubcommand(command.args);
-			if (verb && verb !== "compact") {
-				return usage("Usage: /knowledge [compact]", runtime);
+			if (verb === "compact") {
+				const result = runtime.session.compactKnowledge({ sourceTitle: "/knowledge compact" });
+				if (result.started) {
+					await runtime.output(`Knowledge compaction started in the background (job ${result.jobId ?? "?"}).`);
+				} else {
+					await runtime.output(`Knowledge compaction unavailable: ${result.reason ?? "unknown"}.`);
+				}
+				return commandConsumed();
+			}
+			if (verb && verb !== "save") {
+				return usage("Usage: /knowledge <save|compact>", runtime);
 			}
 			try {
-				const result = await runtime.session.compactKnowledge({ sourceTitle: "/knowledge compact" });
+				const result = await runtime.session.saveKnowledge({ sourceTitle: "/knowledge save" });
 				if (result.committed) {
-					await runtime.output(`Knowledge updated (commit ${result.sha ?? "unknown"}).`);
+					await runtime.output(`Knowledge saved (commit ${result.sha ?? "unknown"}).`);
 				} else {
-					await runtime.output("Knowledge pass complete — no changes.");
+					await runtime.output("Knowledge save complete — no changes.");
 				}
 			} catch (err) {
-				await runtime.output(`Knowledge pass failed: ${err instanceof Error ? err.message : String(err)}`);
+				await runtime.output(`Knowledge save failed: ${err instanceof Error ? err.message : String(err)}`);
 			}
 			return commandConsumed();
 		},

@@ -2,11 +2,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { type Api, type Message, type Model, streamSimple, type TextContent } from "@oh-my-pi/pi-ai";
-import { getProjectDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { getProjectDir, isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../config/model-registry";
 import { resolveModelRoleValue, resolveRoleSelection } from "../config/model-resolver";
 import { Settings } from "../config/settings";
 import { EditTool } from "../edit";
+import sessionKnowledgeTemplate from "../prompts/system/session-knowledge.md" with { type: "text" };
 import { discoverAuthStorage } from "../sdk";
 import { type RunSessionKnowledgeAgentResult, runSessionKnowledgeAgent } from "../session/knowledge-base";
 import {
@@ -379,6 +380,7 @@ function createProductionExporter(modelOverride: string | undefined): SessionKno
 		return await runSessionKnowledgeAgent({
 			cwd: job.session.cwd,
 			sourceTitle: job.sourceTitle,
+			instruction: prompt.render(sessionKnowledgeTemplate, { sourceTitle: job.sourceTitle }),
 			metadata: { source: "build-knowledge", sessionId: job.session.id },
 			agent: {
 				initialState: {

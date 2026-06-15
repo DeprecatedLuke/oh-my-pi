@@ -1,7 +1,6 @@
 import { Agent, type AgentOptions, type AgentToolContext, type ToolCallContext } from "@oh-my-pi/pi-agent-core";
 import type { Message } from "@oh-my-pi/pi-ai";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
-import sessionKnowledgeTemplate from "../prompts/system/session-knowledge.md" with { type: "text" };
+import { logger } from "@oh-my-pi/pi-utils";
 import { commitKnowledgeFiles } from "./commit-knowledge";
 
 /**
@@ -26,6 +25,8 @@ export interface RunSessionKnowledgeAgentConfig {
 	cwd: string;
 	/** Human label recorded on the knowledge commit and in debug logs. */
 	sourceTitle: string;
+	/** Developer instruction appended as the final turn that drives the pass (save vs compact). */
+	instruction: string;
 	/** Aborts both the agent loop and the commit. */
 	signal?: AbortSignal;
 	/** Agent options cloned from the parent session. Its `getToolContext` is the base context the loop layers `canWriteKnowledge` onto. */
@@ -57,10 +58,6 @@ export async function runSessionKnowledgeAgent(
 	if (signal?.aborted) return { committed: false };
 
 	const seededMessages = config.agent.initialState?.messages ?? [];
-	if (seededMessages.length === 0) {
-		logger.debug("Session knowledge update skipped: empty context", { sourceTitle });
-		return { committed: false };
-	}
 
 	const baseGetToolContext = config.agent.getToolContext;
 	const agent = new Agent({
@@ -80,7 +77,7 @@ export async function runSessionKnowledgeAgent(
 	try {
 		const instruction: Message = {
 			role: "developer",
-			content: [{ type: "text", text: prompt.render(sessionKnowledgeTemplate, { sourceTitle }) }],
+			content: [{ type: "text", text: config.instruction }],
 			attribution: "agent",
 			timestamp: Date.now(),
 		};
