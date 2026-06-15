@@ -3162,6 +3162,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// **MUST NOT** tear it down.
 			ownedAsyncJobManager: asyncJobManager,
 			asyncJobManager: scopedAsyncJobManager,
+			eventBus,
 			scopedModels: options.scopedModels,
 			promptTemplates,
 			slashCommands,
