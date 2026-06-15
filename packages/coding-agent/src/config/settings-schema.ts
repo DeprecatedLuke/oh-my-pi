@@ -1869,13 +1869,14 @@ export const SETTINGS_SCHEMA = {
 	// Notifications
 	"completion.notify": {
 		type: "enum",
-		values: ["on", "off"] as const,
+		values: ["on", "off", "bell"] as const,
 		default: "on",
 		ui: {
 			tab: "interaction",
 			group: "Notifications",
 			label: "Completion Notification",
-			description: "Notify when the agent finishes a turn",
+			description:
+				"Alert when the agent finishes a turn with no background tasks running ('on' = desktop notification, 'bell' = audible terminal bell)",
 		},
 	},
 

@@ -403,3 +403,42 @@ describe("EventController — error toast gated while auto-retry is pending", ()
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ body: "Stopped with error", type: "error" }));
 	});
 });
+
+describe("EventController.sendCompletionNotification — bell mode", () => {
+	it("rings the terminal bell and skips the desktop notification when completion.notify=bell", () => {
+		const bell = vi.spyOn(TERMINAL, "ringBell").mockImplementation(() => {});
+		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		settings.override("completion.notify", "bell");
+		const controller = new EventController(makeContext());
+		controller.sendCompletionNotification(makeAgentEndEvent([makeAssistantMessage("stop")]));
+		expect(bell).toHaveBeenCalledTimes(1);
+		expect(notify).toHaveBeenCalledTimes(0);
+	});
+
+	it("honors the abort/error skip in bell mode", () => {
+		const bell = vi.spyOn(TERMINAL, "ringBell").mockImplementation(() => {});
+		settings.override("completion.notify", "bell");
+		const aborted = new EventController(makeContext());
+		aborted.sendCompletionNotification(makeAgentEndEvent([makeAssistantMessage("aborted")]));
+		const errored = new EventController(makeContext());
+		errored.sendCompletionNotification(makeAgentEndEvent([makeAssistantMessage("error")]));
+		expect(bell).toHaveBeenCalledTimes(0);
+	});
+
+	it("does not ring the bell when completion.notify=on (desktop notification only)", () => {
+		const bell = vi.spyOn(TERMINAL, "ringBell").mockImplementation(() => {});
+		vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		settings.override("completion.notify", "on");
+		const controller = new EventController(makeContext());
+		controller.sendCompletionNotification(makeAgentEndEvent([makeAssistantMessage("stop")]));
+		expect(bell).toHaveBeenCalledTimes(0);
+	});
+
+	it("rings nothing when completion.notify=off", () => {
+		const bell = vi.spyOn(TERMINAL, "ringBell").mockImplementation(() => {});
+		settings.override("completion.notify", "off");
+		const controller = new EventController(makeContext());
+		controller.sendCompletionNotification(makeAgentEndEvent([makeAssistantMessage("stop")]));
+		expect(bell).toHaveBeenCalledTimes(0);
+	});
+});

@@ -183,6 +183,18 @@ export class TerminalInfo {
 			sendDesktopNotification(message);
 		}
 	}
+
+	/**
+	 * Emit a raw terminal bell (BEL) regardless of the negotiated notify
+	 * protocol. Used for the audible completion alert on terminals whose
+	 * {@link notifyProtocol} would otherwise render a silent OSC 9/99 desktop
+	 * notification. Honors PI_NOTIFICATIONS suppression like
+	 * {@link sendNotification}.
+	 */
+	ringBell(): void {
+		if (isNotificationSuppressed()) return;
+		process.stdout.write(NotifyProtocol.Bell);
+	}
 }
 
 /** Detect terminal multiplexers where scrollback clearing and height-change redraws are hostile. */

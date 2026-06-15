@@ -1770,6 +1770,15 @@ export class EventController {
 		const last = event.messages.findLast((message): message is AssistantMessage => message.role === "assistant");
 		if (last?.stopReason === "aborted" || last?.stopReason === "error") return;
 
+		// "bell" rings an audible terminal bell on every terminal; "on" sends the
+		// richer desktop notification (which already collapses to a BEL on
+		// bell-only terminals). Both fire only here, where the turn has reached the
+		// user with no background work pending (see #isWaitingForUserInput).
+		if (notify === "bell") {
+			TERMINAL.ringBell();
+			return;
+		}
+
 		const sessionName = this.ctx.sessionManager.getSessionName();
 		TERMINAL.sendNotification({
 			title: sessionName || "Oh My Pi",
