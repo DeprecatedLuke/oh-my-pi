@@ -15,12 +15,19 @@ Purpose: durable, reusable facts learned by agents: project-specific workflows, 
 - Keep files concise and maintainable, like AGENTS.md but agent-maintained rather than user-curated.
 - Every returned file MUST start with YAML frontmatter containing `description: <tags>`. Description is shown in the prompt-time Knowledge index and MUST be tag-based: dense comma-separated retrieval tags or short trigger phrases, not a sentence. Prefer subsystem names, commands, file names, failure names, user preference labels, URLs/hostnames, config keys, and workflow names future agents may look for.
 - Paths MUST be exactly <category>/<topic>.md, relative to .omp/knowledge.
-- Output JSON only, no markdown fences.
+- Return your result by calling the `save_knowledge` tool exactly once. Pass an empty `files` array when nothing durable should be saved.
 </rules>
 
-<output-schema>
-{"files":[{"path":"category/topic.md","content":"---\ndescription: build-knowledge, session exports, .omp/knowledge, cache invalidation\n---\n\n# Topic\n\n- Durable fact…\n"}]}
-</output-schema>
+<save_knowledge-arguments>
+Call `save_knowledge` with a `files` array; each entry is `{"path":"category/topic.md","content":"<full markdown file>"}`. Example file content:
+---
+description: build-knowledge, session exports, .omp/knowledge, cache invalidation
+---
+
+# Topic
+
+- Durable fact…
+</save_knowledge-arguments>
 
 <existing-knowledge>
 {{existingKnowledge}}

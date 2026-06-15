@@ -29,6 +29,20 @@ function createAssistantMessage(text: string): AssistantMessage {
 	};
 }
 
+function createKnowledgeToolMessage(files: Array<{ path: string; content: string }>): AssistantMessage {
+	const base = createAssistantMessage("");
+	return {
+		...base,
+		content: [{ type: "toolCall", id: "call_knowledge", name: "save_knowledge", arguments: { files } }],
+		stopReason: "toolUse",
+	};
+}
+
+function createErrorMessage(errorMessage: string): AssistantMessage {
+	const base = createAssistantMessage("");
+	return { ...base, content: [], stopReason: "error", errorMessage };
+}
+
 describe("session knowledge base", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -43,17 +57,13 @@ describe("session knowledge base", () => {
 			if (!model) throw new Error("Expected bundled model");
 
 			const completeSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue(
-				createAssistantMessage(
-					JSON.stringify({
-						files: [
-							{
-								path: "workflows/smoke-tests.md",
-								content:
-									"# Smoke Tests\n\n- Run `omp --smoke-test` after binary worker changes.\n- Run `ci:test:smoke` for source-link and tarball install smoke coverage.\n",
-							},
-						],
-					}),
-				),
+				createKnowledgeToolMessage([
+					{
+						path: "workflows/smoke-tests.md",
+						content:
+							"# Smoke Tests\n\n- Run `omp --smoke-test` after binary worker changes.\n- Run `ci:test:smoke` for source-link and tarball install smoke coverage.\n",
+					},
+				]),
 			);
 
 			const sessionMessages: Message[] = [
@@ -89,6 +99,10 @@ describe("session knowledge base", () => {
 			expect(promptText).toContain('<file path="workflows/smoke-tests.md">');
 			expect(promptText).toContain("Prefer updating an existing category/topic file");
 			expect(promptText).toContain("MUST be tag-based");
+			const callOptions = completeSpy.mock.calls[0]?.[2];
+			expect(callOptions?.toolChoice).toEqual({ type: "tool", name: "save_knowledge" });
+			expect(callOptions?.maxTokens).toBeUndefined();
+			expect(context?.tools?.some(tool => tool.name === "save_knowledge")).toBe(true);
 		} finally {
 			await fs.rm(dir, { recursive: true, force: true });
 		}
@@ -100,16 +114,12 @@ describe("session knowledge base", () => {
 			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 			if (!model) throw new Error("Expected bundled model");
 			const completeSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue(
-				createAssistantMessage(
-					JSON.stringify({
-						files: [
-							{
-								path: "runtime/background-jobs.md",
-								content: "# Background Jobs\n\n- Completion deliveries are suppressed during handoff.\n",
-							},
-						],
-					}),
-				),
+				createKnowledgeToolMessage([
+					{
+						path: "runtime/background-jobs.md",
+						content: "# Background Jobs\n\n- Completion deliveries are suppressed during handoff.\n",
+					},
+				]),
 			);
 
 			const sessionMessages: Message[] = [
@@ -212,9 +222,7 @@ describe("session knowledge base", () => {
 		try {
 			const model = getBundledModel("openai-codex", "gpt-5.5");
 			if (!model) throw new Error("Expected bundled model");
-			const completeSpy = vi
-				.spyOn(ai, "completeSimple")
-				.mockResolvedValue(createAssistantMessage(JSON.stringify({ files: [] })));
+			const completeSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue(createKnowledgeToolMessage([]));
 
 			const result = await writeSessionKnowledge({
 				cwd: dir,
@@ -230,6 +238,86 @@ describe("session knowledge base", () => {
 			expect(result).toEqual({ written: [], skipped: 0 });
 			expect(completeSpy).toHaveBeenCalledTimes(1);
 			expect(completeSpy.mock.calls[0]?.[2]?.reasoning).toBe(ai.Effort.Low);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("retries a failed extraction before succeeding", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-knowledge-retry-"));
+		try {
+			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+			if (!model) throw new Error("Expected bundled model");
+			const completeSpy = vi
+				.spyOn(ai, "completeSimple")
+				.mockResolvedValueOnce(createErrorMessage("upstream 529"))
+				.mockResolvedValueOnce(
+					createKnowledgeToolMessage([
+						{ path: "runtime/retry.md", content: "# Retry\n\n- Extraction retried after a transient error.\n" },
+					]),
+				);
+
+			const result = await writeSessionKnowledge({
+				cwd: dir,
+				model,
+				apiKey: "test-key",
+				baseSystemPrompt: ["Base prompt"],
+				sourceTitle: "auto-compaction session",
+				messages: [{ role: "user", content: [{ type: "text", text: "Durable retry fact." }], timestamp: 1 }],
+			});
+
+			expect(completeSpy).toHaveBeenCalledTimes(2);
+			expect(result?.written).toEqual(["runtime/retry.md"]);
+			expect(await Bun.file(path.join(dir, ".omp", "knowledge", "runtime", "retry.md")).text()).toContain("Retry");
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("returns undefined when every extraction attempt fails", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-knowledge-fail-"));
+		try {
+			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+			if (!model) throw new Error("Expected bundled model");
+			const completeSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue(createErrorMessage("upstream 529"));
+
+			const result = await writeSessionKnowledge({
+				cwd: dir,
+				model,
+				apiKey: "test-key",
+				baseSystemPrompt: ["Base prompt"],
+				sourceTitle: "auto-compaction session",
+				messages: [{ role: "user", content: [{ type: "text", text: "Durable fact." }], timestamp: 1 }],
+			});
+
+			expect(result).toBeUndefined();
+			expect(completeSpy).toHaveBeenCalledTimes(3);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("salvages files from a prose response when the tool call is downgraded", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-knowledge-prose-"));
+		try {
+			const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+			if (!model) throw new Error("Expected bundled model");
+			vi.spyOn(ai, "completeSimple").mockResolvedValue(
+				createAssistantMessage(
+					`Here is the knowledge:\n${JSON.stringify({ files: [{ path: "runtime/prose.md", content: "# Prose\n\n- Recovered from text.\n" }] })}`,
+				),
+			);
+
+			const result = await writeSessionKnowledge({
+				cwd: dir,
+				model,
+				apiKey: "test-key",
+				baseSystemPrompt: ["Base prompt"],
+				sourceTitle: "handoff session",
+				messages: [{ role: "user", content: [{ type: "text", text: "Durable prose fact." }], timestamp: 1 }],
+			});
+
+			expect(result?.written).toEqual(["runtime/prose.md"]);
 		} finally {
 			await fs.rm(dir, { recursive: true, force: true });
 		}

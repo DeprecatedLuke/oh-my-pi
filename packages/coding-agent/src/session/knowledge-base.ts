@@ -1,10 +1,11 @@
 import type * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { Message, MessageAttribution, Model, Tool } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, Message, MessageAttribution, Model, Tool } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
 import { isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
+import { extractTextContent, extractToolCall } from "../commit/utils";
 import sessionKnowledgeTemplate from "../prompts/system/session-knowledge.md" with { type: "text" };
 import { obfuscateMessages, type SecretObfuscator } from "../secrets/obfuscator";
 import { ensureKnowledgeDescriptionContent, normalizeKnowledgePath } from "./knowledge-index";
@@ -127,22 +128,128 @@ function resolveKnowledgeReasoning(model: Model): ai.Effort | undefined {
 	}
 }
 
-function parseKnowledgeResponse(text: string): KnowledgeExtractionResponse {
-	const start = text.indexOf("{");
-	const end = text.lastIndexOf("}");
-	if (start < 0 || end < start) return {};
-	const parsed = JSON.parse(text.slice(start, end + 1)) as unknown;
-	if (!parsed || typeof parsed !== "object") return {};
-	const record = parsed as { files?: unknown };
-	if (!Array.isArray(record.files)) return {};
+const KNOWLEDGE_TOOL_NAME = "save_knowledge";
+const KNOWLEDGE_EXTRACTION_ATTEMPTS = 3;
+
+// Forced-tool extraction: the model returns the knowledge files as structured
+// tool arguments (provider-parsed JSON) instead of free-form text, so a long
+// extraction no longer truncates mid-JSON and dies in `JSON.parse`. Anthropic
+// strips thinking automatically when a tool is forced; models that reject a
+// forced choice downgrade it to "auto" (see anthropic provider), which is why
+// `extractKnowledgeFiles` keeps a prose fallback.
+const knowledgeTool: Tool = {
+	name: KNOWLEDGE_TOOL_NAME,
+	description:
+		"Persist the durable project knowledge extracted from this session. Call exactly once; pass an empty `files` array when the session yields nothing worth saving.",
+	parameters: {
+		type: "object",
+		additionalProperties: false,
+		required: ["files"],
+		properties: {
+			files: {
+				type: "array",
+				description: "Knowledge files to create or overwrite. Empty when nothing durable was learned.",
+				items: {
+					type: "object",
+					additionalProperties: false,
+					required: ["path", "content"],
+					properties: {
+						path: {
+							type: "string",
+							description: "Path as <category>/<topic>.md, relative to .omp/knowledge.",
+						},
+						content: {
+							type: "string",
+							description:
+								"Full markdown file content, starting with YAML frontmatter whose `description` is comma-separated retrieval tags.",
+						},
+					},
+				},
+			},
+		},
+	},
+	strict: false,
+};
+
+function coerceKnowledgeFiles(filesValue: unknown): KnowledgeFileUpdate[] {
+	if (!Array.isArray(filesValue)) return [];
 	const files: KnowledgeFileUpdate[] = [];
-	for (const item of record.files) {
+	for (const item of filesValue) {
 		if (!item || typeof item !== "object") continue;
 		const candidate = item as { path?: unknown; content?: unknown };
 		if (typeof candidate.path !== "string" || typeof candidate.content !== "string") continue;
 		files.push({ path: candidate.path, content: candidate.content });
 	}
-	return { files };
+	return files;
+}
+
+function parseKnowledgeToolArguments(args: Record<string, unknown> | undefined): KnowledgeExtractionResponse {
+	if (!args || typeof args !== "object") return {};
+	const filesValue = (args as { files?: unknown }).files;
+	if (!Array.isArray(filesValue)) return {};
+	return { files: coerceKnowledgeFiles(filesValue) };
+}
+
+// Salvage `{ "files": [...] }` from a prose response — used only when a model
+// answered in text after downgrading the forced tool choice to "auto".
+function parseKnowledgeResponse(text: string): KnowledgeExtractionResponse {
+	const start = text.indexOf("{");
+	const end = text.lastIndexOf("}");
+	if (start < 0 || end < start) return {};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text.slice(start, end + 1));
+	} catch {
+		return {};
+	}
+	if (!parsed || typeof parsed !== "object") return {};
+	const filesValue = (parsed as { files?: unknown }).files;
+	if (!Array.isArray(filesValue)) return {};
+	return { files: coerceKnowledgeFiles(filesValue) };
+}
+
+interface KnowledgeExtractionParams {
+	model: Model;
+	context: ai.Context;
+	options: ai.SimpleStreamOptions;
+	signal?: AbortSignal;
+	sourceTitle: string;
+}
+
+// Run the extraction with bounded retries. Returns the parsed files (possibly
+// empty when the model deliberately saved nothing) or `undefined` when every
+// attempt errored/aborted, which the caller surfaces as a failed export.
+async function extractKnowledgeFiles(
+	params: KnowledgeExtractionParams,
+): Promise<KnowledgeExtractionResponse | undefined> {
+	const { model, context, options, signal, sourceTitle } = params;
+	let lastError: string | undefined;
+	for (let attempt = 1; attempt <= KNOWLEDGE_EXTRACTION_ATTEMPTS; attempt++) {
+		if (signal?.aborted) return undefined;
+		let response: AssistantMessage;
+		try {
+			response = await ai.completeSimple(model, context, options);
+		} catch (error) {
+			if (signal?.aborted) return undefined;
+			lastError = error instanceof Error ? error.message : String(error);
+			logger.debug("Session knowledge extraction attempt threw", { sourceTitle, attempt, error: lastError });
+			continue;
+		}
+		if (response.stopReason === "aborted") return undefined;
+		if (response.stopReason === "error") {
+			lastError = response.errorMessage ?? "provider error";
+			logger.debug("Session knowledge extraction attempt errored", { sourceTitle, attempt, error: lastError });
+			continue;
+		}
+		const toolCall = extractToolCall(response, KNOWLEDGE_TOOL_NAME);
+		if (toolCall) return parseKnowledgeToolArguments(toolCall.arguments);
+		const fromText = parseKnowledgeResponse(extractTextContent(response));
+		if (fromText.files) return fromText;
+		lastError = "no knowledge tool call in response";
+		logger.debug("Session knowledge extraction attempt had no tool call", { sourceTitle, attempt });
+	}
+	logger.debug("Session knowledge extraction exhausted retries", { sourceTitle, error: lastError });
+	return undefined;
 }
 
 async function applyKnowledgeUpdates(
@@ -217,32 +324,27 @@ export async function writeSessionKnowledge(
 			messageCount: options.messages.length,
 		});
 		const reasoning = resolveKnowledgeReasoning(options.model);
-		const response = await ai.completeSimple(
-			options.model,
-			{
+		const sessionTools = options.tools && options.tools.length > 0 ? options.tools : [];
+		const tools = [...sessionTools, knowledgeTool];
+		const parsed = await extractKnowledgeFiles({
+			model: options.model,
+			context: {
 				systemPrompt: outboundSystemPrompt,
 				messages: outboundMessages,
-				tools: options.tools && options.tools.length > 0 ? [...options.tools] : undefined,
+				tools,
 			},
-			{
-				maxTokens: 4096,
+			options: {
 				signal: options.signal,
 				apiKey: options.apiKey,
 				reasoning,
 				initiatorOverride: options.initiatorOverride,
 				metadata: options.metadata,
-				toolChoice: options.tools && options.tools.length > 0 ? "none" : undefined,
+				toolChoice: { type: "tool", name: KNOWLEDGE_TOOL_NAME },
 			},
-		);
-		if (response.stopReason === "error") {
-			logger.debug("Session knowledge extraction failed", { error: response.errorMessage });
-			return undefined;
-		}
-		const text = response.content
-			.filter((block): block is { type: "text"; text: string } => block.type === "text")
-			.map(block => block.text)
-			.join("\n");
-		const parsed = parseKnowledgeResponse(text);
+			signal: options.signal,
+			sourceTitle: options.sourceTitle,
+		});
+		if (!parsed) return undefined;
 		if (!parsed.files || parsed.files.length === 0) {
 			logger.debug("Session knowledge update complete", {
 				sourceTitle: options.sourceTitle,
