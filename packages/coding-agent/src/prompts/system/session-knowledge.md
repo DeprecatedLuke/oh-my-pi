@@ -1,39 +1,42 @@
-<task>Update the project-local agent knowledge base from the preceding session context.</task>
+<task>Update the project-local agent knowledge base from the preceding session, right now, using your tools.</task>
 
 <knowledge-base>
-Root: .omp/knowledge
-File shape: .omp/knowledge/<category>/<topic>.md with YAML frontmatter `description` containing comma-separated retrieval tags.
-Purpose: durable, reusable facts learned by agents: project-specific workflows, IPs/endpoints, smoke-test flows, user preferences/frustrations, operational constraints, recurring pitfalls, and decisions that should help future sessions.
+Root: .omp/knowledge, addressed through `knowledge://` URLs.
+File shape: `knowledge://<category>/<topic>.md` with YAML frontmatter `description` holding comma-separated retrieval tags.
+Purpose: durable, reusable facts learned this session that should help future sessions — project-specific workflows, IPs/endpoints/hostnames, smoke-test flows, user preferences/frustrations, operational constraints, recurring pitfalls, config keys, and decisions.
 </knowledge-base>
 
+<how-to>
+1. List what already exists: `read knowledge://`. Read the relevant files: `read knowledge://<category>/<topic>.md`.
+2. Fold each durable fact into the knowledge base:
+   - Prefer updating an existing file in place: `edit knowledge://<category>/<topic>.md`. Reuse the closest existing category/topic rather than minting a near-duplicate.
+   - Only when the topic is genuinely new: `write knowledge://<category>/<topic>.md` with the full markdown document.
+3. When every durable fact is captured (or there is nothing durable to save), end your turn. Do not call any more tools.
+</how-to>
+
 <rules>
-- Treat the preceding conversation as the session material; do not ask follow-up questions or call tools.
-- Read existing knowledge before adding anything. If the same knowledge already exists, output no change for it.
-- Prefer updating an existing category/topic file when the new fact belongs there. Create a new file only for a genuinely new category/topic.
-- Preserve useful existing content when updating a file; return the full desired markdown file content.
-- Do not store transient task progress, todo state, one-off command output, or facts only useful for the current handoff.
-- Keep files concise and maintainable, like AGENTS.md but agent-maintained rather than user-curated.
-- Every returned file MUST start with YAML frontmatter containing `description: <tags>`. Description is shown in the prompt-time Knowledge index and MUST be tag-based: dense comma-separated retrieval tags or short trigger phrases, not a sentence. Prefer subsystem names, commands, file names, failure names, user preference labels, URLs/hostnames, config keys, and workflow names future agents may look for.
-- Paths MUST be exactly <category>/<topic>.md, relative to .omp/knowledge.
-- Return your result by calling the `save_knowledge` tool exactly once. Pass an empty `files` array when nothing durable should be saved.
+- Treat the preceding conversation as the source material. Do not ask questions.
+- Read before you write. If a fact is already recorded, leave it unchanged.
+- Preserve useful existing content when editing — merge, do not clobber.
+- Do NOT store transient state: task progress, todo lists, one-off command output, or facts only useful for the current handoff.
+- Keep files concise and maintainable, like AGENTS.md but agent-maintained.
+- Every file MUST start with YAML frontmatter containing `description: <tags>`. The description is shown in the prompt-time Knowledge index and MUST be tag-based: dense comma-separated retrieval tags or short trigger phrases, not a sentence. Favor subsystem names, commands, file names, failure names, user-preference labels, URLs/hostnames, config keys, and workflow names future agents may search for.
+- Paths MUST be exactly `<category>/<topic>.md` under `.omp/knowledge`.
+- Touch nothing outside the knowledge base. `knowledge://` is writable only during this pass; other files are off-limits.
 </rules>
 
-<save_knowledge-arguments>
-Call `save_knowledge` with a `files` array; each entry is `{"path":"category/topic.md","content":"<full markdown file>"}`. Example file content:
+<example>
+A new topic written with `write knowledge://build/session-exports.md`:
 ---
 description: build-knowledge, session exports, .omp/knowledge, cache invalidation
 ---
 
-# Topic
+# Session knowledge exports
 
 - Durable fact…
-</save_knowledge-arguments>
-
-<existing-knowledge>
-{{existingKnowledge}}
-</existing-knowledge>
+</example>
 
 <session-source>
 <title>{{sourceTitle}}</title>
-The preceding conversation is the source material for this extraction.
+The preceding conversation is the source material for this knowledge update.
 </session-source>

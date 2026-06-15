@@ -1,12 +1,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { Api, Message, Model, TextContent } from "@oh-my-pi/pi-ai";
+import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import { type Api, type Message, type Model, streamSimple, type TextContent } from "@oh-my-pi/pi-ai";
 import { getProjectDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../config/model-registry";
 import { resolveModelRoleValue, resolveRoleSelection } from "../config/model-resolver";
 import { Settings } from "../config/settings";
+import { EditTool } from "../edit";
 import { discoverAuthStorage } from "../sdk";
-import { type WriteSessionKnowledgeResult, writeSessionKnowledge } from "../session/knowledge-base";
+import { type RunSessionKnowledgeAgentResult, runSessionKnowledgeAgent } from "../session/knowledge-base";
 import {
 	fingerprintKnowledgeRoot,
 	getKnowledgeRoot,
@@ -24,7 +26,10 @@ import {
 	SessionManager,
 } from "../session/session-manager";
 import { buildSystemPrompt } from "../system-prompt";
+import type { ToolSession } from "../tools";
+import { ReadTool } from "../tools/read";
 import { shortenPath } from "../tools/render-utils";
+import { WriteTool } from "../tools/write";
 
 const DEFAULT_LAST = "30d";
 const STATE_VERSION = 1;
@@ -45,8 +50,8 @@ interface KnowledgeExportRecord {
 	messageCount: number;
 	exportedAt: string;
 	status: "exported" | "empty";
-	written: string[];
-	skipped: number;
+	committed: boolean;
+	sha?: string;
 }
 
 interface KnowledgeExportState {
@@ -63,7 +68,7 @@ export interface SessionKnowledgeExportJob {
 
 export type SessionKnowledgeExporter = (
 	job: SessionKnowledgeExportJob,
-) => Promise<WriteSessionKnowledgeResult | undefined>;
+) => Promise<RunSessionKnowledgeAgentResult | undefined>;
 
 interface BuildKnowledgeDeps {
 	listSessions?: () => Promise<SessionInfo[]>;
@@ -82,7 +87,7 @@ export interface BuildKnowledgeResult {
 	skippedAlreadyExported: number;
 	skippedMissingCwd: number;
 	failed: number;
-	writtenFiles: number;
+	committed: number;
 }
 
 function defaultStatePath(cwd: string): string {
@@ -289,6 +294,7 @@ interface KnowledgeModelRuntime {
 	model: Model<Api>;
 	apiKey: string;
 	baseSystemPromptForCwd: (cwd: string) => Promise<string[]>;
+	settings: Settings;
 }
 
 async function resolveKnowledgeRuntime(modelOverride: string | undefined): Promise<KnowledgeModelRuntime> {
@@ -313,6 +319,7 @@ async function resolveKnowledgeRuntime(modelOverride: string | undefined): Promi
 	return {
 		model,
 		apiKey,
+		settings,
 		async baseSystemPromptForCwd(projectCwd: string) {
 			const fingerprint = await fingerprintKnowledgeRoot(projectCwd);
 			const key = `${path.resolve(projectCwd)}\0${fingerprint}`;
@@ -338,21 +345,53 @@ async function resolveKnowledgeRuntime(modelOverride: string | undefined): Promi
 	};
 }
 
+/**
+ * Minimal {@link ToolSession} for the standalone CLI knowledge pass. The
+ * read/write/edit tools resolve `knowledge://` against `cwd` (their bound
+ * session), so only the required fields plus `settings` are needed; LSP is off.
+ */
+function createKnowledgeToolSession(cwd: string, settings: Settings): ToolSession {
+	return {
+		cwd,
+		hasUI: false,
+		enableLsp: false,
+		settings,
+		getSessionFile: () => null,
+		getSessionSpawns: () => null,
+	};
+}
+
 function createProductionExporter(modelOverride: string | undefined): SessionKnowledgeExporter {
 	let runtimePromise: Promise<KnowledgeModelRuntime> | undefined;
 	return async job => {
 		runtimePromise ??= resolveKnowledgeRuntime(modelOverride);
 		const runtime = await runtimePromise;
 		const baseSystemPrompt = await runtime.baseSystemPromptForCwd(job.session.cwd);
-		return await writeSessionKnowledge({
+		const toolSession = createKnowledgeToolSession(job.session.cwd, runtime.settings);
+		const tools: AgentTool<any>[] = [
+			new ReadTool(toolSession),
+			new WriteTool(toolSession),
+			new EditTool(toolSession),
+		];
+		// No live parent here (separate process): cache inheritance is best-effort
+		// and secrets are identity (saved session messages are stored raw). The
+		// loop's getToolContext defaults to `canWriteKnowledge: true`.
+		return await runSessionKnowledgeAgent({
 			cwd: job.session.cwd,
-			model: runtime.model,
-			apiKey: runtime.apiKey,
-			baseSystemPrompt,
 			sourceTitle: job.sourceTitle,
-			messages: job.messages,
 			metadata: { source: "build-knowledge", sessionId: job.session.id },
-			initiatorOverride: "agent",
+			agent: {
+				initialState: {
+					systemPrompt: baseSystemPrompt,
+					messages: [...job.messages],
+					model: runtime.model,
+					tools,
+				},
+				streamFn: streamSimple,
+				getApiKey: () => runtime.apiKey,
+				convertToLlm,
+				sessionId: job.session.id,
+			},
 		});
 	};
 }
@@ -368,7 +407,7 @@ function makeRecord(
 	session: SessionInfo,
 	now: Date,
 	status: KnowledgeExportRecord["status"],
-	result: WriteSessionKnowledgeResult | undefined,
+	result: RunSessionKnowledgeAgentResult | undefined,
 ): KnowledgeExportRecord {
 	return {
 		sessionId: session.id,
@@ -379,8 +418,8 @@ function makeRecord(
 		messageCount: session.messageCount,
 		exportedAt: now.toISOString(),
 		status,
-		written: result?.written ?? [],
-		skipped: result?.skipped ?? 0,
+		committed: result?.committed ?? false,
+		sha: result?.sha,
 	};
 }
 
@@ -403,7 +442,7 @@ export async function runBuildKnowledgeCommand(
 		skippedAlreadyExported: 0,
 		skippedMissingCwd: 0,
 		failed: 0,
-		writtenFiles: 0,
+		committed: 0,
 	};
 
 	write(
@@ -458,10 +497,12 @@ export async function runBuildKnowledgeCommand(
 			state.knowledgeFingerprint = await fingerprintKnowledgeRoot(cwd);
 			await saveState(statePath, state);
 			result.exported += 1;
-			result.writtenFiles += exportResult?.written.length ?? 0;
-			const written = exportResult?.written.length ?? 0;
-			const skipped = exportResult?.skipped ?? 0;
-			write(`${prefix} — done, wrote ${written} file${written === 1 ? "" : "s"}, skipped ${skipped}\n`);
+			if (exportResult.committed) result.committed += 1;
+			write(
+				exportResult.committed
+					? `${prefix} — done, committed ${exportResult.sha ?? "knowledge"}\n`
+					: `${prefix} — done, no knowledge changes\n`,
+			);
 		} catch (error) {
 			result.failed += 1;
 			logger.warn("build-knowledge session export failed", {
@@ -474,7 +515,7 @@ export async function runBuildKnowledgeCommand(
 	}
 
 	write(
-		`Done. Exported ${result.exported}, already exported ${result.skippedAlreadyExported}, empty ${result.empty}, missing cwd ${result.skippedMissingCwd}, failed ${result.failed}, wrote ${result.writtenFiles} file${result.writtenFiles === 1 ? "" : "s"}.\n`,
+		`Done. Exported ${result.exported}, already exported ${result.skippedAlreadyExported}, empty ${result.empty}, missing cwd ${result.skippedMissingCwd}, failed ${result.failed}, committed ${result.committed}.\n`,
 	);
 	return result;
 }

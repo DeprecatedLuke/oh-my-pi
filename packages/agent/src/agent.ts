@@ -614,6 +614,36 @@ export class Agent {
 	}
 
 	/**
+	 * The per-call tool-context provider installed at construction. Exposed so a
+	 * child run that reuses this agent's request shape (e.g. the session
+	 * knowledge pass) can layer extra capabilities onto the SAME base context.
+	 * Mirrors {@link providerSessionState}/{@link telemetry}, which exist for the
+	 * same child-run reuse.
+	 */
+	get getToolContext(): ((toolCall?: ToolCallContext) => AgentToolContext | undefined) | undefined {
+		return this.#getToolContext;
+	}
+
+	/**
+	 * The outbound provider-context transform (e.g. secret masking + snapcompact
+	 * inlining). Exposed so derived one-shot runs (knowledge pass) can reuse the
+	 * parent's exact transform and keep the prompt-cache prefix warm.
+	 */
+	get transformProviderContext(): ((context: Context, model: Model) => Context) | undefined {
+		return this.#transformProviderContext;
+	}
+
+	/**
+	 * The inbound tool-call argument transform (e.g. secret de-masking). Exposed
+	 * so derived runs reuse the parent's exact transform.
+	 */
+	get transformToolCallArguments():
+		| ((args: Record<string, unknown>, toolName: string) => Record<string, unknown>)
+		| undefined {
+		return this.#transformToolCallArguments;
+	}
+
+	/**
 	 * Get the current thinking budgets.
 	 */
 	get thinkingBudgets(): ThinkingBudgets | undefined {

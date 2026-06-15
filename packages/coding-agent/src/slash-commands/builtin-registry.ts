@@ -636,27 +636,69 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
-		name: "gitcheckpoint",
-		description: "Commit outstanding work with the git tool",
-		aliases: ["checkpoint"],
-		inlineHint: "[reason]",
+		name: "git",
+		description: "Git checkpoint / status via the git tool",
+		subcommands: [
+			{ name: "checkpoint", description: "Commit outstanding work with the git tool", usage: "[reason]" },
+			{ name: "status", description: "Show working-tree status" },
+		],
 		allowArgs: true,
 		handle: async (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			if (verb !== "checkpoint" && verb !== "status") {
+				return usage("Usage: /git <checkpoint [reason]|status>", runtime);
+			}
 			const tool = runtime.session.getToolByName("git");
 			if (!tool) {
-				await runtime.output("git checkpoint is unavailable. Run inside a top-level Git-backed session.");
+				await runtime.output("git is unavailable. Run inside a top-level Git-backed session.");
 				return commandConsumed();
 			}
-			const reason = command.args.trim() || "slash-invoked checkpoint";
+			if (verb === "checkpoint") {
+				const reason = rest.trim() || "slash-invoked checkpoint";
+				try {
+					const result = await tool.execute("slash-git-checkpoint", { op: "checkpoint", reason });
+					const text = result.content
+						.map(c => (c.type === "text" ? c.text : ""))
+						.join("\n")
+						.trim();
+					await runtime.output(text || "Checkpoint complete.");
+				} catch (err) {
+					await runtime.output(`Checkpoint failed: ${err instanceof Error ? err.message : String(err)}`);
+				}
+				return commandConsumed();
+			}
 			try {
-				const result = await tool.execute("slash-gitcheckpoint", { op: "checkpoint", reason });
+				const result = await tool.execute("slash-git-status", { op: "status" });
 				const text = result.content
 					.map(c => (c.type === "text" ? c.text : ""))
 					.join("\n")
 					.trim();
-				await runtime.output(text || "Checkpoint complete.");
+				await runtime.output(text || "Working tree clean.");
 			} catch (err) {
-				await runtime.output(`Checkpoint failed: ${err instanceof Error ? err.message : String(err)}`);
+				await runtime.output(`Status failed: ${err instanceof Error ? err.message : String(err)}`);
+			}
+			return commandConsumed();
+		},
+	},
+	{
+		name: "knowledge",
+		description: "Regenerate project knowledge from this session",
+		subcommands: [{ name: "compact", description: "Regenerate .omp/knowledge from the current session" }],
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const { verb } = parseSubcommand(command.args);
+			if (verb && verb !== "compact") {
+				return usage("Usage: /knowledge [compact]", runtime);
+			}
+			try {
+				const result = await runtime.session.compactKnowledge({ sourceTitle: "/knowledge compact" });
+				if (result.committed) {
+					await runtime.output(`Knowledge updated (commit ${result.sha ?? "unknown"}).`);
+				} else {
+					await runtime.output("Knowledge pass complete — no changes.");
+				}
+			} catch (err) {
+				await runtime.output(`Knowledge pass failed: ${err instanceof Error ? err.message : String(err)}`);
 			}
 			return commandConsumed();
 		},
