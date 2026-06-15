@@ -513,6 +513,14 @@
       "types": "./src/modes/utils/*.ts",
       "import": "./src/modes/utils/*.ts"
     },
+    "./patches": {
+      "types": "./src/patches/index.ts",
+      "import": "./src/patches/index.ts"
+    },
+    "./patches/*": {
+      "types": "./src/patches/*.ts",
+      "import": "./src/patches/*.ts"
+    },
     "./plan-mode/*": {
       "types": "./src/plan-mode/*.ts",
       "import": "./src/plan-mode/*.ts"

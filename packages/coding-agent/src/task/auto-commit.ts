@@ -23,7 +23,8 @@ function excludeNestedPathspecs(repoRoot: string, nestedRepoPaths: readonly stri
 }
 
 /**
- * Enumerate every dirty git repository under the outermost repo root containing `cwd`.
+ * Enumerate every dirty git repository under the git repo that contains `cwd`
+ * (the nearest enclosing repo, not an outer parent repo it may be nested in).
  * Used by the `git` checkpoint flow to decide which repos need committing. Repo discovery
  * (root + unlinked nested repos) reuses {@link detectGitRepos}, the same detection the
  * `git status` path uses, and nested repos are excluded from the root's status so a dirty

@@ -16,16 +16,22 @@ async function hasGitEntry(dir: string): Promise<boolean> {
 	}
 }
 
-async function containingGitRoots(cwd: string): Promise<string[]> {
-	const roots: string[] = [];
+/**
+ * Resolve the git root that `cwd` belongs to: the nearest enclosing directory
+ * with a `.git` entry, ascending from `cwd`. Stops at the first hit — it never
+ * climbs past the owning repo into an enclosing parent repo, so a checkout
+ * nested inside another repo (e.g. a worktree or sub-clone under a superproject)
+ * scopes to itself, not the parent and its sibling repos. Returns null when no
+ * enclosing repo exists.
+ */
+async function nearestGitRoot(cwd: string): Promise<string | null> {
 	let current = path.resolve(cwd);
-	while (true) {
-		if (await hasGitEntry(current)) roots.push(current);
+	for (;;) {
+		if (await hasGitEntry(current)) return current;
 		const parent = path.dirname(current);
-		if (parent === current) break;
+		if (parent === current) return null;
 		current = parent;
 	}
-	return roots;
 }
 
 async function submodulePathSet(repoRoot: string): Promise<Set<string>> {
@@ -71,8 +77,7 @@ export async function discoverNestedGitRepos(root: string): Promise<string[]> {
 }
 
 export async function detectGitRepos(cwd: string): Promise<{ root: string; repos: string[] } | null> {
-	const roots = await containingGitRoots(cwd);
-	const root = roots.at(-1);
+	const root = await nearestGitRoot(cwd);
 	if (!root) return null;
 	const nested = await discoverNestedGitRepos(root);
 	return { root, repos: [root, ...nested] };
