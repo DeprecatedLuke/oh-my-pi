@@ -42,6 +42,8 @@ export interface SessionInfo {
 	 * synthesized {@link SessionInfo}s (cross-project stubs, tests) leave it unset.
 	 */
 	status?: SessionStatus;
+	/** True for task/subagent transcripts that carry a `session_init` entry; never user-resumable. */
+	isSubagent?: boolean;
 }
 
 export interface ResolvedSessionMatch {
@@ -429,12 +431,17 @@ async function scanSessionFile(
 		let firstMessage = "";
 		const allMessages: string[] = [];
 		let shortSummary: string | undefined;
+		let isSubagent = false;
 
 		for (let i = 1; i < entries.length; i++) {
 			const entry = entries[i] as { type?: string; message?: Message; shortSummary?: string };
 
 			if (entry.type === "compaction" && typeof entry.shortSummary === "string") {
 				shortSummary = entry.shortSummary;
+			}
+
+			if (entry.type === "session_init") {
+				isSubagent = true;
 			}
 
 			if (entry.type === "message" && entry.message) {
@@ -469,6 +476,7 @@ async function scanSessionFile(
 			firstMessage: firstMessage || "(no messages)",
 			allMessagesText: allMessages.length > 0 ? allMessages.join(" ") : firstMessage,
 			status: withStatus ? deriveSessionStatus(suffix) : undefined,
+			isSubagent: isSubagent || undefined,
 		};
 		// The cache keeps its own shallow copy; hits also hand out copies, so
 		// callers can never mutate the shared cached object.
@@ -636,7 +644,24 @@ export async function findMostRecentSession(
 	storage: SessionStorage = new FileSessionStorage(),
 ): Promise<string | null> {
 	const sessions = await scanSessionDir(sessionDir, storage, false);
-	return sessions[0]?.path ?? null;
+	return sessions.find(s => !s.isSubagent)?.path ?? null;
+}
+
+/**
+ * A subagent/task transcript (written via SessionManager.appendSessionInit) carries a
+ * `session_init` entry and is never a user-resumable session. Main/user sessions never have one.
+ */
+export async function isSubagentSessionFile(
+	sessionFile: string,
+	storage: SessionStorage = new FileSessionStorage(),
+): Promise<boolean> {
+	try {
+		const [content] = await storage.readTextSlices(sessionFile, SESSION_LIST_PREFIX_BYTES, 0);
+		const entries = parseJsonlLenient<Record<string, unknown>>(content);
+		return entries.some(e => (e as { type?: unknown }).type === "session_init");
+	} catch {
+		return false;
+	}
 }
 
 /** Get recent sessions for display in the welcome screen. */
