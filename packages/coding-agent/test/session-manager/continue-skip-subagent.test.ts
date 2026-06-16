@@ -121,10 +121,20 @@ describe("SessionManager.continueRecent skips subagent transcripts", () => {
 		}
 	});
 
-	it("never returns a fresh-or-real session that equals the poisoned subagent breadcrumb", async () => {
-		// Same poisoning, but with NO real session in the dir: continueRecent must still
-		// refuse the subagent transcript and start fresh rather than resume it.
-		const subagentFile = craftSubagentTranscript(path.join(sessionDir, "artifacts"), cwd);
+	it("never resumes the subagent and starts fresh when the breadcrumb's only target is a subagent transcript", async () => {
+		// No resumable session in the scanned dir. The breadcrumb's target is a subagent
+		// transcript inside a parent session's artifacts subdir (the parent `.jsonl` sibling
+		// exists, which is how it is detected), so continueRecent must refuse it and start
+		// fresh rather than resume it.
+		const otherDir = path.join(testAgentDir, "other-sessions");
+		fs.mkdirSync(otherDir, { recursive: true });
+		const parentFile = path.join(otherDir, "parent.jsonl");
+		const ts = new Date().toISOString();
+		fs.writeFileSync(
+			parentFile,
+			`${JSON.stringify({ type: "session", version: 2, id: "parent-id", timestamp: ts, cwd })}\n`,
+		);
+		const subagentFile = craftSubagentTranscript(path.join(otherDir, "parent"), cwd);
 		writeBreadcrumb(cwd, subagentFile);
 
 		const resumed = await SessionManager.continueRecent(cwd, sessionDir);

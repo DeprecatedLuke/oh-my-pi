@@ -42,8 +42,6 @@ export interface SessionInfo {
 	 * synthesized {@link SessionInfo}s (cross-project stubs, tests) leave it unset.
 	 */
 	status?: SessionStatus;
-	/** True for task/subagent transcripts that carry a `session_init` entry; never user-resumable. */
-	isSubagent?: boolean;
 }
 
 export interface ResolvedSessionMatch {
@@ -431,17 +429,12 @@ async function scanSessionFile(
 		let firstMessage = "";
 		const allMessages: string[] = [];
 		let shortSummary: string | undefined;
-		let isSubagent = false;
 
 		for (let i = 1; i < entries.length; i++) {
 			const entry = entries[i] as { type?: string; message?: Message; shortSummary?: string };
 
 			if (entry.type === "compaction" && typeof entry.shortSummary === "string") {
 				shortSummary = entry.shortSummary;
-			}
-
-			if (entry.type === "session_init") {
-				isSubagent = true;
 			}
 
 			if (entry.type === "message" && entry.message) {
@@ -476,7 +469,6 @@ async function scanSessionFile(
 			firstMessage: firstMessage || "(no messages)",
 			allMessagesText: allMessages.length > 0 ? allMessages.join(" ") : firstMessage,
 			status: withStatus ? deriveSessionStatus(suffix) : undefined,
-			isSubagent: isSubagent || undefined,
 		};
 		// The cache keeps its own shallow copy; hits also hand out copies, so
 		// callers can never mutate the shared cached object.
@@ -644,21 +636,29 @@ export async function findMostRecentSession(
 	storage: SessionStorage = new FileSessionStorage(),
 ): Promise<string | null> {
 	const sessions = await scanSessionDir(sessionDir, storage, false);
-	return sessions.find(s => !s.isSubagent)?.path ?? null;
+	for (const session of sessions) {
+		if (!(await isSubagentSessionFile(session.path, storage))) return session.path;
+	}
+	return null;
 }
 
 /**
- * A subagent/task transcript (written via SessionManager.appendSessionInit) carries a
- * `session_init` entry and is never a user-resumable session. Main/user sessions never have one.
+ * A subagent/task transcript lives inside a parent session's artifacts directory
+ * (`<parentSessionFile-without-.jsonl>/<id>.jsonl`), so the parent `.jsonl` is a sibling of
+ * the transcript's own directory. Such a transcript is never a user-resumable session.
+ *
+ * Detection is path-based, not content-based: the `session_init` entry the executor writes
+ * embeds the full system prompt and routinely exceeds the prefix read window (37 KB seen in
+ * the wild), so a fixed-prefix content scan silently misses it. The artifacts-dir invariant is
+ * exact — a top-level session at `<dir>/<ts>_<id>.jsonl` never has a `<dir>.jsonl` sibling — and
+ * it heals breadcrumbs persisted before the breadcrumb-suppression write-side fix.
  */
 export async function isSubagentSessionFile(
 	sessionFile: string,
 	storage: SessionStorage = new FileSessionStorage(),
 ): Promise<boolean> {
 	try {
-		const [content] = await storage.readTextSlices(sessionFile, SESSION_LIST_PREFIX_BYTES, 0);
-		const entries = parseJsonlLenient<Record<string, unknown>>(content);
-		return entries.some(e => (e as { type?: unknown }).type === "session_init");
+		return await storage.exists(`${path.dirname(path.resolve(sessionFile))}.jsonl`);
 	} catch {
 		return false;
 	}

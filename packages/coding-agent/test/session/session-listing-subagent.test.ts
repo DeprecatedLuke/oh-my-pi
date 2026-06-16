@@ -2,11 +2,7 @@ import { afterAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	findMostRecentSession,
-	isSubagentSessionFile,
-	listSessions,
-} from "@oh-my-pi/pi-coding-agent/session/session-listing";
+import { findMostRecentSession, isSubagentSessionFile } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 
 const storage = new FileSessionStorage();
@@ -30,82 +26,87 @@ function header(id: string, cwd: string): string {
 	return line({ type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd });
 }
 
-/** Write a plain user session (header + one message) and return its path. */
+/** Write a plain top-level user session (header + one message) and return its path. */
 function writePlain(dir: string, id: string): string {
 	const file = path.join(dir, `${id}.jsonl`);
 	const body = line({
 		type: "message",
-		id: "m1",
+		id: `${id}-m`,
 		parentId: null,
 		timestamp: new Date().toISOString(),
-		message: { role: "user", content: "hello" },
+		message: { role: "user", content: [{ type: "text", text: "hi" }] },
 	});
 	fs.writeFileSync(file, header(id, dir) + body);
 	return file;
 }
 
-/** Write a subagent transcript (header + session_init) and return its path. */
-function writeSubagent(dir: string, id: string): string {
-	const file = path.join(dir, `${id}.jsonl`);
-	const body = line({
+/**
+ * Write a realistic subagent transcript: a parent session file `<dir>/<parentId>.jsonl`
+ * plus its artifacts subdir `<dir>/<parentId>/` holding `<name>.jsonl`. The transcript's
+ * `session_init` embeds a deliberately HUGE system prompt (>> the 4 KB prefix window) so a
+ * fixed-prefix content scan would miss it — the regression that broke the old detector.
+ * Returns the subagent transcript path.
+ */
+function writeSubagentTranscript(dir: string, parentId: string, name = "Worker"): string {
+	const parentFile = path.join(dir, `${parentId}.jsonl`);
+	fs.writeFileSync(parentFile, header(parentId, dir));
+	const artifactsDir = path.join(dir, parentId);
+	fs.mkdirSync(artifactsDir, { recursive: true });
+	const file = path.join(artifactsDir, `${name}.jsonl`);
+	const hugePrompt = "X".repeat(40_000); // pushes session_init far past SESSION_LIST_PREFIX_BYTES (4096)
+	const init = line({
 		type: "session_init",
-		id: "s1",
+		id: `${name}-init`,
 		parentId: null,
 		timestamp: new Date().toISOString(),
-		systemPrompt: "x",
-		task: "t",
+		systemPrompt: hugePrompt,
+		task: "do work",
 		tools: [],
 	});
-	fs.writeFileSync(file, header(id, dir) + body);
+	fs.writeFileSync(file, header(`${name}-id`, dir) + init);
 	return file;
 }
 
-describe("isSubagentSessionFile", () => {
-	it("returns true only for transcripts carrying a session_init entry", async () => {
+describe("isSubagentSessionFile (path-based)", () => {
+	it("detects a subagent transcript whose session_init exceeds the 4 KB prefix window", async () => {
 		const dir = freshDir();
-		const subagentFile = writeSubagent(dir, "sub");
-		const plainFile = writePlain(dir, "plain");
+		const subagent = writeSubagentTranscript(dir, "parent-1");
+		// The 40 KB systemPrompt means a prefix-content scan for `session_init` would return
+		// false; path-based detection keys off the parent `.jsonl` sibling, so it still holds.
+		expect(await isSubagentSessionFile(subagent, storage)).toBe(true);
+	});
 
-		expect(await isSubagentSessionFile(subagentFile, storage)).toBe(true);
-		expect(await isSubagentSessionFile(plainFile, storage)).toBe(false);
+	it("returns false for a plain top-level session", async () => {
+		const dir = freshDir();
+		const plain = writePlain(dir, "plain-1");
+		expect(await isSubagentSessionFile(plain, storage)).toBe(false);
+	});
+
+	it("returns false for a nonexistent path", async () => {
+		const dir = freshDir();
 		expect(await isSubagentSessionFile(path.join(dir, "does-not-exist.jsonl"), storage)).toBe(false);
 	});
 });
 
-describe("listSessions isSubagent flag", () => {
-	it("flags subagent transcripts and leaves plain sessions falsy", async () => {
+describe("findMostRecentSession", () => {
+	it("returns the plain session in a normal session dir", async () => {
 		const dir = freshDir();
-		const subagentFile = writeSubagent(dir, "sub");
-		const plainFile = writePlain(dir, "plain");
-
-		const sessions = await listSessions(dir, storage);
-		const sub = sessions.find(s => s.path === subagentFile);
-		const plain = sessions.find(s => s.path === plainFile);
-
-		expect(sub?.isSubagent).toBe(true);
-		expect(plain?.isSubagent).toBeFalsy();
-	});
-});
-
-describe("findMostRecentSession skips subagents", () => {
-	it("returns the latest non-subagent session even when a subagent is newer", async () => {
-		const dir = freshDir();
-		const plainFile = writePlain(dir, "plain");
-		const subagentFile = writeSubagent(dir, "sub");
-
-		// Make the subagent transcript strictly newer than the plain session.
-		const older = new Date(Date.now() - 60_000);
-		const newer = new Date();
-		fs.utimesSync(plainFile, older, older);
-		fs.utimesSync(subagentFile, newer, newer);
-
-		expect(await findMostRecentSession(dir, storage)).toBe(plainFile);
+		const plain = writePlain(dir, "plain-2");
+		expect(await findMostRecentSession(dir, storage)).toBe(plain);
 	});
 
-	it("returns null when only subagent transcripts exist", async () => {
+	it("returns null when pointed at an artifacts dir holding only subagent transcripts", async () => {
+		// An artifacts dir IS `<parentSessionFile-without-.jsonl>`; every `.jsonl` inside it is a
+		// subagent transcript (its parent `.jsonl` is the sibling), so none is resumable.
 		const dir = freshDir();
-		writeSubagent(dir, "sub");
+		writeSubagentTranscript(dir, "parent-3", "WorkerA");
+		const artifactsDir = path.join(dir, "parent-3");
+		expect(fs.existsSync(path.join(artifactsDir, "WorkerA.jsonl"))).toBe(true);
+		expect(await findMostRecentSession(artifactsDir, storage)).toBeNull();
+	});
 
+	it("returns null for an empty dir", async () => {
+		const dir = freshDir();
 		expect(await findMostRecentSession(dir, storage)).toBeNull();
 	});
 });
