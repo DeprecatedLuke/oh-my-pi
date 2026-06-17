@@ -69,14 +69,14 @@ describe("edit tool knowledge:// support", () => {
 	async function buildEditInput(): Promise<string> {
 		const resource = await InternalUrlRouter.instance().resolve(`knowledge://${KNOWLEDGE_FILE}`, { cwd: tmpDir });
 		const tag = computeFileHash(resource.content);
-		return `[knowledge://${KNOWLEDGE_FILE}#${tag}]\nreplace 7..7:\n+- Edited durable fact.`;
+		return `[knowledge://${KNOWLEDGE_FILE}#${tag}]\nSWAP 7.=7:\n+- Edited durable fact.`;
 	}
 
 	/** Build the same body edit addressed by the on-disk filesystem path instead of the URL. */
 	async function buildFsEditInput(): Promise<string> {
 		const relPath = path.join(".omp", "knowledge", ...KNOWLEDGE_FILE.split("/"));
 		const tag = computeFileHash(await Bun.file(knowledgeAbsPath(tmpDir)).text());
-		return `[${relPath}#${tag}]\nreplace 7..7:\n+- Edited durable fact.`;
+		return `[${relPath}#${tag}]\nSWAP 7.=7:\n+- Edited durable fact.`;
 	}
 
 	it("rewrites a knowledge file through the handler when canWriteKnowledge is set", async () => {
@@ -111,7 +111,7 @@ describe("edit tool knowledge:// support", () => {
 		await Bun.write(filePath, "# Plain\n\n- keep me\n");
 		const tool = new EditTool(createSession(tmpDir));
 		const tag = computeFileHash(await Bun.file(filePath).text());
-		const input = `[${filePath}#${tag}]\nreplace 3..3:\n+- changed me`;
+		const input = `[${filePath}#${tag}]\nSWAP 3.=3:\n+- changed me`;
 
 		// No canWriteKnowledge in context: a plain path must NOT be gated by the
 		// internal-URL branch and must still write to disk.

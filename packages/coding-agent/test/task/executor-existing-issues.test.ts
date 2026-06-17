@@ -100,7 +100,8 @@ async function renderedSubagentPrompt(cwd: string, tools: string[]): Promise<str
 	expect(result.exitCode).toBe(0);
 	const systemPrompt = spy.mock.calls[0]?.[0]?.systemPrompt;
 	if (typeof systemPrompt !== "function") throw new Error("expected systemPrompt callback");
-	return systemPrompt([]).join("\n");
+	const rendered = systemPrompt([]);
+	return Array.isArray(rendered) ? rendered.join("\n") : rendered;
 }
 
 describe("runSubprocess existing-issue awareness", () => {

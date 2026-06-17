@@ -424,6 +424,7 @@ export class JsRuntime {
 		RUN_HOOK_RESOLVERS.delete(this.#runHookResolver);
 		for (const key of this.#ownedGlobalKeys) releaseGlobalKey(key, this.#globalOwner);
 		this.#ownedGlobalKeys.clear();
+		forceReleaseGlobalOwner(this.#globalOwner);
 	}
 }
 
@@ -529,6 +530,20 @@ function enterGlobalRun(owner: symbol, action: string): () => void {
 		activeGlobalRunDepth--;
 		if (activeGlobalRunDepth === 0) activeGlobalRunOwner = null;
 	};
+}
+
+/**
+ * Force-clear the realm run-owner when `owner` holds it. A run whose promise never
+ * settles (e.g. a cell killed by a wall-clock timeout, or a runtime disposed while a
+ * run is still pending) never reaches `run()`'s `finally`, so `leaveRun` is never
+ * called and the owner would stay pinned forever — locking out every other runtime in
+ * the realm with "another same-realm JS runtime is running". Disposing the owning
+ * runtime calls this so the realm recovers.
+ */
+function forceReleaseGlobalOwner(owner: symbol): void {
+	if (activeGlobalRunOwner !== owner) return;
+	activeGlobalRunOwner = null;
+	activeGlobalRunDepth = 0;
 }
 
 /** Resolvers for each live runtime's active-run hooks (one per JsRuntime instance). */

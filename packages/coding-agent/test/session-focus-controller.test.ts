@@ -74,6 +74,8 @@ function makeHarness(): Harness {
 			resetTranscriptAnchors: () => {
 				resetTranscriptAnchors++;
 			},
+			// #attach refreshes the main-session Background Jobs panel on focus change.
+			refreshBackgroundJobs: () => {},
 		},
 		statusLine: {
 			setSession: (session: AgentSession, focusedAgentId?: string) => {

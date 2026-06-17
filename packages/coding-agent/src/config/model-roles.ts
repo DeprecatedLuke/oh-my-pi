@@ -30,8 +30,8 @@ export type ModelRole =
 	| "commit"
 	| "tiny"
 	| "task"
-	| "advisor"
-	| "uncensored";
+	| "uncensored"
+	| "advisor";
 
 export interface ModelRoleInfo {
 	tag?: string;
@@ -52,8 +52,8 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	commit: { tag: "COMMIT", name: "Commit", color: "dim" },
 	tiny: { tag: "TINY", name: "Tiny", color: "dim" },
 	task: { tag: "TASK", name: "Subtask", color: "muted" },
-	advisor: { tag: "ADVISOR", name: "Advisor", color: "accent" },
 	uncensored: { tag: "UNCENS", name: "Uncensored", color: "error" },
+	advisor: { tag: "ADVISOR", name: "Advisor", color: "accent" },
 };
 
 export const MODEL_ROLE_IDS: ModelRole[] = [
@@ -67,8 +67,8 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"commit",
 	"tiny",
 	"task",
-	"advisor",
 	"uncensored",
+	"advisor",
 ];
 
 /**

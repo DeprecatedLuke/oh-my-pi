@@ -17,15 +17,12 @@ import {
 	normalizeKnowledgePath,
 } from "../session/knowledge-index";
 import { convertToLlm } from "../session/messages";
-import {
-	buildSessionContext,
-	type FileEntry,
-	loadEntriesFromFile,
-	migrateSessionEntries,
-	type SessionEntry,
-	type SessionInfo,
-	SessionManager,
-} from "../session/session-manager";
+import { buildSessionContext } from "../session/session-context";
+import type { FileEntry, SessionEntry } from "../session/session-entries";
+import type { SessionInfo } from "../session/session-listing";
+import { loadEntriesFromFile } from "../session/session-loader";
+import { SessionManager } from "../session/session-manager";
+import { migrateSessionEntries } from "../session/session-migrations";
 import { buildSystemPrompt } from "../system-prompt";
 import type { ToolSession } from "../tools";
 import { ReadTool } from "../tools/read";

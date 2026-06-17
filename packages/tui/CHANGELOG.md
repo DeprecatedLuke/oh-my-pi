@@ -454,6 +454,9 @@
 
 - Added tight layout support (`setTuiTight`/`getPaddingX`) to dynamically remove 1-character horizontal padding from Text, Markdown, Box, and TruncatedText components.
 
+### Added
+
+- Added `TerminalInfo.ringBell()`, which writes a raw `BEL` (`\x07`) regardless of the negotiated `notifyProtocol` (honoring `PI_NOTIFICATIONS` suppression). `sendNotification` collapses to a desktop notification on OSC 9/99 terminals; `ringBell` is the audible alert for callers that want a terminal bell on every terminal.
 ### Changed
 
 - Coalesced byte-adjacent SGR sequences in emitted lines into a single `CSI … m`. The component tree styles each span as `<set>text<reset>`, so adjacent spans emit runs of back-to-back SGR sequences (e.g. a `CSI 39 m` fg-reset immediately followed by the next span's `CSI 38;2;r;g;b m`); merging the run is behavior-preserving because SGR parameters apply left-to-right regardless of framing. On a real transcript this drops ~30-40% of all SGR sequences, cutting the per-frame byte volume and SGR-dispatch count a slow terminal engine (e.g. xterm.js/WebGL under a large viewport) must process. Each emitted sequence is capped at 16 parameter tokens so a long adjacent run is split across several valid CSIs instead of overflowing a terminal's parameter buffer (xterm.js caps at 32 and silently truncates, corrupting colors). A run is never extended past a parameter list that ends in an incomplete semicolon-form extended color (`38/48/58;2` missing a channel or `;5` missing the index), so a following code can't be absorbed as the missing component. Disable with `PI_NO_SGR_COALESCE=1`.
@@ -515,7 +518,6 @@
 
 ### Added
 
-- Added `TerminalInfo.ringBell()`, which writes a raw `BEL` (`\x07`) regardless of the negotiated `notifyProtocol` (honoring `PI_NOTIFICATIONS` suppression). `sendNotification` collapses to a desktop notification on OSC 9/99 terminals; `ringBell` is the audible alert for callers that want a terminal bell on every terminal.
 - Added volatile speech-to-text preview support to `Editor` with `setVolatileText(text)`, `clearVolatileText()`, and `commitVolatileText(text)` so hosts can replace, discard, or commit live dictated text at the cursor without appending
 - Added an always-on `LoopWatchdog` armed in `TUI.start()`/`TUI.stop()` that logs `ui.loop-blocked` (rising-edge deduped, with `blockedMs` and the phase active during the elapsed interval) when a self-scheduled probe tick runs late, plus a `ui.select-filter` breadcrumb around the `SelectList` fuzzy filter. The phase is read via `takeRecentLoopPhase`, so a synchronous block whose breadcrumb was pushed and popped before the delayed tick runs is still attributed to its phase instead of "unknown". `stop()` cancels the armed timer (via `clearTimeout` on the default handle) so repeated start/stop cycles leave no pending probe, with the generation guard as a fallback ([#2485](https://github.com/can1357/oh-my-pi/issues/2485))
 - Added `ctrl+j` as a second default binding for the `tui.input.newLine` action alongside `shift+enter`, so terminals that cannot emit `shift+enter` still have a newline key. On terminals with Kitty-protocol / `modifyOtherKeys` disambiguation `ctrl+j` inserts a newline while `Enter` still submits; on legacy terminals where `ctrl+j` and `Enter` are both byte-identical `LF` it submits (documented limitation). User keybinding overrides still take precedence ([#2473](https://github.com/can1357/oh-my-pi/issues/2473))
@@ -551,9 +553,6 @@
 ### Fixed
 
 - Fixed issue #2088 viewport flash and repeated full rewrites during rapid terminal drags outside multiplexers by replaying the full transcript only after the resize settle window
-### Fixed
-
-- Detect tmux/screen via the `TERM` prefix in `isMultiplexerSession()`, not just the `TMUX`/`STY`/`ZELLIJ` env vars. When the multiplexer env was stripped but `TERM=tmux-256color`/`screen-*` survived (`sudo` without `-E`, `su`, env-sanitizing launchers/ssh), the renderer misclassified the pane as a direct terminal and emitted ED3 (`CSI 3 J`) on resize/replace/`resetDisplay`, which wipes tmux pane history — scrollback only reappeared after a full rerender (Ctrl+L). The check now matches every sibling multiplexer detector (`shouldEnableSynchronizedOutputByDefault`, `detectRectangularSgrSupport`, `getFallbackImageProtocol`).
 
 ## [15.12.4] - 2026-06-13
 

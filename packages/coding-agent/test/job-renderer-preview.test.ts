@@ -197,7 +197,6 @@ describe("job renderer task-result preview", () => {
 			const lines = component.render(120) as readonly string[];
 			expect(lines).toHaveLength(0);
 		});
-
 		it("does not collapse running jobs when isPartial is false and list is true", () => {
 			const result = {
 				content: [{ type: "text" as const, text: "" }],

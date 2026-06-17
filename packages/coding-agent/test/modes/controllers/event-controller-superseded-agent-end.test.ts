@@ -46,6 +46,7 @@ function createContext() {
 				return streamState.isStreaming;
 			},
 			getToolByName: () => undefined,
+			getAsyncJobSnapshot: () => null,
 		},
 	} as unknown as InteractiveModeContext;
 	ctx.ensureLoadingAnimation = vi.fn(() => {
