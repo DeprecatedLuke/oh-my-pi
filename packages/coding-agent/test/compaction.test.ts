@@ -1225,7 +1225,7 @@ describe("buildSessionContext", () => {
 		expect(summaryMessage.images).toEqual([{ type: "image", data: "ZmFrZQ==", mimeType: "image/png" }]);
 	});
 
-	it("transcript option keeps full history with every compaction inline at its position", () => {
+	it("transcript option trims to the latest compaction (divider + kept range + later turns)", () => {
 		const u1 = createMessageEntry(createUserMessage("1"));
 		const a1 = createMessageEntry(createAssistantMessage("a"));
 		const compact1 = createCompactionEntry("First summary", u1.id);
@@ -1239,24 +1239,15 @@ describe("buildSessionContext", () => {
 		const entries: SessionEntry[] = [u1, a1, compact1, u2, compact2, u3];
 
 		const transcript = buildSessionContext(entries, undefined, undefined, { transcript: true });
-		// Nothing dropped positionally: every message survives, compactions sit
-		// where they fired. Superseded compaction summaries are elided in the
-		// forward transcript; only the active (latest) compaction keeps its text.
-		expect(transcript.messages.map(m => m.role)).toEqual([
-			"user",
-			"assistant",
-			"compactionSummary",
-			"user",
-			"compactionSummary",
-			"user",
-		]);
-		const first = transcript.messages[2] as { summary: string };
-		const second = transcript.messages[4] as { summary: string; images?: unknown };
-		expect(first.summary).toContain("Superseded compaction summary elided");
-		expect(first.summary).not.toContain("First summary");
-		expect(second.summary).toContain("Second summary");
-		// Snapcompact frames ride along in the transcript too.
-		expect(second.images).toEqual([{ type: "image", data: "ZmFrZQ==", mimeType: "image/png" }]);
+		// Trimmed to the latest compaction: the Second divider stands in for everything
+		// before it (u1/a1 and the earlier First divider are dropped), followed by the kept
+		// turn (u2) and the later turn (u3) — exactly what the model still holds.
+		expect(transcript.messages.map(m => m.role)).toEqual(["compactionSummary", "user", "user"]);
+		const divider = transcript.messages[0] as { summary: string; images?: unknown };
+		expect(divider.summary).toContain("Second summary");
+		expect(divider.summary).not.toContain("First summary");
+		// Snapcompact frames ride along on the surviving (latest) divider.
+		expect(divider.images).toEqual([{ type: "image", data: "ZmFrZQ==", mimeType: "image/png" }]);
 
 		// LLM context is untouched by the option: latest compaction replaces history.
 		const llm = buildSessionContext(entries);
