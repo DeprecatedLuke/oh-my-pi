@@ -42,6 +42,17 @@ async function submodulePathSet(repoRoot: string): Promise<Set<string>> {
 	}
 }
 
+/**
+ * Directories pruned during nested-repo discovery. Dot-prefixed names (`.git`,
+ * `.ditto` task overlays, other caches) and `node_modules` are skipped so checkpoint
+ * discovery never recurses into task overlay/worktree internals and treats them as
+ * nested repos to commit. Real staging stays `git add -A`, which still honors the
+ * repo's own `.gitignore`/`.ignore` (including unignore) rules.
+ */
+function shouldPruneRepoDiscoveryDir(name: string): boolean {
+	return name.startsWith(".") || name === "node_modules";
+}
+
 export async function discoverNestedGitRepos(root: string): Promise<string[]> {
 	const resolvedRoot = path.resolve(root);
 	const submodules = await submodulePathSet(resolvedRoot);
@@ -57,7 +68,7 @@ export async function discoverNestedGitRepos(root: string): Promise<string[]> {
 		}
 		for (const entry of entries) {
 			if (!entry.isDirectory()) continue;
-			if (entry.name === ".git") continue;
+			if (shouldPruneRepoDiscoveryDir(entry.name)) continue;
 			const childRelative = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
 			const child = path.join(dir, entry.name);
 			if (await hasGitEntry(child)) {

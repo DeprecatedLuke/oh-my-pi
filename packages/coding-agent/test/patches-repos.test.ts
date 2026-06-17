@@ -53,11 +53,16 @@ describe("detectGitRepos scope", () => {
 		expect(detected?.repos).toEqual([checkout]);
 	});
 
-	it("still discovers nested repos downward when cwd is the actual root", async () => {
+	it("discovers nested sibling repos downward but prunes dot-dirs like .ditto overlays", async () => {
 		const detected = await detectGitRepos(parent);
 		expect(detected?.root).toBe(parent);
-		// Root + every repo nested beneath it, in any order.
-		expect(new Set(detected?.repos)).toEqual(new Set([parent, checkout, modules, sdk]));
+		// Root + sibling repos nested beneath it. The `.ditto/wt` overlay checkout is
+		// pruned: dot-prefixed dirs (task worktree/overlay internals) and node_modules are
+		// never swept into the parent's checkpoint. Otherwise `git add` inside the overlay
+		// hits the overlay's own .gitignore and the checkpoint fails (e.g. ignored
+		// backend/cluster/frontend paths).
+		expect(new Set(detected?.repos)).toEqual(new Set([parent, modules, sdk]));
+		expect(detected?.repos).not.toContain(checkout);
 	});
 
 	it("resolves a plain subdirectory up to its owning repo (and no further)", async () => {
