@@ -685,15 +685,24 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		description: "Save or compact the project knowledge base",
 		subcommands: [
 			{ name: "save", description: "Save durable knowledge from the current session to .omp/knowledge" },
-			{ name: "compact", description: "Background agent: prune obsolete/duplicate/outdated knowledge files" },
+			{
+				name: "compact",
+				description:
+					"Background agent: prune duplicate/outdated knowledge files, or pursue a goal (`/knowledge compact <goal>`)",
+			},
 		],
 		allowArgs: true,
 		handle: async (command, runtime) => {
-			const { verb } = parseSubcommand(command.args);
+			const { verb, rest } = parseSubcommand(command.args);
 			if (verb === "compact") {
-				const result = runtime.session.compactKnowledge({ sourceTitle: "/knowledge compact" });
+				const goal = rest.trim() || undefined;
+				const result = runtime.session.compactKnowledge({
+					sourceTitle: goal ? `/knowledge compact ${goal}` : "/knowledge compact",
+					goal,
+				});
 				if (result.started) {
-					await runtime.output(`Knowledge compaction started in the background (job ${result.jobId ?? "?"}).`);
+					const what = goal ? "Knowledge update" : "Knowledge compaction";
+					await runtime.output(`${what} started in the background (job ${result.jobId ?? "?"}).`);
 				} else {
 					await runtime.output(`Knowledge compaction unavailable: ${result.reason ?? "unknown"}.`);
 				}
