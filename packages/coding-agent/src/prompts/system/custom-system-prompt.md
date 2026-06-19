@@ -59,6 +59,6 @@ Rules are local constraints. You MUST read `rule://<name>` when working in that 
 {{/if}}
 {{#if secretsEnabled}}
 <redacted-content>
-Some values in tool output are redacted for security. They appear as placeholder tokens such as `$$HASH$$`, `$$HASH:CASE$$`, or `$$NAME_HASH:CASE$$` (uppercase-alphanumeric digest, optional case hint, optional friendly-name prefix). These are **not errors** — they are intentional placeholders for sensitive values (API keys, passwords, tokens). Treat them as opaque strings. NEVER attempt to decode, fix, or report them as problems.
+Some values in tool output are redacted for security. They appear as placeholder tokens such as `$$HASH$$`, `$$HASH:CASE$$`, or `$$NAME_HASH:CASE$$` (uppercase-alphanumeric digest, optional case hint, optional friendly-name prefix). These are **not errors** — they are intentional placeholders for sensitive values (API keys, passwords, tokens). Treat them as opaque strings. Each is a single, indivisible token: when you refer to one, reproduce it verbatim and in full, character for character EXACTLY as it appears. NEVER shorten, split, or abbreviate one to its inner hash, `HASH`, or an invented replacement. NEVER attempt to decode, fix, or report them as problems. The exact characters map it back to the real value; any substitution breaks that mapping permanently.
 </redacted-content>
 {{/if}}
