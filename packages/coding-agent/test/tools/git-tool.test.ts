@@ -110,4 +110,37 @@ describe("GitTool", () => {
 		expect(await runGit(root, ["log", "-1", "--format=%s"])).toBe("test: checkpoint changes");
 		expect(await runGit(nested, ["log", "-1", "--format=%s"])).toBe("test: checkpoint changes");
 	});
+
+	it("checkpoints a root repo whose unlinked nested repo is gitignored", async () => {
+		// Monorepo shape that previously broke checkpoint: the root `.gitignore`s its
+		// unlinked nested repos. `excludeNestedPathspecs` used to name every discovered
+		// nested repo in a `:(exclude)<path>` pathspec, and naming a gitignored path makes
+		// `git add` die ("The following paths are ignored by one of your .gitignore files"),
+		// failing the whole checkpoint. The gitignored nested repo must instead be left to
+		// `git add -A`'s ignore handling while still being committed as its own repo.
+		const { root, nested } = await createMonorepo();
+		await fs.writeFile(path.join(root, ".gitignore"), "packages/lib\n");
+		await runGit(root, ["add", ".gitignore"]);
+		await runGit(root, ["commit", "-m", "ignore nested repo"]);
+		await fs.writeFile(path.join(root, "tracked.txt"), "root edit\n");
+		await fs.writeFile(path.join(nested, "tracked.txt"), "nested edit\n");
+		vi.spyOn(commitMessageGenerator, "generateCommitMessage").mockResolvedValue("test: checkpoint changes");
+		const session = createSession(root);
+		(session as { modelRegistry?: unknown }).modelRegistry = {};
+
+		const tool = new GitTool(session);
+		const result = await tool.execute("call-checkpoint", { op: "checkpoint", reason: "test scope" });
+		const details = result.details;
+		if (details?.op !== "checkpoint") throw new Error("expected checkpoint details");
+
+		// Both repos are iterated and committed — the gitignored nested repo is its own repo.
+		expect(details.overallStatus).toBe("committed");
+		expect(details.repos.map(repo => repo.label).sort()).toEqual([".", "packages/lib"]);
+		expect(details.repos.every(repo => repo.status === "committed")).toBe(true);
+		expect(await runGit(root, ["status", "--porcelain=v1"])).toBe("");
+		expect(await runGit(root, ["log", "-1", "--format=%s"])).toBe("test: checkpoint changes");
+		expect(await runGit(nested, ["log", "-1", "--format=%s"])).toBe("test: checkpoint changes");
+		// The gitignored nested repo is never staged into the parent as an embedded gitlink.
+		expect((await runGit(root, ["ls-files"])).split("\n")).not.toContain("packages/lib");
+	});
 });

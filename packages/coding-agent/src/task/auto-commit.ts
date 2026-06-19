@@ -13,12 +13,22 @@ export interface DirtyRepoReport {
 /**
  * Build git pathspecs that exclude nested repositories from a parent repo's
  * staging/status so a dirty child is never staged or counted as part of its parent.
- * Returns an empty array when there are no nested repos (caller then stages everything).
+ *
+ * Only NON-gitignored nested repos are named. A gitignored nested repo is already
+ * invisible to `git add`/`git status` (the ignore rules skip its tree), so it needs no
+ * exclude — and naming a gitignored path in a `:(exclude)` pathspec makes `git add` die
+ * ("The following paths are ignored by one of your .gitignore files"), which otherwise
+ * fails the whole checkpoint in a monorepo that gitignores its unlinked nested repos.
+ * Returns an empty array when nothing needs excluding (caller then stages everything via
+ * `git add -A`, which honors .gitignore).
  */
-function excludeNestedPathspecs(repoRoot: string, nestedRepoPaths: readonly string[]): string[] {
-	const excludes = nestedRepoPaths
+async function excludeNestedPathspecs(repoRoot: string, nestedRepoPaths: readonly string[]): Promise<string[]> {
+	const relatives = nestedRepoPaths
 		.map(nestedPath => path.relative(repoRoot, nestedPath).replaceAll("\\", "/"))
 		.filter(relativePath => relativePath.length > 0);
+	if (relatives.length === 0) return [];
+	const ignored = await git.checkIgnore(repoRoot, relatives);
+	const excludes = relatives.filter(relativePath => !ignored.has(relativePath));
 	return excludes.length > 0 ? [":/", ...excludes.map(relativePath => `:(exclude)${relativePath}`)] : [];
 }
 
@@ -34,7 +44,7 @@ export async function dirtyRepos(cwd: string): Promise<DirtyRepoReport> {
 	const detected = await detectGitRepos(cwd);
 	if (!detected) return { root: path.resolve(cwd), repos: [] };
 	const { root, repos: allRepos } = detected;
-	const rootPathspecs = excludeNestedPathspecs(root, allRepos.slice(1));
+	const rootPathspecs = await excludeNestedPathspecs(root, allRepos.slice(1));
 	const statuses = await Promise.all(
 		allRepos.map(async repoPath => ({
 			repoPath,
@@ -110,7 +120,7 @@ async function commitSingleRepo(
 	sessionId: string | undefined,
 ): Promise<CommitDirtyRepoEntry> {
 	const nestedRepos = await discoverNestedGitRepos(repoPath);
-	const stagePathspecs = excludeNestedPathspecs(repoPath, nestedRepos);
+	const stagePathspecs = await excludeNestedPathspecs(repoPath, nestedRepos);
 	await git.stage.files(repoPath, stagePathspecs);
 	const stagedFiles = await git.diff.changedFiles(repoPath, { cached: true });
 	if (stagedFiles.length === 0) {

@@ -2201,6 +2201,25 @@ export const ls = {
 	},
 };
 
+/**
+ * Return the subset of `paths` (each relative to `cwd`) that git would ignore under
+ * `cwd`'s ignore rules (.gitignore, core.excludesFile, .git/info/exclude). Uses
+ * `check-ignore -z --stdin`, which echoes the ignored inputs verbatim and exits 1 when
+ * none match — that exit is "none ignored", not an error.
+ */
+export async function checkIgnore(
+	cwd: string,
+	paths: readonly string[],
+	signal?: AbortSignal,
+): Promise<Set<string>> {
+	if (paths.length === 0) return new Set();
+	const args = ["check-ignore", "-z", "--stdin"];
+	const result = await git(cwd, args, { readOnly: true, signal, stdin: `${paths.join("\0")}\0` });
+	if (result.exitCode === 1) return new Set();
+	if (result.exitCode !== 0) throw new GitCommandError(args, result);
+	return new Set(result.stdout.split("\0").filter(entry => entry.length > 0));
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // API: head
 // ════════════════════════════════════════════════════════════════════════════
