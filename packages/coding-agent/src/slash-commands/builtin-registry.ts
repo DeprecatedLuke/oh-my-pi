@@ -682,9 +682,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "knowledge",
-		description: "Save or compact the project knowledge base",
+		description: "Save, update, or compact the project knowledge base",
 		subcommands: [
 			{ name: "save", description: "Save durable knowledge from the current session to .omp/knowledge" },
+			{
+				name: "update",
+				description:
+					"Background agent: read every knowledge file, confirm/correct facts against the repo, and resolve conflicts (`/knowledge update [focus]`)",
+			},
 			{
 				name: "compact",
 				description:
@@ -694,6 +699,19 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
+			if (verb === "update") {
+				const focus = rest.trim() || undefined;
+				const result = runtime.session.updateKnowledge({
+					sourceTitle: focus ? `/knowledge update ${focus}` : "/knowledge update",
+					focus,
+				});
+				if (result.started) {
+					await runtime.output(`Knowledge update started in the background (job ${result.jobId ?? "?"}).`);
+				} else {
+					await runtime.output(`Knowledge update unavailable: ${result.reason ?? "unknown"}.`);
+				}
+				return commandConsumed();
+			}
 			if (verb === "compact") {
 				const goal = rest.trim() || undefined;
 				const result = runtime.session.compactKnowledge({
@@ -701,15 +719,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 					goal,
 				});
 				if (result.started) {
-					const what = goal ? "Knowledge update" : "Knowledge compaction";
-					await runtime.output(`${what} started in the background (job ${result.jobId ?? "?"}).`);
+					await runtime.output(`Knowledge compaction started in the background (job ${result.jobId ?? "?"}).`);
 				} else {
 					await runtime.output(`Knowledge compaction unavailable: ${result.reason ?? "unknown"}.`);
 				}
 				return commandConsumed();
 			}
 			if (verb && verb !== "save") {
-				return usage("Usage: /knowledge <save|compact>", runtime);
+				return usage("Usage: /knowledge <save|update|compact>", runtime);
 			}
 			try {
 				const result = await runtime.session.saveKnowledge({ sourceTitle: "/knowledge save" });
