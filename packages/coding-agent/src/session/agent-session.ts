@@ -316,6 +316,7 @@ import type { ShakeMode, ShakeResult } from "./shake-types";
 import { ToolChoiceQueue } from "./tool-choice-queue";
 import { planTurnPersistence, sameMessageContent, sessionMessagePersistenceKey } from "./turn-persistence";
 import { TurnRecovery, type TurnRecoveryHost } from "./turn-recovery";
+import { runWokenTurnTracked } from "./woken-turn";
 import { YieldQueue } from "./yield-queue";
 
 export * from "./agent-session-events";
@@ -722,12 +723,12 @@ export class AgentSession {
 		}
 		this.#resetPromptMaintenanceState();
 		this.#beginInFlight();
-		void this.agent
-			.prompt(records)
-			.catch(error => {
+		const runTurn = async (): Promise<void> => {
+			try {
+				await this.agent.prompt(records);
+			} catch (error) {
 				logger.warn("IRC wake turn failed", { error: String(error) });
-			})
-			.finally(() => {
+			} finally {
 				if (parkedFollowUps.length > 0) {
 					this.agent.replaceQueues(
 						[...this.agent.peekSteeringQueue()],
@@ -735,7 +736,22 @@ export class AgentSession {
 					);
 				}
 				this.#endInFlight();
-			});
+			}
+		};
+		// A subagent woken by a peer's IRC message (or a stranded-aside resume) runs a
+		// real turn the original `task` spawn job no longer covers — track it as its
+		// own background job so it surfaces in the Background Jobs panel, keeps the
+		// session's pending-async-work true, and delivers a follow-up that wakes the
+		// owner once it finishes. Degrades to an untracked turn for the main agent or
+		// when no job slot is free; the wake itself is never dropped.
+		runWokenTurnTracked({
+			manager: this.#asyncJobManager,
+			agentId: this.#agentId,
+			agentKind: this.#agentKind,
+			runTurn,
+			summarize: id =>
+				`\`${id}\` ran a turn in response to an IRC message and finished. Inspect via history://${id}.`,
+		});
 	}
 
 	/** Remove advisor concern/blocker cards from the agent-core steer/follow-up
