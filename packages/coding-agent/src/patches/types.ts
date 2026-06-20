@@ -60,6 +60,13 @@ export interface CreateNativePatchInput {
 	taskId?: string;
 	description?: string;
 	message?: string;
+	/**
+	 * Optional capture-scope filter, keyed by repo-root-relative POSIX path. When
+	 * provided, only files for which it returns `true` enter the manifest — used
+	 * to scope a capture to a subtree (e.g. `.omp/knowledge/**`) while keeping
+	 * entry paths repo-root-relative so the patch still applies at the repo root.
+	 */
+	pathFilter?: (relativePath: string) => boolean;
 }
 
 export interface CreateNativePatchResult {

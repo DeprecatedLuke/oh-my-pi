@@ -111,6 +111,7 @@ export async function createNativePatch(input: CreateNativePatchInput): Promise<
 	let blobCount = 0;
 
 	for (const relativePath of [...allPaths].sort(comparePaths)) {
+		if (input.pathFilter && !input.pathFilter(relativePath)) continue;
 		const baseline = await readFileSnapshot(path.join(baselineRoot, relativePath));
 		const changed = await readFileSnapshot(path.join(changedRoot, relativePath));
 		if (baseline?.hash === changed?.hash && baseline?.mode === changed?.mode) continue;
