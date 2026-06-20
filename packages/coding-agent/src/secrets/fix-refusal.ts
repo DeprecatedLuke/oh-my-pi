@@ -92,7 +92,7 @@ export interface FixRefusalOptions {
 	onWorking?: (message?: string) => void;
 	/** Patterns already discovered by a prior (interrupted) run, to resume from. Seeds the working set. */
 	initialEntries?: SecretEntry[];
-	/** Awaited whenever the discovered entry set GROWS, so the caller can persist resume state. */
+	/** Awaited whenever the discovered entry set CHANGES — grows on a new round, or shrinks when inert resumed patterns are pruned — so the caller can persist resume state. */
 	onProgress?: (entries: SecretEntry[]) => void | Promise<void>;
 	/** Max retries for a transient provider error (rate limit / overload / 5xx) per call. Default 5. */
 	maxTransientRetries?: number;
@@ -280,6 +280,27 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 
 	// ── Diagnose / re-probe loop ──────────────────────────────────────────────
 	let entries: SecretEntry[] = options.initialEntries ? [...options.initialEntries] : [];
+	// Resume can re-seed patterns discovered for a PRIOR (different) refusal. One
+	// that masks nothing in the current re-probe surface (systemPrompt ∪
+	// probeMessages) can never be load-bearing here, so drop it now — for free,
+	// via a synchronous mask-diff — instead of spending a leave-one-out model
+	// round-trip on it during shrink and bloating every round's judge prompt and
+	// re-probe masking. (Freshly proposed in-run patterns always match the
+	// transcript the judge read, so this only ever sheds stale cross-refusal cruft.)
+	if (entries.length > 0) {
+		const surface: [string[], Message[]] = [systemPrompt, probeMessages];
+		const baseline = JSON.stringify(surface);
+		const active = entries.filter(
+			entry => JSON.stringify(new SecretObfuscator([entry]).obfuscateObject(surface)) !== baseline,
+		);
+		if (active.length < entries.length) {
+			step(
+				`Pruned ${plural(entries.length - active.length, "inert resumed pattern")} (no match in this conversation).`,
+			);
+			entries = active;
+			await options.onProgress?.(entries);
+		}
+	}
 	let latest = options.refusalText;
 	let iterations = 0;
 	let resolved = false;
@@ -342,7 +363,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 
 	// ── Shrink: drop patterns that are not load-bearing ───────────────────────
 	if (entries.length > 1) {
-		working("Minimizing the pattern set…");
+		working(`Minimizing ${plural(entries.length, "pattern")}…`);
 		// Phase 1 — parallel leave-one-out against the FULL set. By monotonicity, a
 		// pattern whose removal still clears is redundant; a pattern that stays
 		// load-bearing here stays load-bearing in every subset, so it never needs

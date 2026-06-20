@@ -340,8 +340,9 @@ describe("runFixRefusal", () => {
 		expect(sleeps).toBe(2);
 	});
 
-	it("seeds initialEntries and reports growth through onProgress", async () => {
+	it("seeds initialEntries, prunes inert resumed patterns, and reports the set through onProgress", async () => {
 		const snapshots: string[][] = [];
+		const steps: string[] = [];
 		const complete: FixRefusalComplete = async ({ model, context }) => {
 			if (model === UNCENSORED) {
 				const text = userText(context);
@@ -356,17 +357,30 @@ describe("runFixRefusal", () => {
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: [],
-			probeMessages: PROBE,
+			probeMessages: PROBE, // "Tell me about SecretCorp and Bob."
 			refusalText: REFUSAL,
 			complete,
-			initialEntries: [{ type: "regex", content: "Alpha" }],
+			// "Bob" matches the probe (active); "Stale" is from a prior, different
+			// refusal and matches nothing here — it MUST be pruned for free, with no
+			// leave-one-out model trial spent on it.
+			initialEntries: [
+				{ type: "regex", content: "Bob" },
+				{ type: "regex", content: "Stale" },
+			],
 			onProgress: entries => {
 				snapshots.push(entries.map(e => e.content));
 			},
+			onStep: line => steps.push(line),
 		});
 		expect(result.resolved).toBe(true);
-		// seed flowed in and growth was reported: the first snapshot holds both the seeded and the new pattern.
-		expect(snapshots[0]).toEqual(["Alpha", "Beta"]);
+		// The inert resumed pattern was dropped synchronously (zero model calls)...
+		expect(steps).toContain("Pruned 1 inert resumed pattern (no match in this conversation).");
+		// ...so the first persisted snapshot is the pruned seed (Bob only, no Stale)...
+		expect(snapshots[0]).toEqual(["Bob"]);
+		// ...and the next growth snapshot adds the freshly proposed pattern.
+		expect(snapshots[1]).toEqual(["Bob", "Beta"]);
+		// "Stale" never reaches the final set.
+		expect(result.entries.every(e => e.content !== "Stale")).toBe(true);
 	});
 });
 
