@@ -45,7 +45,7 @@ function parseWaitDurationMs(value: string | undefined): number {
 
 interface JobSnapshot {
 	id: string;
-	type: "bash" | "task" | "knowledge";
+	type: "bash" | "task";
 	status: "running" | "completed" | "failed" | "cancelled";
 	label: string;
 	durationMs: number;
@@ -269,7 +269,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 	#snapshotJobs(
 		jobs: {
 			id: string;
-			type: "bash" | "task" | "knowledge";
+			type: "bash" | "task";
 			status: string;
 			label: string;
 			startTime: number;
@@ -297,7 +297,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		manager: AsyncJobManager,
 		jobs: {
 			id: string;
-			type: "bash" | "task" | "knowledge";
+			type: "bash" | "task";
 			status: string;
 			label: string;
 			startTime: number;

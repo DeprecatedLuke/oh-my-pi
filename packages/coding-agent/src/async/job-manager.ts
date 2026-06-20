@@ -36,7 +36,7 @@ interface PollEscalationState {
 
 export interface AsyncJob {
 	id: string;
-	type: "bash" | "task" | "knowledge";
+	type: "bash" | "task";
 	status: "running" | "completed" | "failed" | "cancelled";
 	startTime: number;
 	label: string;
@@ -230,7 +230,7 @@ export class AsyncJobManager {
 	}
 
 	register(
-		type: "bash" | "task" | "knowledge",
+		type: "bash" | "task",
 		label: string,
 		run: (ctx: {
 			jobId: string;

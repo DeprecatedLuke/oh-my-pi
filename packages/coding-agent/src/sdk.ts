@@ -218,6 +218,7 @@ import { VibeSessionRegistry } from "./vibe/runtime";
 import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
 
 
+
 type McpNotificationEntry = {
 	serverName: string;
 	uri: string;

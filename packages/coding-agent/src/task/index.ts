@@ -827,14 +827,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			item: TaskItem;
 			index: number;
 			blocking: boolean;
-			jobType: "task" | "knowledge";
 			progress: AgentProgress;
 		}> = [];
 		for (const [index, item] of spawnItems.entries()) {
 			const agentType = resolvedAgents[index]!;
 			const policy = policies[index]!;
 			const agentSource = policy.agent.source;
-			const jobType = agentType === "knowledge" && agentSource === "bundled" ? "knowledge" : "task";
 			const agentId = await outputManager.allocate(item.name?.trim() || generateTaskName());
 			const assignment = (item.task ?? "").trim();
 			spawns.push({
@@ -842,7 +840,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				item,
 				index,
 				blocking: itemBlocking[index],
-				jobType,
 				progress: {
 					index,
 					id: agentId,
@@ -887,7 +884,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			async: {
 				state: settledCount < asyncSpawns.length ? "running" : failedCount > 0 ? "failed" : "completed",
 				jobId: primaryJobId,
-				type: asyncSpawns.every(spawn => spawn.jobType === "knowledge") ? "knowledge" : "task",
+				type: "task",
 			},
 		});
 
@@ -901,7 +898,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			try {
 				const jobId = this.#registerSpawnJob({
 					manager,
-					jobType: spawn.jobType,
+
 					batchId,
 					toolCallId,
 					spawnParams: spawnParamsFor(params, spawn.item, defaultAgent),
@@ -1062,7 +1059,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	 */
 	#registerSpawnJob(options: {
 		manager: AsyncJobManager;
-		jobType: "task" | "knowledge";
 		toolCallId: string;
 		spawnParams: TaskParams;
 		agentId: string;
@@ -1075,7 +1071,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	}): string {
 		const {
 			manager,
-			jobType,
 			toolCallId,
 			spawnParams,
 			agentId,
@@ -1102,7 +1097,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			return `\n\n${agentId} is now idle — ${followUp}transcript at history://${agentId}`;
 		};
 		return manager.register(
-			jobType,
+			"task",
 			agentId,
 			async ({ signal: runSignal, reportProgress, markRunning }) => {
 				const startedAt = Date.now();

@@ -442,7 +442,47 @@ export class ChatTranscriptBuilder {
 	#appendCustomMessage(message: Extract<AgentMessage, { role: "custom" | "hookMessage" }>): void {
 		if (!message.display) return;
 		if (message.customType === "async-result") {
-			this.container.addChild(buildAsyncResultBlock(message));
+			const details = (
+				message as CustomMessage<{
+					jobId?: string;
+					type?: "bash" | "task";
+					label?: string;
+					durationMs?: number;
+					jobs?: Array<{
+						jobId?: string;
+						type?: "bash" | "task";
+						label?: string;
+						durationMs?: number;
+					}>;
+				}>
+			).details;
+			const jobs =
+				details?.jobs && details.jobs.length > 0
+					? details.jobs
+					: [
+							{
+								jobId: details?.jobId,
+								type: details?.type,
+								label: details?.label,
+								durationMs: details?.durationMs,
+							},
+						];
+			const block = new TranscriptBlock();
+			for (const job of jobs) {
+				const jobId = job.jobId ?? "unknown";
+				const typeLabel = job.type ? `[${job.type}]` : "[job]";
+				const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
+				const line = [
+					theme.fg("success", `${theme.status.done} Background job completed`),
+					theme.fg("dim", typeLabel),
+					theme.fg("accent", jobId),
+					duration ? theme.fg("dim", `(${duration})`) : undefined,
+				]
+					.filter(Boolean)
+					.join(" ");
+				block.addChild(new Text(line, 1, 0));
+			}
+			this.container.addChild(block);
 			return;
 		}
 		if (message.customType === LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE) {
