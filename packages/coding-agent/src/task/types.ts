@@ -583,6 +583,6 @@ export interface TaskToolDetails {
 	async?: {
 		state: "running" | "completed" | "failed";
 		jobId: string;
-		type: "task";
+		type: "task" | "knowledge";
 	};
 }
