@@ -18,7 +18,13 @@ import {
 	SecretObfuscator,
 	saveFixRefusalState,
 } from "../../secrets";
-import { classifierRefusalText, type FixRefusalComplete, runFixRefusal } from "../../secrets/fix-refusal";
+import {
+	classifierRefusalText,
+	FixRefusalAbort,
+	type FixRefusalComplete,
+	type FixRefusalResult,
+	runFixRefusal,
+} from "../../secrets/fix-refusal";
 import { shortenPath } from "../../tools/render-utils";
 
 /** Progress sink so the orchestrator renders identically in TUI and ACP modes. */
@@ -146,20 +152,34 @@ export async function executeFixRefusal(deps: FixRefusalDeps): Promise<FixRefusa
 			{ telemetry: undefined, oneshotKind: "fix_refusal" },
 		);
 
-	const result = await runFixRefusal({
-		mainModel,
-		uncensoredModel,
-		systemPrompt,
-		probeMessages,
-		refusalText,
-		complete,
-		signal,
-		onStep: line => ui.step(line),
-		onWorking: message => ui.working(message),
-		initialEntries,
-		onProgress: entries =>
-			saveFixRefusalState(agentDir, { sessionId: session.sessionId, entries, refusalText, updatedAt: Date.now() }),
-	});
+	let result: FixRefusalResult;
+	try {
+		result = await runFixRefusal({
+			mainModel,
+			uncensoredModel,
+			systemPrompt,
+			probeMessages,
+			refusalText,
+			complete,
+			signal,
+			onStep: line => ui.step(line),
+			onWorking: message => ui.working(message),
+			initialEntries,
+			onProgress: entries =>
+				saveFixRefusalState(agentDir, {
+					sessionId: session.sessionId,
+					entries,
+					refusalText,
+					updatedAt: Date.now(),
+				}),
+		});
+	} catch (err) {
+		if (err instanceof FixRefusalAbort) {
+			ui.step("Cancelled.");
+			return { resolved: false, saved: 0, patternsActive: 0 };
+		}
+		throw err;
+	}
 
 	if (!result.resolved) {
 		ui.step(`Could not clear the refusal (${result.reason ?? "unknown"}). No patterns saved.`);

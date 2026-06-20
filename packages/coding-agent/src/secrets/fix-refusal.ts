@@ -292,6 +292,11 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 			resolved = true;
 			break;
 		}
+		step(
+			iterations === 0
+				? "Refusal model confirmed a refusal; proposing masks."
+				: "Refusal model still flags the response after the last round; proposing more masks.",
+		);
 
 		const placeholders = collectPlaceholders(maskMessages(entries));
 		const additions = mergePatterns(entries, verdict.patterns, placeholders, step);
@@ -316,7 +321,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 		}
 		lastReprobe = reprobed;
 		latest = reprobed;
-		step(`Main model responded (${latest.length} chars)${looksLikeRefusal(latest) ? " — still refusing" : ""}`);
+		step(`Main model re-probed (${latest.length} chars).`);
 	}
 
 	if (!resolved) {
@@ -611,23 +616,6 @@ const ROLE_LABELS: Record<string, string> = {
 	toolResult: "TOOL",
 	developer: "DEVELOPER",
 };
-
-const REFUSAL_HINTS: RegExp[] = [
-	/\bI(?:'|’| a)?m (?:sorry|unable|not able|not comfortable)\b/i,
-	/\bI (?:can(?:'|’)?t|cannot|won(?:'|’)?t|will not)\b/i,
-	/\bcan(?:'|’)?t (?:help|assist|provide|comply|create)\b/i,
-	/\bunable to (?:help|assist|provide|comply)\b/i,
-	/\bagainst (?:my|our) (?:policy|policies|guidelines)\b/i,
-];
-
-/** Heuristic for nicer progress text only; the uncensored model's verdict is authoritative. */
-function looksLikeRefusal(text: string): boolean {
-	const head = text.slice(0, 600);
-	// A classifier/cyber refusal ("Refusal (cyber): …", "Content flagged …") never
-	// matches the polite-phrasing hints, so check its prefixes too — otherwise the
-	// progress line reads "Main model responded" for what is actually a refusal.
-	return isRefusalErrorMessage(text) || REFUSAL_HINTS.some(hint => hint.test(head));
-}
 
 function plural(count: number, noun: string): string {
 	return `${count} ${noun}${count === 1 ? "" : "s"}`;

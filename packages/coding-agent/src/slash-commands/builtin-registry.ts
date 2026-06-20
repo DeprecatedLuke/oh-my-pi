@@ -1071,17 +1071,20 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 			const ctx = runtime.ctx;
 			ctx.editor.setText("");
 			const ui = createTuiFixRefusalUi(ctx);
+			const signal = ctx.beginFixRefusal?.();
 			try {
 				await executeFixRefusal({
 					session: ctx.session,
 					settings: ctx.settings,
 					cwd: ctx.sessionManager.getCwd(),
+					signal,
 					ui,
 				});
 			} catch (err) {
 				ui.step(`Failed: ${errorMessage(err)}`);
 			} finally {
 				ui.done();
+				ctx.endFixRefusal?.();
 			}
 			return commandConsumed();
 		},

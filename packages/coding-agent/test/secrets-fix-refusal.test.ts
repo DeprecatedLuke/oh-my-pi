@@ -12,6 +12,7 @@ import type { AssistantMessage, Context, Message, Model } from "@oh-my-pi/pi-ai"
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	classifierRefusalText,
+	FixRefusalAbort,
 	type FixRefusalComplete,
 	isRefusalMessage,
 	runFixRefusal,
@@ -482,6 +483,100 @@ describe("runFixRefusal re-probe resilience", () => {
 				maxIterations: 2,
 			}),
 		).rejects.toThrow(/400 invalid request/);
+	});
+});
+
+describe("runFixRefusal cancellation", () => {
+	it("aborts the run when the signal fires mid-loop, throwing FixRefusalAbort", async () => {
+		const controller = new AbortController();
+		let uncensoredCalls = 0;
+		// The judge proposes a pattern (never resolving), and we abort the signal
+		// right after the first verdict — so the NEXT throwIfAborted (in the
+		// re-probe) must surface FixRefusalAbort instead of grinding on.
+		const complete: FixRefusalComplete = async ({ model }) => {
+			if (model === UNCENSORED) {
+				uncensoredCalls += 1;
+				controller.abort();
+				return toolResponse({ resolved: false, patterns: [{ regex: "SecretCorp" }] });
+			}
+			return textResponse(REFUSAL);
+		};
+
+		await expect(
+			runFixRefusal({
+				mainModel: MAIN,
+				uncensoredModel: UNCENSORED,
+				systemPrompt: [],
+				probeMessages: PROBE,
+				refusalText: REFUSAL,
+				complete,
+				signal: controller.signal,
+				maxIterations: 6,
+			}),
+		).rejects.toBeInstanceOf(FixRefusalAbort);
+		// It got exactly one judge verdict in before the abort halted the loop —
+		// proof the abort short-circuits rather than running to maxIterations.
+		expect(uncensoredCalls).toBe(1);
+	});
+
+	it("throws FixRefusalAbort immediately when the signal is already aborted", async () => {
+		let calls = 0;
+		const complete: FixRefusalComplete = async () => {
+			calls += 1;
+			return textResponse(REFUSAL);
+		};
+		await expect(
+			runFixRefusal({
+				mainModel: MAIN,
+				uncensoredModel: UNCENSORED,
+				systemPrompt: [],
+				probeMessages: PROBE,
+				refusalText: REFUSAL,
+				complete,
+				signal: AbortSignal.abort(),
+			}),
+		).rejects.toBeInstanceOf(FixRefusalAbort);
+		// No model call happened — the pre-flight throwIfAborted fired first.
+		expect(calls).toBe(0);
+	});
+});
+
+describe("runFixRefusal progress reporting", () => {
+	it("reports the authoritative judge verdict per round, not a cosmetic refusal guess", async () => {
+		// Stays unresolved for the capped rounds, proposing a fresh pattern each
+		// time, so we observe both the iteration-0 and the later-round verdict lines.
+		let n = 0;
+		const complete: FixRefusalComplete = async ({ model, context }) => {
+			if (model === UNCENSORED) {
+				if (userText(context).includes("friendlyName")) return toolResponse({ resolved: true, patterns: [] });
+				n += 1;
+				return toolResponse({ resolved: false, patterns: [{ regex: `unique${n}` }] });
+			}
+			return textResponse(REFUSAL);
+		};
+		const steps: string[] = [];
+
+		const result = await runFixRefusal({
+			mainModel: MAIN,
+			uncensoredModel: UNCENSORED,
+			systemPrompt: [],
+			probeMessages: PROBE,
+			refusalText: REFUSAL,
+			complete,
+			maxIterations: 3,
+			onStep: line => steps.push(line),
+		});
+
+		expect(result.resolved).toBe(false);
+		// First round states the judge confirmed a refusal...
+		expect(steps).toContain("Refusal model confirmed a refusal; proposing masks.");
+		// ...later rounds attribute the continuation to the judge still flagging it.
+		expect(steps.some(line => line.startsWith("Refusal model still flags the response"))).toBe(true);
+		// The re-probe line is now a factual size report.
+		expect(steps.some(line => /^Main model re-probed \(\d+ chars\)\.$/.test(line))).toBe(true);
+		// The old cosmetic heuristic annotation is gone — it contradicted the judge.
+		expect(steps.some(line => line.includes("— still refusing"))).toBe(false);
+		expect(steps.some(line => line.startsWith("Main model responded"))).toBe(false);
 	});
 });
 
