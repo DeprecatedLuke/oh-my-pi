@@ -682,9 +682,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	},
 	{
 		name: "knowledge",
-		description: "Save, update, or compact the project knowledge base",
+		description: "Save, build, update, or compact the project knowledge base",
 		subcommands: [
 			{ name: "save", description: "Save durable knowledge from the current session to .omp/knowledge" },
+			{
+				name: "build",
+				description:
+					"Background agent: explore the project and author the knowledge base from scratch (`/knowledge build [focus]`)",
+			},
 			{
 				name: "update",
 				description:
@@ -699,6 +704,19 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
+			if (verb === "build") {
+				const focus = rest.trim() || undefined;
+				const result = runtime.session.buildKnowledge({
+					sourceTitle: focus ? `/knowledge build ${focus}` : "/knowledge build",
+					focus,
+				});
+				if (result.started) {
+					await runtime.output(`Knowledge build started in the background (job ${result.jobId ?? "?"}).`);
+				} else {
+					await runtime.output(`Knowledge build unavailable: ${result.reason ?? "unknown"}.`);
+				}
+				return commandConsumed();
+			}
 			if (verb === "update") {
 				const focus = rest.trim() || undefined;
 				const result = runtime.session.updateKnowledge({
@@ -726,7 +744,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 				return commandConsumed();
 			}
 			if (verb && verb !== "save") {
-				return usage("Usage: /knowledge <save|update|compact>", runtime);
+				return usage("Usage: /knowledge <save|build|update|compact>", runtime);
 			}
 			try {
 				const result = await runtime.session.saveKnowledge({ sourceTitle: "/knowledge save" });

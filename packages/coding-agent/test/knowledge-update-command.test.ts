@@ -15,10 +15,11 @@ function knowledgeCommand() {
 	return cmd;
 }
 
-function makeRuntime(results?: { update?: StartResult; compact?: StartResult }) {
+function makeRuntime(results?: { update?: StartResult; compact?: StartResult; build?: StartResult }) {
 	const outputs: string[] = [];
 	const updateCalls: KnowledgeOpts[] = [];
 	const compactCalls: KnowledgeOpts[] = [];
+	const buildCalls: KnowledgeOpts[] = [];
 	const runtime = {
 		session: {
 			updateKnowledge: (opts?: KnowledgeOpts): StartResult => {
@@ -29,16 +30,20 @@ function makeRuntime(results?: { update?: StartResult; compact?: StartResult }) 
 				compactCalls.push(opts ?? {});
 				return results?.compact ?? { started: true, jobId: "KnowledgeCompact" };
 			},
+			buildKnowledge: (opts?: KnowledgeOpts): StartResult => {
+				buildCalls.push(opts ?? {});
+				return results?.build ?? { started: true, jobId: "KnowledgeBuild" };
+			},
 			saveKnowledge: async (): Promise<{ committed: boolean; sha?: string }> => ({ committed: false }),
 		},
 		output: (text: string) => {
 			outputs.push(text);
 		},
 	};
-	return { runtime, outputs, updateCalls, compactCalls };
+	return { runtime, outputs, updateCalls, compactCalls, buildCalls };
 }
 
-async function run(args: string, results?: { update?: StartResult; compact?: StartResult }) {
+async function run(args: string, results?: { update?: StartResult; compact?: StartResult; build?: StartResult }) {
 	const cmd = knowledgeCommand();
 	const ctx = makeRuntime(results);
 	const consumed = await cmd.handle?.(
@@ -49,8 +54,8 @@ async function run(args: string, results?: { update?: StartResult; compact?: Sta
 }
 
 describe("/knowledge update slash command", () => {
-	test("advertises update between save and compact", () => {
-		expect(knowledgeCommand().subcommands?.map(s => s.name)).toEqual(["save", "update", "compact"]);
+	test("advertises save, build, update, compact in order", () => {
+		expect(knowledgeCommand().subcommands?.map(s => s.name)).toEqual(["save", "build", "update", "compact"]);
 	});
 
 	test("routes `update <focus>` to updateKnowledge with focus and a labeled source", async () => {
@@ -76,5 +81,31 @@ describe("/knowledge update slash command", () => {
 		expect(updateCalls).toEqual([]);
 		expect(compactCalls).toEqual([{ sourceTitle: "/knowledge compact stale docs", goal: "stale docs" }]);
 		expect(outputs[0]).toBe("Knowledge compaction started in the background (job KnowledgeCompact).");
+	});
+});
+
+describe("/knowledge build slash command", () => {
+	test("routes `build <focus>` to buildKnowledge with focus and a labeled source", async () => {
+		const { consumed, outputs, buildCalls } = await run("build auth flow");
+		expect(consumed).toEqual({ consumed: true });
+		expect(buildCalls).toEqual([{ sourceTitle: "/knowledge build auth flow", focus: "auth flow" }]);
+		expect(outputs).toEqual(["Knowledge build started in the background (job KnowledgeBuild)."]);
+	});
+
+	test("routes bare `build` with no focus", async () => {
+		const { buildCalls, outputs } = await run("build");
+		expect(buildCalls).toEqual([{ sourceTitle: "/knowledge build", focus: undefined }]);
+		expect(outputs[0]).toContain("Knowledge build started");
+	});
+
+	test("surfaces the reason when the build cannot start", async () => {
+		const { outputs } = await run("build", { build: { started: false, reason: "No model selected" } });
+		expect(outputs).toEqual(["Knowledge build unavailable: No model selected."]);
+	});
+
+	test("build does not interfere with update/compact", async () => {
+		const { updateCalls, compactCalls } = await run("build x");
+		expect(updateCalls).toEqual([]);
+		expect(compactCalls).toEqual([]);
 	});
 });
