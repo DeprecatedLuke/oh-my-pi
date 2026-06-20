@@ -2207,11 +2207,7 @@ export const ls = {
  * `check-ignore -z --stdin`, which echoes the ignored inputs verbatim and exits 1 when
  * none match — that exit is "none ignored", not an error.
  */
-export async function checkIgnore(
-	cwd: string,
-	paths: readonly string[],
-	signal?: AbortSignal,
-): Promise<Set<string>> {
+export async function checkIgnore(cwd: string, paths: readonly string[], signal?: AbortSignal): Promise<Set<string>> {
 	if (paths.length === 0) return new Set();
 	const args = ["check-ignore", "-z", "--stdin"];
 	const result = await git(cwd, args, { readOnly: true, signal, stdin: `${paths.join("\0")}\0` });
