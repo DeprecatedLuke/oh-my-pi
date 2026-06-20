@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
+import { MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { runWokenTurnTracked } from "@oh-my-pi/pi-coding-agent/session/woken-turn";
 
 function makeManager(maxRunningJobs = 15) {
@@ -14,13 +15,14 @@ function makeManager(maxRunningJobs = 15) {
 }
 
 describe("runWokenTurnTracked", () => {
-	test("a subagent woken turn becomes a tracked job that delivers on completion", async () => {
+	test("a subagent woken turn becomes a job the main panel surfaces and that delivers on completion", async () => {
 		const { manager, completions } = makeManager();
 		const gate = Promise.withResolvers<void>();
 		let ran = false;
 		runWokenTurnTracked({
 			manager,
 			agentId: "AuthLoader",
+			ownerId: MAIN_AGENT_ID,
 			agentKind: "sub",
 			runTurn: async () => {
 				ran = true;
@@ -29,11 +31,13 @@ describe("runWokenTurnTracked", () => {
 			summarize: id => `${id} finished a woken turn`,
 		});
 
-		// The job is live for the turn's duration, owned by the woken agent, so the
-		// Background Jobs panel (which reads getRunningJobs) reflects the woken turn.
-		const running = manager.getRunningJobs();
-		expect(running.map(j => j.id)).toEqual(["AuthLoader"]);
-		expect(running[0]?.ownerId).toBe("AuthLoader");
+		// The Background Jobs panel reads getAsyncJobSnapshot on the Main session,
+		// which filters running jobs to ownerId === MAIN_AGENT_ID. The woken job MUST
+		// be owned by Main (not the woken subagent) or that filter drops it and the
+		// panel still under-counts — reproduce that exact owner-scoped view here.
+		const mainPanelView = manager.getRunningJobs({ ownerId: MAIN_AGENT_ID });
+		expect(mainPanelView.map(j => j.id)).toEqual(["AuthLoader"]);
+		expect(mainPanelView[0]?.ownerId).toBe(MAIN_AGENT_ID);
 		expect(ran).toBe(true);
 
 		// Finishing the turn completes the job and delivers a follow-up to the owner.
@@ -44,12 +48,13 @@ describe("runWokenTurnTracked", () => {
 		await manager.dispose();
 	});
 
-	test("the main agent's wake runs untracked — no job, no self-delivery", async () => {
+	test("the main agent's own wake runs untracked — no job, no self-delivery", async () => {
 		const { manager, completions } = makeManager();
 		let ran = false;
 		runWokenTurnTracked({
 			manager,
 			agentId: undefined,
+			ownerId: MAIN_AGENT_ID,
 			agentKind: "main",
 			runTurn: async () => {
 				ran = true;
@@ -74,7 +79,7 @@ describe("runWokenTurnTracked", () => {
 				await blocker.promise;
 				return "done";
 			},
-			{ id: "Filler" },
+			{ id: "Filler", ownerId: MAIN_AGENT_ID },
 		);
 		expect(manager.atCapacity).toBe(true);
 
@@ -82,6 +87,7 @@ describe("runWokenTurnTracked", () => {
 		runWokenTurnTracked({
 			manager,
 			agentId: "AuthLoader",
+			ownerId: MAIN_AGENT_ID,
 			agentKind: "sub",
 			runTurn: async () => {
 				ran = true;
@@ -101,6 +107,7 @@ describe("runWokenTurnTracked", () => {
 		runWokenTurnTracked({
 			manager: undefined,
 			agentId: "AuthLoader",
+			ownerId: MAIN_AGENT_ID,
 			agentKind: "sub",
 			runTurn: async () => {
 				ran = true;

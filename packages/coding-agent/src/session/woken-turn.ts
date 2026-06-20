@@ -4,8 +4,15 @@ import type { AsyncJobManager } from "../async/job-manager";
 export interface WokenTurnJobOptions {
 	/** The session's async job manager (the shared, Main-owned instance for subagents). */
 	manager: AsyncJobManager | undefined;
-	/** Registry id of the agent running the turn; the job id and owner. */
+	/** Registry id of the agent running the turn — used as the job id (the Background Jobs panel row label). */
 	agentId: string | undefined;
+	/**
+	 * Owner the job is filed under — the agent whose Background Jobs panel,
+	 * pending-async-work, and lifecycle cancellation it belongs to. MUST be the
+	 * panel that should surface the woken turn (the top-level `Main` session), NOT
+	 * the woken subagent, or the owner-scoped panel filter drops it.
+	 */
+	ownerId: string;
 	/** `"sub"` agents register a job; the main agent never does (its wakes deliver to itself). */
 	agentKind: "main" | "sub";
 	/**
@@ -38,7 +45,7 @@ export interface WokenTurnJobOptions {
  * a full table. A woken turn MUST never be dropped because no job slot was free.
  */
 export function runWokenTurnTracked(opts: WokenTurnJobOptions): void {
-	const { manager, agentId, agentKind, runTurn, summarize } = opts;
+	const { manager, agentId, ownerId, agentKind, runTurn, summarize } = opts;
 	if (manager && agentId && agentKind === "sub" && !manager.atCapacity) {
 		try {
 			manager.register(
@@ -49,7 +56,7 @@ export function runWokenTurnTracked(opts: WokenTurnJobOptions): void {
 					await runTurn();
 					return summarize(agentId);
 				},
-				{ id: agentId, ownerId: agentId },
+				{ id: agentId, ownerId },
 			);
 			return;
 		} catch (error) {
