@@ -29,6 +29,13 @@ export interface RunSessionKnowledgeAgentConfig {
 	instruction: string;
 	/** Aborts both the agent loop and the commit. */
 	signal?: AbortSignal;
+	/**
+	 * Commit the knowledge subtree after the pass (default `true`). Set `false`
+	 * when an outer flow captures the edits as a native patch and owns the
+	 * commit — the agent then writes `.omp/knowledge` but leaves it staged for
+	 * the caller.
+	 */
+	commit?: boolean;
 	/** Agent options cloned from the parent session. Its `getToolContext` is the base context the loop layers `canWriteKnowledge` onto. */
 	agent: AgentOptions;
 	/** Static request metadata forwarded to the provider (e.g. Anthropic session attribution). */
@@ -85,6 +92,10 @@ export async function runSessionKnowledgeAgent(
 		await agent.prompt(instruction);
 		await agent.waitForIdle();
 		if (signal?.aborted) return { committed: false };
+
+		// Patch-based callers capture the written edits themselves and own the
+		// commit; the agent only writes the subtree here.
+		if (config.commit === false) return { committed: false };
 
 		const result = await commitKnowledgeFiles(cwd, { sourceTitle, signal });
 		logger.debug("Session knowledge update complete", {
