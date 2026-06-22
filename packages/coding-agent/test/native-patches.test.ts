@@ -391,3 +391,94 @@ describe("native patch store project keying", () => {
 		expect((await resolveNativePatchStore(subdir, created.manifest.id)).root).toBe(legacyStore.root);
 	});
 });
+
+async function createIgnoredFixture(prefix: string) {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+	tempDirs.push(root);
+	const target = path.join(root, "target");
+	const baseline = path.join(root, "baseline");
+	const changed = path.join(root, "changed");
+	const storeRoot = path.join(root, "store");
+	await fs.mkdir(target, { recursive: true });
+	await fs.mkdir(baseline, { recursive: true });
+	await fs.mkdir(changed, { recursive: true });
+	return { root, target, baseline, changed, store: defaultPatchStore(storeRoot) };
+}
+
+describe("gitignored targets", () => {
+	it("applies a gitignored target to disk without staging/committing, even on a dirty repo", async () => {
+		const { target, baseline, changed, store } = await createIgnoredFixture("omp-native-patch-ignored-");
+		await fs.writeFile(path.join(target, ".gitignore"), "ignored/\n");
+		await fs.writeFile(path.join(target, "keep.txt"), "keep\n");
+		await initGitRepo(target);
+		// Unrelated tracked dirt — must NOT block an all-ignored patch.
+		await fs.writeFile(path.join(target, "keep.txt"), "dirty\n");
+		// baseline empty; changed adds a gitignored file.
+		await fs.mkdir(path.join(changed, "ignored"), { recursive: true });
+		await fs.writeFile(path.join(changed, "ignored", "note.md"), "hello\n");
+
+		const created = await createNativePatch({
+			store,
+			baselineRoot: baseline,
+			changedRoot: changed,
+			targetRoot: target,
+			repoRoot: target,
+			taskId: "IgnoredTask",
+			description: "add ignored note",
+		});
+		const result = await applyNativePatch(store, created.manifest.id, {
+			cwd: target,
+			targetRoot: target,
+			repoRoot: target,
+			repoLabel: "repo",
+			generateMessage: async () => "msg",
+		});
+
+		expect(result.applied).toBe(true);
+		expect(result.committed).toBe(false);
+		expect(result.commit).toBeUndefined();
+		expect(result.manifest.status).toBe("applied");
+		expect(await fs.readFile(path.join(target, "ignored", "note.md"), "utf8")).toBe("hello\n");
+		// Written to disk but never tracked by git.
+		expect(await runGit(target, ["ls-files", "ignored/note.md"])).toBe("");
+		// The unrelated tracked dirt is preserved untouched.
+		expect(await fs.readFile(path.join(target, "keep.txt"), "utf8")).toBe("dirty\n");
+	});
+
+	it("commits tracked files but writes gitignored siblings to disk (mixed patch)", async () => {
+		const { target, baseline, changed, store } = await createIgnoredFixture("omp-native-patch-mixed-");
+		await fs.writeFile(path.join(target, ".gitignore"), "ignored/\n");
+		await initGitRepo(target);
+		// baseline empty; changed adds one tracked file and one gitignored sibling.
+		await fs.writeFile(path.join(changed, "tracked.txt"), "t\n");
+		await fs.mkdir(path.join(changed, "ignored"), { recursive: true });
+		await fs.writeFile(path.join(changed, "ignored", "note.md"), "i\n");
+
+		const created = await createNativePatch({
+			store,
+			baselineRoot: baseline,
+			changedRoot: changed,
+			targetRoot: target,
+			repoRoot: target,
+			taskId: "MixedTask",
+			description: "add tracked and ignored",
+		});
+		const result = await applyNativePatch(store, created.manifest.id, {
+			cwd: target,
+			targetRoot: target,
+			repoRoot: target,
+			repoLabel: "repo",
+			generateMessage: async () => "msg",
+		});
+
+		expect(result.applied).toBe(true);
+		expect(result.committed).toBe(true);
+		expect(result.commit).toEqual(expect.any(String));
+		const tracked = (await runGit(target, ["ls-files"])).split("\n");
+		expect(tracked).toContain("tracked.txt");
+		expect(tracked).not.toContain("ignored/note.md");
+		// Both files land on disk with their content; only the tracked one is committed.
+		expect(await fs.readFile(path.join(target, "tracked.txt"), "utf8")).toBe("t\n");
+		expect(await fs.readFile(path.join(target, "ignored", "note.md"), "utf8")).toBe("i\n");
+	});
+});

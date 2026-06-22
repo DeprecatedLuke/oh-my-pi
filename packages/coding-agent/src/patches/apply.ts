@@ -152,12 +152,16 @@ export async function validateManifestAgainstTarget(
 		};
 	}
 	if (options.checkDirty && context.repoRoot && (await isRepoDirty(context.repoRoot, options.signal))) {
-		const message = dirtyMessage(
-			context.repoLabel ?? formatRepoLabel(options.cwd ?? context.targetRoot, context.repoRoot),
-			manifest.id,
-			context.repoRoot,
-		);
-		return { ok: false, valid: false, manifest: cloneManifest(manifest), conflicts: [], dirty: true, message };
+		// A patch whose targets are ALL gitignored is written to disk directly and
+		// never staged/committed, so unrelated tracked dirt must not block it.
+		if (!(await manifestAllIgnored(context.repoRoot, context.targetRoot, manifest.files, options.signal))) {
+			const message = dirtyMessage(
+				context.repoLabel ?? formatRepoLabel(options.cwd ?? context.targetRoot, context.repoRoot),
+				manifest.id,
+				context.repoRoot,
+			);
+			return { ok: false, valid: false, manifest: cloneManifest(manifest), conflicts: [], dirty: true, message };
+		}
 	}
 	const conflicts: NativePatchConflict[] = [];
 	for (const entry of manifest.files) {
@@ -207,6 +211,68 @@ function gitStagePath(repoRoot: string, targetRoot: string, entry: NativePatchFi
 		throw new Error(`patch file ${entry.path} is outside git repository ${repoRoot}`);
 	}
 	return toPosixPath(path.relative(repoRoot, absolutePath));
+}
+
+/**
+ * Split a manifest's files into git-committable vs gitignored stage paths (all
+ * repo-relative POSIX). Gitignored targets — e.g. the gitignored `.omp/knowledge`
+ * subtree — are written to disk but NEVER staged/committed: `git add` carries no
+ * `-f`, so naming an ignored path makes it die, and a path git refuses to track
+ * has no place in a commit. `git check-ignore` is the source of truth.
+ */
+async function partitionStagePaths(
+	repoRoot: string,
+	targetRoot: string,
+	files: readonly NativePatchFileEntry[],
+	signal: AbortSignal | undefined,
+): Promise<{ committable: string[]; ignored: string[] }> {
+	const stagePaths = files.map(entry => gitStagePath(repoRoot, targetRoot, entry));
+	if (stagePaths.length === 0) return { committable: [], ignored: [] };
+	const ignoredSet = await git.checkIgnore(repoRoot, stagePaths, signal);
+	const committable: string[] = [];
+	const ignored: string[] = [];
+	for (const stagePath of stagePaths) {
+		if (ignoredSet.has(stagePath)) ignored.push(stagePath);
+		else committable.push(stagePath);
+	}
+	return { committable, ignored };
+}
+
+/**
+ * True when the patch has files and git ignores every one of them. Such a patch
+ * targets a gitignored subtree and MUST apply directly to disk — no staging,
+ * commit, or repo-dirty gate.
+ */
+export async function manifestAllIgnored(
+	repoRoot: string,
+	targetRoot: string,
+	files: readonly NativePatchFileEntry[],
+	signal?: AbortSignal,
+): Promise<boolean> {
+	if (files.length === 0) return false;
+	const { committable } = await partitionStagePaths(repoRoot, targetRoot, files, signal);
+	return committable.length === 0;
+}
+
+/**
+ * Stage and commit `committable` (repo-relative POSIX) at `repoRoot`. Skips the
+ * commit when staging produced no diff (content-identical no-op). An empty
+ * `committable` is itself a no-op (returns committed:false): `git.stage.files([])`
+ * means `git add -A` and a pathspec-less `git.commit` would sweep the WHOLE repo
+ * into the message, so empty MUST short-circuit here.
+ */
+async function commitStagedFiles(
+	repoRoot: string,
+	committable: readonly string[],
+	message: string,
+	signal: AbortSignal | undefined,
+): Promise<{ committed: boolean; commit?: string }> {
+	if (committable.length === 0) return { committed: false };
+	await git.stage.files(repoRoot, committable, signal);
+	if (!(await git.diff.has(repoRoot, { cached: true, files: committable, signal }))) return { committed: false };
+	await git.commit(repoRoot, message, { files: committable, signal });
+	const commit = (await git.head.sha(repoRoot, signal)) ?? undefined;
+	return { committed: true, commit };
 }
 
 async function resolveCommitMessage(manifest: NativePatchManifest, options: ApplyNativePatchOptions): Promise<string> {
@@ -477,36 +543,32 @@ async function finalizeMarkerResolution(
 	updated.updatedAt = nowIso();
 	await writeManifestAtomic(store, updated);
 
-	if (!context.repoRoot) {
+	const repoRoot = context.repoRoot;
+	if (!repoRoot) {
 		await applyValidatedFiles(store, context.targetRoot, updated.files);
 		const applied = await markApplied(store, updated);
+		void finalizedPaths;
 		return { applied: true, committed: false, files: applied.files, manifest: applied };
 	}
-	let message: string | undefined;
-	if (updated.files.length > 0) {
-		try {
-			message = await resolveCommitMessage(updated, options);
-		} catch (error) {
-			const detail = error instanceof Error ? error.message : String(error);
-			throw new Error(
-				`failed to apply ${context.repoLabel ?? formatRepoLabel(options.cwd ?? context.targetRoot, context.repoRoot)}/${updated.id}: ${detail}`,
-			);
-		}
-		await writeManifestAtomic(store, updated);
+	const { committable } = await partitionStagePaths(repoRoot, context.targetRoot, updated.files, options.signal);
+	if (committable.length === 0) {
+		await applyValidatedFiles(store, context.targetRoot, updated.files);
+		const applied = await markApplied(store, updated);
+		void finalizedPaths;
+		return { applied: true, committed: false, files: applied.files, manifest: applied };
 	}
+	let message: string;
+	try {
+		message = await resolveCommitMessage(updated, options);
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new Error(
+			`failed to apply ${context.repoLabel ?? formatRepoLabel(options.cwd ?? context.targetRoot, repoRoot)}/${updated.id}: ${detail}`,
+		);
+	}
+	await writeManifestAtomic(store, updated);
 	await applyValidatedFiles(store, context.targetRoot, updated.files);
-	let committed = false;
-	let commit: string | undefined;
-	if (updated.files.length > 0) {
-		const repoRoot = context.repoRoot;
-		const stagePaths = updated.files.map(file => gitStagePath(repoRoot, context.targetRoot, file));
-		await git.stage.files(repoRoot, stagePaths, options.signal);
-		if (await git.diff.has(repoRoot, { cached: true, files: stagePaths, signal: options.signal })) {
-			await git.commit(repoRoot, message!, { files: stagePaths, signal: options.signal });
-			committed = true;
-			commit = (await git.head.sha(repoRoot, options.signal)) ?? undefined;
-		}
-	}
+	const { committed, commit } = await commitStagedFiles(repoRoot, committable, message, options.signal);
 	const applied = await markApplied(store, updated);
 	void finalizedPaths;
 	return { applied: true, commit, committed, files: applied.files, manifest: applied };
@@ -534,36 +596,32 @@ async function applyNativePatchInner(
 		const updated = await markConflicted(store, manifest, materialized.conflicts);
 		return { applied: false, committed: false, files: updated.files, manifest: updated };
 	}
-	if (!context.repoRoot) {
+	const repoRoot = context.repoRoot;
+	if (!repoRoot) {
 		await applyValidatedFiles(store, context.targetRoot, manifest.files);
 		const applied = await markApplied(store, manifest);
 		return { applied: true, committed: false, files: applied.files, manifest: applied };
 	}
-	let message: string | undefined;
-	if (manifest.files.length > 0) {
-		try {
-			message = await resolveCommitMessage(manifest, options);
-		} catch (error) {
-			const detail = error instanceof Error ? error.message : String(error);
-			throw new Error(
-				`failed to apply ${context.repoLabel ?? formatRepoLabel(options.cwd ?? context.targetRoot, context.repoRoot)}/${manifest.id}: ${detail}`,
-			);
-		}
-		await writeManifestAtomic(store, manifest);
+	const { committable } = await partitionStagePaths(repoRoot, context.targetRoot, manifest.files, options.signal);
+	if (committable.length === 0) {
+		// Every target path is gitignored → write straight to disk, no commit.
+		await applyValidatedFiles(store, context.targetRoot, manifest.files);
+		const applied = await markApplied(store, manifest);
+		return { applied: true, committed: false, files: applied.files, manifest: applied };
 	}
+	let message: string;
+	try {
+		message = await resolveCommitMessage(manifest, options);
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new Error(
+			`failed to apply ${context.repoLabel ?? formatRepoLabel(options.cwd ?? context.targetRoot, repoRoot)}/${manifest.id}: ${detail}`,
+		);
+	}
+	await writeManifestAtomic(store, manifest);
+	// Writes ALL files (committable + any gitignored siblings); only committable is staged/committed.
 	await applyValidatedFiles(store, context.targetRoot, manifest.files);
-	let committed = false;
-	let commit: string | undefined;
-	if (manifest.files.length > 0) {
-		const repoRoot = context.repoRoot;
-		const stagePaths = manifest.files.map(entry => gitStagePath(repoRoot, context.targetRoot, entry));
-		await git.stage.files(repoRoot, stagePaths, options.signal);
-		if (await git.diff.has(repoRoot, { cached: true, files: stagePaths, signal: options.signal })) {
-			await git.commit(repoRoot, message!, { files: stagePaths, signal: options.signal });
-			committed = true;
-			commit = (await git.head.sha(repoRoot, options.signal)) ?? undefined;
-		}
-	}
+	const { committed, commit } = await commitStagedFiles(repoRoot, committable, message, options.signal);
 	const applied = await markApplied(store, manifest);
 	return { applied: true, commit, committed, files: applied.files, manifest: applied };
 }

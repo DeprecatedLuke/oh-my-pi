@@ -50,6 +50,24 @@ async function createRepo(seedKnowledge?: { rel: string; content: string }): Pro
 	return repo;
 }
 
+async function createRepoGitignored(seedKnowledge?: { rel: string; content: string }): Promise<string> {
+	const repo = await fs.mkdtemp(path.join(os.tmpdir(), "omp-knowledge-inproc-gi-"));
+	tempDirs.push(repo);
+	await runGit(repo, ["init", "-b", "main"]);
+	await runGit(repo, ["config", "user.email", "test@example.com"]);
+	await runGit(repo, ["config", "user.name", "Test User"]);
+	await runGit(repo, ["config", "commit.gpgsign", "false"]);
+	await fs.writeFile(path.join(repo, "seed.txt"), "seed\n");
+	// Gitignore the knowledge subtree so its patches can never be staged/committed.
+	await fs.writeFile(path.join(repo, ".gitignore"), ".omp/knowledge/\n");
+	if (seedKnowledge) {
+		await writeKnowledge(repo, seedKnowledge.rel, seedKnowledge.content);
+	}
+	await runGit(repo, ["add", "."]);
+	await runGit(repo, ["commit", "-m", "initial"]);
+	return repo;
+}
+
 async function writeKnowledge(repo: string, rel: string, content: string): Promise<void> {
 	const target = path.join(repo, ".omp", "knowledge", rel);
 	await fs.mkdir(path.dirname(target), { recursive: true });
@@ -152,5 +170,49 @@ describe("runInProcessKnowledgePatchPass", () => {
 		// The real tree is restored to baseline despite the throw.
 		expect(await readKnowledge(repo, "repo/layout.md")).toBe("committed\n");
 		expect(await runGit(repo, ["status", "--porcelain"])).toBe("");
+	});
+
+	it("applies the distill's knowledge edits directly to disk (no commit) when .omp/knowledge is gitignored — clean repo", async () => {
+		const repo = await createRepoGitignored();
+		const pass = await runInProcessKnowledgePatchPass({
+			cwd: repo,
+			taskId: "KnowledgeDistill",
+			description: "compaction session",
+			generateMessage: noopMessage,
+			runDistill: async () => {
+				await writeKnowledge(repo, "repo/layout.md", "authored\n");
+			},
+		});
+
+		expect(pass.patches[0]?.status).toBe("applied");
+		expect(await readKnowledge(repo, "repo/layout.md")).toBe("authored\n");
+		// Gitignored → written to disk but never tracked by git.
+		expect(await runGit(repo, ["ls-files", ".omp/knowledge"])).toBe("");
+		// No new commit was created (only the initial commit exists).
+		expect(await runGit(repo, ["rev-list", "--count", "HEAD"])).toBe("1");
+	});
+
+	it("applies gitignored knowledge edits to disk even when the repo is dirty", async () => {
+		const repo = await createRepoGitignored();
+		// Pre-existing uncommitted edit elsewhere makes the repo dirty.
+		await fs.writeFile(path.join(repo, "seed.txt"), "user edit\n");
+
+		const pass = await runInProcessKnowledgePatchPass({
+			cwd: repo,
+			taskId: "KnowledgeDistill",
+			description: "compaction session",
+			generateMessage: noopMessage,
+			runDistill: async () => {
+				await writeKnowledge(repo, "repo/layout.md", "authored\n");
+			},
+		});
+
+		// Gitignored targets apply to disk regardless of unrelated tracked dirt.
+		expect(pass.patches[0]?.status).toBe("applied");
+		expect(await readKnowledge(repo, "repo/layout.md")).toBe("authored\n");
+		// The user's pre-existing dirty edit is preserved untouched.
+		expect(await fs.readFile(path.join(repo, "seed.txt"), "utf8")).toBe("user edit\n");
+		// Knowledge is written to disk but never tracked.
+		expect(await runGit(repo, ["ls-files", ".omp/knowledge"])).toBe("");
 	});
 });

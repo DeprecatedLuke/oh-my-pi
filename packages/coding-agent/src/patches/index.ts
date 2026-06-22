@@ -1,4 +1,4 @@
-export { applyNativePatch, validateNativePatch } from "./apply";
+export { applyNativePatch, manifestAllIgnored, validateNativePatch } from "./apply";
 export { createNativePatch } from "./capture";
 export { detectGitRepos, discoverNestedGitRepos, formatRepoLabel } from "./repos";
 export {
