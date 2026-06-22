@@ -44,6 +44,10 @@ function textResponse(text: string): AssistantMessage {
 	return assistant([{ type: "text", text }]);
 }
 
+function errorResponse(msg: string): AssistantMessage {
+	return { ...assistant([]), stopReason: "error", errorMessage: msg } as unknown as AssistantMessage;
+}
+
 function toolResponse(payload: unknown): AssistantMessage {
 	return assistant([
 		{ type: "toolCall", id: "1", name: "submit_patterns", arguments: payload as Record<string, unknown> },
@@ -591,6 +595,146 @@ describe("runFixRefusal progress reporting", () => {
 		// The old cosmetic heuristic annotation is gone — it contradicted the judge.
 		expect(steps.some(line => line.includes("— still refusing"))).toBe(false);
 		expect(steps.some(line => line.startsWith("Main model responded"))).toBe(false);
+	});
+});
+
+describe("runFixRefusal visibility + resilience", () => {
+	it("surfaces the refusal text and re-probe responses inline", async () => {
+		const { complete } = makeDriver({ flaggable: ["SecretCorp"], refusalCauses: ["SecretCorp"] });
+		const steps: string[] = [];
+		const result = await runFixRefusal({
+			mainModel: MAIN,
+			uncensoredModel: UNCENSORED,
+			systemPrompt: ["You are helpful."],
+			probeMessages: PROBE,
+			refusalText: REFUSAL,
+			complete,
+			onStep: line => steps.push(line),
+		});
+
+		expect(result.resolved).toBe(true);
+		// The refusal text is echoed inline, including a recognizable fragment.
+		const refusalLine = steps.find(line => line.startsWith("Refusal: "));
+		expect(refusalLine).toBeDefined();
+		expect(refusalLine).toContain("cannot comply");
+		// The main model's re-probe response is echoed inline.
+		expect(steps.some(line => line.startsWith("Re-probe: "))).toBe(true);
+		// The pinned factual size line is unchanged...
+		expect(steps.some(line => /^Main model re-probed \(\d+ chars\)\.$/.test(line))).toBe(true);
+		// ...and the old "Main model responded" prefix is never emitted.
+		expect(steps.some(line => line.startsWith("Main model responded"))).toBe(false);
+	});
+
+	it("surfaces the judge's per-pattern reasoning when provided", async () => {
+		const steps: string[] = [];
+		const complete: FixRefusalComplete = async ({ model, context }) => {
+			if (model === UNCENSORED) {
+				const text = userText(context);
+				if (text.includes("friendlyName")) return toolResponse({ resolved: true, patterns: [] });
+				if (!section("target-response", text).includes("REFUSAL")) {
+					return toolResponse({ resolved: true, patterns: [] });
+				}
+				return toolResponse({
+					resolved: false,
+					patterns: [{ regex: "SecretCorp", reason: "company name triggers the filter" }],
+				});
+			}
+			return textResponse(
+				JSON.stringify(context.messages).includes("SecretCorp")
+					? REFUSAL
+					: "OK, here is the answer about the company.",
+			);
+		};
+
+		const result = await runFixRefusal({
+			mainModel: MAIN,
+			uncensoredModel: UNCENSORED,
+			systemPrompt: [],
+			probeMessages: PROBE,
+			refusalText: REFUSAL,
+			complete,
+			onStep: line => steps.push(line),
+		});
+
+		expect(result.resolved).toBe(true);
+		const reasonLine = steps.find(line => line.includes("company name triggers the filter"));
+		expect(reasonLine).toBeDefined();
+		expect(reasonLine?.startsWith("  \u21b3 ")).toBe(true);
+	});
+
+	it("keeps the cleared patterns when a minimization step fails", async () => {
+		const probe: Message[] = [
+			{ role: "user", content: [{ type: "text", text: "Tell me about Alpha and Beta." }], timestamp: 0 },
+		];
+		const steps: string[] = [];
+		let clearedOnce = false;
+		const complete: FixRefusalComplete = async ({ model, context }) => {
+			if (model === UNCENSORED) {
+				const text = userText(context);
+				if (text.includes("friendlyName")) return toolResponse({ resolved: true, patterns: [] });
+				if (!section("target-response", text).includes("REFUSAL")) {
+					return toolResponse({ resolved: true, patterns: [] });
+				}
+				const transcript = section("transcript", text);
+				const visible = ["Alpha", "Beta"].filter(term => transcript.includes(term));
+				return toolResponse({ resolved: false, patterns: visible.map(term => ({ regex: term })) });
+			}
+			const convo = JSON.stringify(context.messages);
+			const wouldRefuse = ["Alpha", "Beta"].some(term => convo.includes(term));
+			if (!wouldRefuse) {
+				clearedOnce = true;
+				return textResponse("OK, here is the answer about the companies.");
+			}
+			// A leave-one-out shrink trial after the full set already cleared: the
+			// provider blows up with a hard (non-refusal, non-transient) error.
+			if (clearedOnce) throw new Error("provider exploded: kaboom");
+			return textResponse(REFUSAL);
+		};
+
+		const result = await runFixRefusal({
+			mainModel: MAIN,
+			uncensoredModel: UNCENSORED,
+			systemPrompt: [],
+			probeMessages: probe,
+			refusalText: REFUSAL,
+			complete,
+			sleep: async () => {},
+			onStep: line => steps.push(line),
+		});
+
+		expect(result.resolved).toBe(true);
+		// The full cleared set is kept — minimization threw before dropping anything.
+		expect(result.entries.map(entry => entry.content).sort()).toEqual(["Alpha", "Beta"]);
+		expect(steps.some(line => line.startsWith("Skipped minimization/naming"))).toBe(true);
+	});
+
+	it("retries a transient stream-stall error instead of failing", async () => {
+		const base = makeDriver({ flaggable: ["SecretCorp"], refusalCauses: ["SecretCorp"] });
+		const steps: string[] = [];
+		let unc = 0;
+		const complete: FixRefusalComplete = async request => {
+			if (request.model === UNCENSORED) {
+				unc += 1;
+				if (unc === 1) return errorResponse("Anthropic stream stalled while waiting for the next event");
+			}
+			return base.complete(request);
+		};
+
+		const result = await runFixRefusal({
+			mainModel: MAIN,
+			uncensoredModel: UNCENSORED,
+			systemPrompt: [],
+			probeMessages: PROBE,
+			refusalText: REFUSAL,
+			complete,
+			sleep: async () => {},
+			onStep: line => steps.push(line),
+		});
+
+		expect(result.resolved).toBe(true);
+		// The stalled call was retried (>= 2 uncensored calls), not surfaced as a failure.
+		expect(unc).toBeGreaterThanOrEqual(2);
+		expect(steps.some(line => line.startsWith("Transient provider error"))).toBe(true);
 	});
 });
 

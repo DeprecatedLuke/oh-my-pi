@@ -132,9 +132,13 @@ const DEFAULT_TRANSIENT_RETRIES = 5;
 const TRANSIENT_BACKOFF_CAP_MS = 30_000;
 const TRANSIENT_BACKOFF_BASE_MS = 2_000;
 
+/** Provider stream watchdog timeouts (idle / first-event) surface as plain Errors / error-stops; retry them. */
+const STREAM_WATCHDOG_RE = /stream (?:stalled|timed out) while waiting/i;
+
 /** A provider error worth retrying in place: rate limit / model overload / 5xx — but NEVER a refusal (the normal iterative case). */
 function isTransientProviderError(message: string): boolean {
 	if (isRefusalErrorMessage(message)) return false;
+	if (STREAM_WATCHDOG_RE.test(message)) return true;
 	const reason = parseRateLimitReason(message);
 	return reason === "RATE_LIMIT_EXCEEDED" || reason === "MODEL_CAPACITY_EXHAUSTED" || reason === "SERVER_ERROR";
 }
@@ -305,6 +309,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 	let iterations = 0;
 	let resolved = false;
 	let lastReprobe: string | undefined;
+	step(`Refusal: ${preview(options.refusalText, 200)}`);
 
 	for (; iterations < maxIterations; iterations++) {
 		working("Analyzing the refusal…");
@@ -318,6 +323,12 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 				? "Refusal model confirmed a refusal; proposing masks."
 				: "Refusal model still flags the response after the last round; proposing more masks.",
 		);
+		const reasoned = verdict.patterns.filter(p => p.reason?.trim());
+		const REASON_PREVIEW_CAP = 8;
+		for (const p of reasoned.slice(0, REASON_PREVIEW_CAP)) {
+			step(`  \u21b3 /${p.regex}/${p.flags ?? ""} \u2014 ${preview(p.reason ?? "", 140)}`);
+		}
+		if (reasoned.length > REASON_PREVIEW_CAP) step(`  \u21b3 …(+${reasoned.length - REASON_PREVIEW_CAP} more)`);
 
 		const placeholders = collectPlaceholders(maskMessages(entries));
 		const additions = mergePatterns(entries, verdict.patterns, placeholders, step);
@@ -343,6 +354,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 		lastReprobe = reprobed;
 		latest = reprobed;
 		step(`Main model re-probed (${latest.length} chars).`);
+		step(`Re-probe: ${preview(latest, 200)}`);
 	}
 
 	if (!resolved) {
@@ -361,48 +373,54 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 
 	step(`Refusal cleared after ${plural(iterations, "round")} with ${plural(entries.length, "pattern")}.`);
 
-	// ── Shrink: drop patterns that are not load-bearing ───────────────────────
-	if (entries.length > 1) {
-		working(`Minimizing ${plural(entries.length, "pattern")}…`);
-		// Phase 1 — parallel leave-one-out against the FULL set. By monotonicity, a
-		// pattern whose removal still clears is redundant; a pattern that stays
-		// load-bearing here stays load-bearing in every subset, so it never needs
-		// re-testing below.
-		const redundant = await poolFilter(entries, SHRINK_CONCURRENCY, candidate =>
-			trialClears(entries.filter(entry => entry !== candidate)),
-		);
-		if (redundant.length > 0) {
-			const survivors = entries.filter(entry => !redundant.includes(entry));
-			// Phase 2 — try dropping every redundant pattern at once.
-			if (survivors.length >= 1 && (await trialClears(survivors))) {
-				for (const dropped of redundant) step(`Dropped redundant pattern ${describeEntry(dropped)}`);
-				entries = survivors;
-			} else {
-				// Phase 3 — the redundant removals interact; greedily drop over ONLY the
-				// redundant subset (proven-essential survivors can never become droppable).
-				for (const candidate of redundant) {
-					if (entries.length <= 1) break;
-					const trial = entries.filter(entry => entry !== candidate);
-					if (await trialClears(trial)) {
-						entries = trial;
-						step(`Dropped redundant pattern ${describeEntry(candidate)}`);
+	try {
+		// ── Shrink: drop patterns that are not load-bearing ───────────────────────
+		if (entries.length > 1) {
+			working(`Minimizing ${plural(entries.length, "pattern")}…`);
+			// Phase 1 — parallel leave-one-out against the FULL set. By monotonicity, a
+			// pattern whose removal still clears is redundant; a pattern that stays
+			// load-bearing here stays load-bearing in every subset, so it never needs
+			// re-testing below.
+			const redundant = await poolFilter(entries, SHRINK_CONCURRENCY, candidate =>
+				trialClears(entries.filter(entry => entry !== candidate)),
+			);
+			if (redundant.length > 0) {
+				const survivors = entries.filter(entry => !redundant.includes(entry));
+				// Phase 2 — try dropping every redundant pattern at once.
+				if (survivors.length >= 1 && (await trialClears(survivors))) {
+					for (const dropped of redundant) step(`Dropped redundant pattern ${describeEntry(dropped)}`);
+					entries = survivors;
+				} else {
+					// Phase 3 — the redundant removals interact; greedily drop over ONLY the
+					// redundant subset (proven-essential survivors can never become droppable).
+					for (const candidate of redundant) {
+						if (entries.length <= 1) break;
+						const trial = entries.filter(entry => entry !== candidate);
+						if (await trialClears(trial)) {
+							entries = trial;
+							step(`Dropped redundant pattern ${describeEntry(candidate)}`);
+						}
 					}
 				}
 			}
+			step(`Minimized to ${plural(entries.length, "pattern")}.`);
 		}
-		step(`Minimized to ${plural(entries.length, "pattern")}.`);
-	}
 
-	// ── Name: attach innocuous friendly names, verified not to re-trigger ──────
-	working("Generating friendly names…");
-	const named = await namePatterns(entries, uncensoredModel, complete, signal);
-	if (named.some((entry, i) => entry.friendlyName !== entries[i]?.friendlyName)) {
-		if (await trialClears(named)) {
-			entries = named;
-			step("Friendly names verified.");
-		} else {
-			step("Friendly names re-triggered the refusal; keeping unnamed patterns.");
+		// ── Name: attach innocuous friendly names, verified not to re-trigger ──────
+		working("Generating friendly names…");
+		const named = await namePatterns(entries, uncensoredModel, completeWithRetry, signal);
+		if (named.some((entry, i) => entry.friendlyName !== entries[i]?.friendlyName)) {
+			if (await trialClears(named)) {
+				entries = named;
+				step("Friendly names verified.");
+			} else {
+				step("Friendly names re-triggered the refusal; keeping unnamed patterns.");
+			}
 		}
+	} catch (err) {
+		if (err instanceof FixRefusalAbort) throw err;
+		const msg = err instanceof Error ? err.message : String(err);
+		step(`Skipped minimization/naming after a provider error (${preview(msg, 80)}); keeping the ${plural(entries.length, "pattern")} that cleared the refusal.`);
 	}
 
 	return { resolved: true, entries, iterations, finalResponse: latest };
@@ -514,6 +532,13 @@ function entryKey(entry: SecretEntry): string {
 
 function describeEntry(entry: SecretEntry): string {
 	return `/${entry.content}/${entry.flags ?? ""}`;
+}
+
+/** Collapse whitespace and cap to `max` chars for a single-line panel preview. */
+function preview(text: string, max: number): string {
+	const flat = text.replace(/\s+/g, " ").trim();
+	if (flat.length === 0) return "(empty)";
+	return flat.length <= max ? flat : `${flat.slice(0, max - 1)}\u2026`;
 }
 
 function parseSubmitPatterns(response: AssistantMessage): SubmitPatternsPayload {
