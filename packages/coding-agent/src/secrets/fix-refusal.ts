@@ -123,8 +123,8 @@ export class FixRefusalAbort extends Error {
 
 const DEFAULT_MAX_ITERATIONS = 6;
 
-/** Max concurrent re-probe trials during pattern minimization. */
-const SHRINK_CONCURRENCY = 6;
+/** Re-probe trial budget for the divide-and-conquer ("half and half") pattern minimization. On exhaustion the working set is kept rather than grinding through O(N) one-at-a-time trials. */
+const MAX_MINIMIZE_TRIALS = 64;
 
 /** Default transient-error retries per model call before giving up. */
 const DEFAULT_TRANSIENT_RETRIES = 5;
@@ -377,32 +377,26 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 		// ── Shrink: drop patterns that are not load-bearing ───────────────────────
 		if (entries.length > 1) {
 			working(`Minimizing ${plural(entries.length, "pattern")}…`);
-			// Phase 1 — parallel leave-one-out against the FULL set. By monotonicity, a
-			// pattern whose removal still clears is redundant; a pattern that stays
-			// load-bearing here stays load-bearing in every subset, so it never needs
-			// re-testing below.
-			const redundant = await poolFilter(entries, SHRINK_CONCURRENCY, candidate =>
-				trialClears(entries.filter(entry => entry !== candidate)),
-			);
-			if (redundant.length > 0) {
-				const survivors = entries.filter(entry => !redundant.includes(entry));
-				// Phase 2 — try dropping every redundant pattern at once.
-				if (survivors.length >= 1 && (await trialClears(survivors))) {
-					for (const dropped of redundant) step(`Dropped redundant pattern ${describeEntry(dropped)}`);
-					entries = survivors;
-				} else {
-					// Phase 3 — the redundant removals interact; greedily drop over ONLY the
-					// redundant subset (proven-essential survivors can never become droppable).
-					for (const candidate of redundant) {
-						if (entries.length <= 1) break;
-						const trial = entries.filter(entry => entry !== candidate);
-						if (await trialClears(trial)) {
-							entries = trial;
-							step(`Dropped redundant pattern ${describeEntry(candidate)}`);
-						}
-					}
+			// Find the minimal subset of patterns that must stay via divide-and-conquer ("half and
+			// half") bisection over the WHOLE set: independent redundant patterns clear in ~1 trial,
+			// interacting ones in ~O(keep·log N). A trial budget caps the work so a pathological set
+			// never grinds through O(N) one-at-a-time re-probes — on exhaustion the rest are kept.
+			const budget = { remaining: MAX_MINIMIZE_TRIALS };
+			const mustKeep = await minimalKeepSubset([], entries, trialClears, budget);
+			const keep = new Set(mustKeep);
+			const dropped = entries.filter(entry => !keep.has(entry));
+			if (dropped.length > 0) {
+				const droppedSet = new Set(dropped);
+				const minimized = entries.filter(entry => !droppedSet.has(entry));
+				// Re-confirm the full minimized set still clears before committing (each sub-trial was
+				// verified, but guard against model nondeterminism).
+				if (await trialClears(minimized)) {
+					entries = minimized;
+					for (const d of dropped) step(`Dropped redundant pattern ${describeEntry(d)}`);
 				}
 			}
+			if (budget.remaining <= 0)
+				step(`Minimization budget reached; kept the remaining patterns instead of testing one-by-one.`);
 			step(`Minimized to ${plural(entries.length, "pattern")}.`);
 		}
 
@@ -569,20 +563,31 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 	if (signal?.aborted) throw new FixRefusalAbort();
 }
 
-/** Run `predicate` over `items` with at most `limit` in flight; return the items that pass, in input order. */
-async function poolFilter<T>(items: T[], limit: number, predicate: (item: T) => Promise<boolean>): Promise<T[]> {
-	const keep = new Array<boolean>(items.length);
-	let cursor = 0;
-	const worker = async (): Promise<void> => {
-		for (;;) {
-			const index = cursor++;
-			if (index >= items.length) return;
-			keep[index] = await predicate(items[index]);
-		}
-	};
-	const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
-	await Promise.all(workers);
-	return items.filter((_, index) => keep[index]);
+/**
+ * Minimal subset of `candidates` that must be ADDED to `base` for `clears` to hold,
+ * found by divide-and-conquer (QuickXplain / delta-debugging "half and half").
+ * Precondition: `clears([...base, ...candidates])` is true. The returned subset is
+ * 1-minimal (removing any member makes `clears` fail) and ALWAYS clears together with
+ * `base`. Uses ~O(|result|·log(|candidates|)) `clears` calls — and a single call when
+ * the whole `candidates` block is droppable — vs O(|candidates|) for a one-at-a-time scan.
+ */
+export async function minimalKeepSubset<T>(
+	base: readonly T[],
+	candidates: readonly T[],
+	clears: (set: T[]) => Promise<boolean>,
+	budget?: { remaining: number },
+): Promise<T[]> {
+	if (candidates.length === 0) return [];
+	if (budget && budget.remaining <= 0) return [...candidates]; // out of budget → keep all remaining (precondition guarantees this clears)
+	if (budget) budget.remaining--; // counts the clears() about to run
+	if (await clears([...base])) return [];
+	if (candidates.length === 1) return [...candidates];
+	const mid = candidates.length >> 1;
+	const left = candidates.slice(0, mid);
+	const right = candidates.slice(mid);
+	const keepRight = await minimalKeepSubset([...base, ...left], right, clears, budget);
+	const keepLeft = await minimalKeepSubset([...base, ...keepRight], left, clears, budget);
+	return [...keepLeft, ...keepRight];
 }
 
 /**

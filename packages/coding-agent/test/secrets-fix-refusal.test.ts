@@ -16,6 +16,7 @@ import {
 	FixRefusalAbort,
 	type FixRefusalComplete,
 	isRefusalMessage,
+	minimalKeepSubset,
 	runFixRefusal,
 } from "@oh-my-pi/pi-coding-agent/secrets/fix-refusal";
 import { appendManagedSecrets, loadSecrets } from "@oh-my-pi/pi-coding-agent/secrets/index";
@@ -961,5 +962,71 @@ describe("/fix-refusal spinner elapsed clock", () => {
 		expect(state.stopCalls).toBe(1);
 		expect(state.handler).toBeUndefined();
 		expect(msgs.at(-1)).toBeUndefined();
+	});
+});
+
+describe("minimalKeepSubset (half-and-half minimization)", () => {
+	const counted = (clears: (s: string[]) => boolean) => {
+		let calls = 0;
+		const fn = async (s: string[]) => {
+			calls++;
+			return clears(s);
+		};
+		return { fn, calls: () => calls };
+	};
+
+	it("invariant: drops the entire redundant block in a single trial when all are independent", async () => {
+		const { fn, calls } = counted(() => true);
+		const result = await minimalKeepSubset<string>([], ["a", "b", "c", "d"], fn);
+		expect(result).toEqual([]);
+		expect(calls()).toBe(1);
+	});
+
+	it("invariant: isolates a single scattered essential, never worse than one-by-one", async () => {
+		const { fn, calls } = counted(s => s.includes("d"));
+		const result = await minimalKeepSubset<string>([], ["a", "b", "c", "d", "e", "f", "g", "h"], fn);
+		expect(result).toEqual(["d"]);
+		expect(calls()).toBeLessThanOrEqual(8);
+	});
+
+	it("invariant: isolates a single essential in a large clustered set with sub-linear trials", async () => {
+		const candidates = Array.from({ length: 32 }, (_, i) => `c${i}`);
+		const { fn, calls } = counted(s => s.includes("c0"));
+		const result = await minimalKeepSubset<string>([], candidates, fn);
+		expect(result).toEqual(["c0"]);
+		expect(calls()).toBeLessThan(20);
+	});
+
+	it("invariant: keeps both essentials when two redundant patterns interact", async () => {
+		const { fn } = counted(s => s.includes("b") && s.includes("f"));
+		const result = await minimalKeepSubset<string>([], ["a", "b", "c", "d", "e", "f", "g", "h"], fn);
+		expect([...result].sort()).toEqual(["b", "f"]);
+	});
+
+	it("invariant: keeps every member when all are essential", async () => {
+		const { fn } = counted(s => s.length === 3);
+		const result = await minimalKeepSubset<string>([], ["a", "b", "c"], fn);
+		expect([...result].sort()).toEqual(["a", "b", "c"]);
+	});
+
+	it("invariant: returns a subset that always clears together with base", async () => {
+		const base: string[] = [];
+		const clears = (s: string[]) => s.includes("b") && s.includes("f");
+		const { fn } = counted(clears);
+		const result = await minimalKeepSubset<string>(base, ["a", "b", "c", "d", "e", "f", "g", "h"], fn);
+		expect(clears([...base, ...result])).toBe(true);
+	});
+
+	it("invariant: respects the trial budget and keeps remaining patterns on exhaustion", async () => {
+		// 8 essential patterns: an unbounded run would probe many subsets. A budget of 3 trials
+		// forces the recursion to bail and return the unverified candidates as-is — cheap and
+		// still correct, since clears(base ∪ candidates) is the precondition.
+		const candidates = ["a", "b", "c", "d", "e", "f", "g", "h"];
+		const clears = (s: string[]) => s.length === 8;
+		const { fn, calls } = counted(clears);
+		const result = await minimalKeepSubset<string>([], candidates, fn, { remaining: 3 });
+		expect(calls()).toBeLessThanOrEqual(3);
+		expect(result).toHaveLength(8); // bailed → kept the whole working set
+		expect(clears([...result])).toBe(true);
 	});
 });
