@@ -272,11 +272,35 @@ export function probeSliceEnd(messages: readonly { readonly role: string }[]): n
 	return lastUser + 1;
 }
 
+/** Elapsed-time suffix for the fix-refusal spinner. Empty under 1s (no `· 0s` noise); `14s`; `1m 05s` past a minute. */
+export function formatElapsedClock(ms: number): string {
+	if (!Number.isFinite(ms) || ms < 1000) return "";
+	const totalSeconds = Math.floor(ms / 1000);
+	const minutes = Math.floor(totalSeconds / 60);
+	const seconds = totalSeconds % 60;
+	return minutes > 0 ? `${minutes}m ${String(seconds).padStart(2, "0")}s` : `${seconds}s`;
+}
+
+export interface FixRefusalUiClock {
+	now(): number;
+	setInterval(handler: () => void, ms: number): NodeJS.Timeout;
+	clearInterval(handle: NodeJS.Timeout): void;
+}
+const defaultFixRefusalClock: FixRefusalUiClock = {
+	now: () => Date.now(),
+	setInterval: (handler, ms) => {
+		const t = setInterval(handler, ms);
+		t.unref?.();
+		return t;
+	},
+	clearInterval: handle => clearInterval(handle),
+};
+
 /**
  * Build a live TUI progress block: a single growing dim text panel plus a
  * spinner working-message, so the full refusal-fix run stays visible.
  */
-export function createTuiFixRefusalUi(ctx: InteractiveModeContext): TuiFixRefusalUi {
+export function createTuiFixRefusalUi(ctx: InteractiveModeContext, clock: FixRefusalUiClock = defaultFixRefusalClock): TuiFixRefusalUi {
 	const lines: string[] = [];
 	let panel: Text | undefined;
 	const render = () => {
@@ -290,22 +314,42 @@ export function createTuiFixRefusalUi(ctx: InteractiveModeContext): TuiFixRefusa
 		}
 	};
 	render();
+	let baseMessage: string | undefined;
+	let startedAt = 0;
+	let timer: NodeJS.Timeout | undefined;
+	const clearTimer = () => {
+		if (timer !== undefined) {
+			clock.clearInterval(timer);
+			timer = undefined;
+		}
+	};
+	const paintWorking = () => {
+		if (baseMessage === undefined) return;
+		const suffix = formatElapsedClock(clock.now() - startedAt);
+		ctx.setWorkingMessage(suffix ? `${baseMessage} · ${suffix}` : baseMessage);
+	};
 	return {
 		step(line: string) {
+			clearTimer();
+			baseMessage = undefined;
 			lines.push(line);
 			ctx.setWorkingMessage(undefined);
 			render();
 		},
 		working(message?: string) {
 			if (!message) return;
+			clearTimer();
+			baseMessage = message;
+			startedAt = clock.now();
 			ctx.setWorkingMessage(message);
 			ctx.ensureLoadingAnimation();
+			timer = clock.setInterval(paintWorking, 1000);
 		},
 		done() {
+			clearTimer();
+			baseMessage = undefined;
 			ctx.setWorkingMessage(undefined);
 			ctx.stopLoadingAnimation();
-			// stopLoadingAnimation() clears the status container but does not repaint;
-			// without this the last spinner frame ("Working…") stays painted forever.
 			ctx.ui.requestRender();
 		},
 	};

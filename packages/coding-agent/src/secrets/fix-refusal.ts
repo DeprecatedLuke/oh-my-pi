@@ -312,7 +312,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 	step(`Refusal: ${preview(options.refusalText, 200)}`);
 
 	for (; iterations < maxIterations; iterations++) {
-		working("Analyzing the refusal…");
+		working(`Analyzing the refusal (round ${iterations + 1})…`);
 		const verdict = await askUncensored(latest, entries);
 		if (verdict.resolved) {
 			resolved = true;
@@ -340,7 +340,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 		await options.onProgress?.(entries);
 		step(`Proposed ${plural(additions.length, "pattern")}: ${additions.map(describeEntry).join(", ")}`);
 
-		working("Re-testing with the main model…");
+		working(`Re-testing with the main model (round ${iterations + 1})…`);
 		const { text: reprobed } = await reprobeMain(entries);
 		// At temperature 0, a byte-identical response means the new masks did not
 		// touch what the model is reacting to — the trigger is conceptual (the whole

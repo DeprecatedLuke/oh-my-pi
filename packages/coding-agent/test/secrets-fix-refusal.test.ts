@@ -4,12 +4,13 @@
  * exercise the real masking + diagnose/shrink/name flow, not a script.
  */
 
-import { describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage, Context, Message, Model } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import {
 	classifierRefusalText,
 	FixRefusalAbort,
@@ -19,6 +20,9 @@ import {
 } from "@oh-my-pi/pi-coding-agent/secrets/fix-refusal";
 import { appendManagedSecrets, loadSecrets } from "@oh-my-pi/pi-coding-agent/secrets/index";
 import {
+	createTuiFixRefusalUi,
+	type FixRefusalUiClock,
+	formatElapsedClock,
 	latestUserPromptText,
 	probeSliceEnd,
 	resolveRefusalModelPattern,
@@ -857,5 +861,105 @@ describe("latestUserPromptText", () => {
 			{ role: "assistant", content: [{ type: "text", text: "reply" }], timestamp: 0 },
 		] as unknown as Parameters<typeof latestUserPromptText>[0];
 		expect(latestUserPromptText(messages)).toBeUndefined();
+	});
+});
+
+describe("/fix-refusal spinner elapsed clock", () => {
+	// The TUI wrapper's render() colors lines via the global `theme`, which is
+	// undefined until initTheme() runs; initialize it once for this block.
+	beforeAll(async () => {
+		await initTheme(false);
+	});
+
+	it("formatElapsedClock: blank under 1s, bare seconds, then minutes past 60s", () => {
+		// No `· 0s` noise: anything under a full second renders nothing.
+		expect(formatElapsedClock(0)).toBe("");
+		expect(formatElapsedClock(999)).toBe("");
+		// Whole seconds, no minute prefix below 60s.
+		expect(formatElapsedClock(1000)).toBe("1s");
+		expect(formatElapsedClock(14000)).toBe("14s");
+		expect(formatElapsedClock(59000)).toBe("59s");
+		// Past a minute: `Nm SSs` with zero-padded seconds.
+		expect(formatElapsedClock(60000)).toBe("1m 00s");
+		expect(formatElapsedClock(83000)).toBe("1m 23s");
+	});
+
+	// Fresh wrapper over a fake ctx (records every setWorkingMessage) and a fake
+	// clock (deterministic now() + a manually-invokable interval handler), so the
+	// 1s ticking is exercised without real timers.
+	function makeHarness() {
+		const msgs: (string | undefined)[] = [];
+		const state = { nowMs: 0, handler: undefined as (() => void) | undefined, cleared: 0, stopCalls: 0 };
+		const ctx = {
+			setWorkingMessage: (m?: string) => {
+				msgs.push(m);
+			},
+			ensureLoadingAnimation: () => {},
+			stopLoadingAnimation: () => {
+				state.stopCalls++;
+			},
+			present: () => {},
+			ui: { requestRender: () => {} },
+		} as unknown as Parameters<typeof createTuiFixRefusalUi>[0];
+		const clock: FixRefusalUiClock = {
+			now: () => state.nowMs,
+			setInterval: h => {
+				state.handler = h;
+				return {} as NodeJS.Timeout;
+			},
+			clearInterval: () => {
+				state.cleared++;
+				state.handler = undefined;
+			},
+		};
+		const ui = createTuiFixRefusalUi(ctx, clock);
+		return { ui, msgs, state };
+	}
+
+	const ROUND1_ANALYZE = `Analyzing the refusal (round 1)\u2026`;
+	const ROUND1_REPROBE = `Re-testing with the main model (round 1)\u2026`;
+
+	it("paints the bare base, ticks an elapsed suffix, and restarts the clock per phase", () => {
+		const { ui, msgs, state } = makeHarness();
+		ui.working(ROUND1_ANALYZE);
+		// Bare base on the first paint (0s elapsed → no suffix), and a clock is scheduled.
+		expect(msgs.at(-1)).toBe(ROUND1_ANALYZE);
+		expect(state.handler).toBeDefined();
+		// A tick at 14s appends the suffix with exactly one `· ` separator (no double space).
+		state.nowMs = 14000;
+		state.handler?.();
+		expect(msgs.at(-1)).toBe(`${ROUND1_ANALYZE} \u00b7 14s`);
+		// A new working() phase tears down the prior interval and resets the base...
+		state.nowMs = 15000;
+		ui.working(ROUND1_REPROBE);
+		expect(state.cleared).toBe(1);
+		expect(msgs.at(-1)).toBe(ROUND1_REPROBE);
+		// ...restarting elapsed from 15000, so 16000 reads as 1s, never the stale 16s.
+		state.nowMs = 16000;
+		state.handler?.();
+		expect(msgs.at(-1)).toBe(`${ROUND1_REPROBE} \u00b7 1s`);
+	});
+
+	it("step() tears down the live clock and clears the working message (pitfall c)", () => {
+		const { ui, msgs, state } = makeHarness();
+		ui.working(ROUND1_ANALYZE);
+		ui.step("Main model re-probed (5 chars).");
+		// step() clears the interval AND the working message, so a stale "· Ns" cannot
+		// repaint between phases; the next working() restarts it.
+		expect(state.cleared).toBe(1);
+		expect(state.handler).toBeUndefined();
+		expect(msgs.at(-1)).toBeUndefined();
+	});
+
+	it("done() tears down the live clock and stops the loading animation (pitfall b)", () => {
+		const { ui, msgs, state } = makeHarness();
+		ui.working(ROUND1_ANALYZE);
+		ui.done();
+		// done() clears the interval (so it cannot resurface a stale clock on the next
+		// turn's spinner) and stops the loading animation exactly once.
+		expect(state.cleared).toBe(1);
+		expect(state.stopCalls).toBe(1);
+		expect(state.handler).toBeUndefined();
+		expect(msgs.at(-1)).toBeUndefined();
 	});
 });
