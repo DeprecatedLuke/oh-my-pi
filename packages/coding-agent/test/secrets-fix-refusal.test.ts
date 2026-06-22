@@ -13,13 +13,16 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import {
 	classifierRefusalText,
+	dropRedundantlyCoveredPatterns,
 	FixRefusalAbort,
 	type FixRefusalComplete,
 	isRefusalMessage,
-	minimalKeepSubset,
+	minimizeClearingSet,
 	runFixRefusal,
+	trialKey,
 } from "@oh-my-pi/pi-coding-agent/secrets/fix-refusal";
 import { appendManagedSecrets, loadSecrets } from "@oh-my-pi/pi-coding-agent/secrets/index";
+import type { SecretEntry } from "@oh-my-pi/pi-coding-agent/secrets/index";
 import {
 	createTuiFixRefusalUi,
 	type FixRefusalUiClock,
@@ -965,7 +968,7 @@ describe("/fix-refusal spinner elapsed clock", () => {
 	});
 });
 
-describe("minimalKeepSubset (half-and-half minimization)", () => {
+describe("minimizeClearingSet (parallel breadth-first ddmin)", () => {
 	const counted = (clears: (s: string[]) => boolean) => {
 		let calls = 0;
 		const fn = async (s: string[]) => {
@@ -974,59 +977,170 @@ describe("minimalKeepSubset (half-and-half minimization)", () => {
 		};
 		return { fn, calls: () => calls };
 	};
+	const opts = (remaining = 256, concurrency = 6) => ({ concurrency, budget: { remaining } });
 
-	it("invariant: drops the entire redundant block in a single trial when all are independent", async () => {
-		const { fn, calls } = counted(() => true);
-		const result = await minimalKeepSubset<string>([], ["a", "b", "c", "d"], fn);
-		expect(result).toEqual([]);
-		expect(calls()).toBe(1);
+	it("drops the entire redundant block when every element is independent", async () => {
+		const { fn } = counted(() => true);
+		const result = await minimizeClearingSet<string>(["a", "b", "c", "d"], fn, opts());
+		expect(result).toEqual([]); // union of all droppable chunks removed at once
 	});
 
-	it("invariant: isolates a single scattered essential, never worse than one-by-one", async () => {
+	it("isolates a single scattered essential", async () => {
 		const { fn, calls } = counted(s => s.includes("d"));
-		const result = await minimalKeepSubset<string>([], ["a", "b", "c", "d", "e", "f", "g", "h"], fn);
+		const result = await minimizeClearingSet<string>(["a", "b", "c", "d", "e", "f", "g", "h"], fn, opts());
 		expect(result).toEqual(["d"]);
-		expect(calls()).toBeLessThanOrEqual(8);
+		expect(calls()).toBeLessThan(16);
 	});
 
-	it("invariant: isolates a single essential in a large clustered set with sub-linear trials", async () => {
+	it("isolates a single essential in a large clustered set with sub-linear trials", async () => {
 		const candidates = Array.from({ length: 32 }, (_, i) => `c${i}`);
 		const { fn, calls } = counted(s => s.includes("c0"));
-		const result = await minimalKeepSubset<string>([], candidates, fn);
+		const result = await minimizeClearingSet<string>(candidates, fn, opts());
 		expect(result).toEqual(["c0"]);
-		expect(calls()).toBeLessThan(20);
+		expect(calls()).toBeLessThan(32);
 	});
 
-	it("invariant: keeps both essentials when two redundant patterns interact", async () => {
+	it("keeps both essentials when two redundant patterns interact (union-drop unsafe → greedy)", async () => {
 		const { fn } = counted(s => s.includes("b") && s.includes("f"));
-		const result = await minimalKeepSubset<string>([], ["a", "b", "c", "d", "e", "f", "g", "h"], fn);
+		const result = await minimizeClearingSet<string>(["a", "b", "c", "d", "e", "f", "g", "h"], fn, opts());
 		expect([...result].sort()).toEqual(["b", "f"]);
 	});
 
-	it("invariant: keeps every member when all are essential", async () => {
+	it("keeps every member when all are essential (1-minimal)", async () => {
 		const { fn } = counted(s => s.length === 3);
-		const result = await minimalKeepSubset<string>([], ["a", "b", "c"], fn);
+		const result = await minimizeClearingSet<string>(["a", "b", "c"], fn, opts());
 		expect([...result].sort()).toEqual(["a", "b", "c"]);
 	});
 
-	it("invariant: returns a subset that always clears together with base", async () => {
-		const base: string[] = [];
+	it("soundness: the returned subset always clears", async () => {
 		const clears = (s: string[]) => s.includes("b") && s.includes("f");
 		const { fn } = counted(clears);
-		const result = await minimalKeepSubset<string>(base, ["a", "b", "c", "d", "e", "f", "g", "h"], fn);
-		expect(clears([...base, ...result])).toBe(true);
+		const result = await minimizeClearingSet<string>(["a", "b", "c", "d", "e", "f", "g", "h"], fn, opts());
+		expect(clears(result)).toBe(true);
 	});
 
-	it("invariant: respects the trial budget and keeps remaining patterns on exhaustion", async () => {
-		// 8 essential patterns: an unbounded run would probe many subsets. A budget of 3 trials
-		// forces the recursion to bail and return the unverified candidates as-is — cheap and
-		// still correct, since clears(base ∪ candidates) is the precondition.
+	it("respects the trial budget and keeps the still-clearing working set on exhaustion", async () => {
+		// All 8 essential: no chunk removal ever clears, so nothing is committed. A budget of 3 caps the
+		// probes; the precondition guarantees the kept (full) set still clears.
 		const candidates = ["a", "b", "c", "d", "e", "f", "g", "h"];
 		const clears = (s: string[]) => s.length === 8;
 		const { fn, calls } = counted(clears);
-		const result = await minimalKeepSubset<string>([], candidates, fn, { remaining: 3 });
+		const result = await minimizeClearingSet<string>(candidates, fn, opts(3));
 		expect(calls()).toBeLessThanOrEqual(3);
-		expect(result).toHaveLength(8); // bailed → kept the whole working set
-		expect(clears([...result])).toBe(true);
+		expect(result).toHaveLength(8);
+		expect(clears(result)).toBe(true);
+	});
+
+	it("budget charges exactly one per dispatched probe (no double-count, hits never reached in-search)", async () => {
+		const candidates = Array.from({ length: 16 }, (_, i) => `c${i}`);
+		const { fn, calls } = counted(s => s.includes("c0"));
+		const budget = { remaining: 256 };
+		await minimizeClearingSet<string>(candidates, fn, { concurrency: 4, budget });
+		// Every dispatched subset in one run is distinct, so dispatches == real calls == budget spent.
+		expect(256 - budget.remaining).toBe(calls());
+	});
+
+	it("runs probes concurrently, bounded by `concurrency`", async () => {
+		let inFlight = 0;
+		let maxInFlight = 0;
+		const concurrency = 3;
+		const clearsFn = async (s: string[]) => {
+			inFlight++;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			await Bun.sleep(2);
+			inFlight--;
+			return s.includes("z");
+		};
+		// 8 candidates → first round splits in 2, later rounds widen to 4/8 chunks → several parallel probes.
+		const result = await minimizeClearingSet<string>(["z", "a", "b", "c", "d", "e", "f", "g"], clearsFn, {
+			concurrency,
+			budget: { remaining: 256 },
+		});
+		expect(result).toEqual(["z"]);
+		expect(maxInFlight).toBeGreaterThan(1); // genuinely parallel
+		expect(maxInFlight).toBeLessThanOrEqual(concurrency); // bounded
+	});
+
+	// ── Regression: the user's 162→162 "zero reduction" bug ────────────────────────────────────────
+	// A few SCATTERED essentials among many candidates, with a budget far below N. The breadth-first
+	// coarse→fine ordering (biggest redundant blocks dropped FIRST) MUST still shed a large fraction on
+	// a partial budget — the old depth-first bisection returned the whole input here. The assertion is
+	// deliberately `length <= N/2` (≥ half DROPPED): that FAILS under the zero-reduction behavior, where
+	// a `dropped <= N/2` bound would pass trivially and guard nothing.
+	it("regression: tight budget still drops ≥ half of a large scattered set, generous budget is exact", async () => {
+		const N = 120;
+		const essentials = new Set(["c5", "c60", "c110"]);
+		const candidates = Array.from({ length: N }, (_, i) => `c${i}`);
+		const clears = (s: string[]) => [...essentials].every(e => s.includes(e));
+
+		// Tight budget: a small multiple of log2(N), far below N.
+		const tight = counted(clears);
+		const tightResult = await minimizeClearingSet<string>(candidates, tight.fn, opts(20, 6));
+		expect(clears(tightResult)).toBe(true); // (i) still clears
+		expect(tightResult.length).toBeLessThanOrEqual(N / 2); // (ii) ≥ half dropped — fails on zero-reduction
+		const droppedAtTightBudget = N - tightResult.length;
+		expect(droppedAtTightBudget).toBeGreaterThanOrEqual(N / 2);
+
+		// Generous budget: reaches the exact essential set (1-minimal).
+		const generous = counted(clears);
+		const exact = await minimizeClearingSet<string>(candidates, generous.fn, opts(2048, 6));
+		expect([...exact].sort()).toEqual(["c110", "c5", "c60"]);
+	});
+});
+
+describe("dropRedundantlyCoveredPatterns (free pre-pass)", () => {
+	const entry = (content: string): SecretEntry => ({ type: "regex", content });
+	// Simulate masking: each pattern blanks out occurrences of its `content` in a fixed probe text.
+	// A pattern whose spans are already covered by others leaves the masked text byte-identical.
+	const maskKeyOver = (probe: string) => (set: SecretEntry[]): string => {
+		let masked = probe;
+		for (const e of set) masked = masked.split(e.content).join("\u2588".repeat(e.content.length));
+		return masked;
+	};
+
+	it("drops a fully-covered duplicate with no clears predicate involved (zero model calls)", () => {
+		// "Bar" is a substring of "FooBar": masking "FooBar" already blanks the "Bar" span, so "Bar" is
+		// redundant. The function takes no `clears` argument at all — it cannot make a model call.
+		const entries = [entry("FooBar"), entry("Bar")];
+		const { kept, dropped } = dropRedundantlyCoveredPatterns(entries, maskKeyOver("Talk about FooBar please."));
+		expect(kept.map(e => e.content)).toEqual(["FooBar"]);
+		expect(dropped.map(e => e.content)).toEqual(["Bar"]);
+	});
+
+	it("greedily keeps one of two mutually-covering duplicates, never both", () => {
+		const entries = [entry("SecretCorp"), entry("SecretCorp")];
+		const { kept, dropped } = dropRedundantlyCoveredPatterns(entries, maskKeyOver("About SecretCorp."));
+		expect(kept).toHaveLength(1);
+		expect(dropped).toHaveLength(1);
+	});
+
+	it("keeps patterns that each mask something unique", () => {
+		const entries = [entry("Alpha"), entry("Beta")];
+		const { kept, dropped } = dropRedundantlyCoveredPatterns(entries, maskKeyOver("Alpha and Beta."));
+		expect(kept).toHaveLength(2);
+		expect(dropped).toHaveLength(0);
+	});
+
+	it("never drops the last remaining pattern", () => {
+		const entries = [entry("Solo")];
+		const { kept, dropped } = dropRedundantlyCoveredPatterns(entries, maskKeyOver("no match here"));
+		expect(kept).toHaveLength(1);
+		expect(dropped).toHaveLength(0);
+	});
+});
+
+describe("trialKey (memoization key)", () => {
+	const e = (over: Partial<SecretEntry>): SecretEntry => ({ type: "regex", content: "X", ...over });
+
+	it("is stable for identical sets in the same order", () => {
+		expect(trialKey([e({ content: "a" }), e({ content: "b" })])).toBe(trialKey([e({ content: "a" }), e({ content: "b" })]));
+	});
+
+	it("distinguishes a differing friendlyName so the friendly-name re-verify is never a false hit", () => {
+		expect(trialKey([e({ content: "a" })])).not.toBe(trialKey([e({ content: "a", friendlyName: "Company" })]));
+	});
+
+	it("distinguishes differing flags", () => {
+		expect(trialKey([e({ content: "a", flags: "i" })])).not.toBe(trialKey([e({ content: "a" })]));
 	});
 });

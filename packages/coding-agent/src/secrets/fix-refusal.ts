@@ -123,8 +123,17 @@ export class FixRefusalAbort extends Error {
 
 const DEFAULT_MAX_ITERATIONS = 6;
 
-/** Re-probe trial budget for the divide-and-conquer ("half and half") pattern minimization. On exhaustion the working set is kept rather than grinding through O(N) one-at-a-time trials. */
+/**
+ * Floor for the re-probe trial budget of the parallel breadth-first ("ddmin") pattern minimization.
+ * The actual cap scales with the working-set size (memoized re-tests cost no model round-trip, so a
+ * larger cap is cheap); on exhaustion the still-clearing working set is kept rather than probed
+ * further. The coarse→fine ordering — not this cap — is what guarantees a large reduction on a
+ * partial budget.
+ */
 const MAX_MINIMIZE_TRIALS = 64;
+
+/** Maximum re-probe trials run concurrently during minimization. */
+const SHRINK_CONCURRENCY = 6;
 
 /** Default transient-error retries per model call before giving up. */
 const DEFAULT_TRANSIENT_RETRIES = 5;
@@ -275,11 +284,24 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 	// A trial clears iff the main model stops refusing on the masked set. A
 	// structural (classifier/error) refusal is a certain "still refusing", so skip
 	// the judge call entirely; otherwise the uncensored model's verdict is authoritative.
-	const trialClears = async (trial: SecretEntry[]): Promise<boolean> => {
-		const { text, structural } = await reprobeMain(trial);
-		if (structural) return false;
-		const verdict = await askUncensored(text, trial);
-		return verdict.resolved;
+	// Memoize verdicts by canonical pattern-SET key (see {@link trialKey}) so the high-value repeats
+	// the breadth-first minimization generates — above all the post-search re-verify of the final
+	// committed set — cost no extra model round-trip. Keyed by SET, not masked text, because the judge
+	// prompt embeds the literal pattern list. (askUncensored may not be temperature 0; caching its
+	// verdict by set keeps repeats self-consistent, and every committed set is itself a re-verified hit.)
+	const clearsCache = new Map<string, Promise<boolean>>();
+	const trialClears = (trial: SecretEntry[]): Promise<boolean> => {
+		const cacheKey = trialKey(trial);
+		const cached = clearsCache.get(cacheKey);
+		if (cached) return cached;
+		const pending = (async () => {
+			const { text, structural } = await reprobeMain(trial);
+			if (structural) return false;
+			const verdict = await askUncensored(text, trial);
+			return verdict.resolved;
+		})();
+		clearsCache.set(cacheKey, pending);
+		return pending;
 	};
 
 	// ── Diagnose / re-probe loop ──────────────────────────────────────────────
@@ -377,26 +399,38 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 		// ── Shrink: drop patterns that are not load-bearing ───────────────────────
 		if (entries.length > 1) {
 			working(`Minimizing ${plural(entries.length, "pattern")}…`);
-			// Find the minimal subset of patterns that must stay via divide-and-conquer ("half and
-			// half") bisection over the WHOLE set: independent redundant patterns clear in ~1 trial,
-			// interacting ones in ~O(keep·log N). A trial budget caps the work so a pathological set
-			// never grinds through O(N) one-at-a-time re-probes — on exhaustion the rest are kept.
+
+			// 1) Free pre-pass (no model calls): drop patterns that mask nothing UNIQUE on the re-probe
+			// surface (systemPrompt ∪ probeMessages) — their spans are fully covered by others, so the
+			// masked text is byte-identical without them and the clearing behavior cannot change.
+			const freePass = dropRedundantlyCoveredPatterns(entries, set => JSON.stringify(maskContext(set)));
+
+			// 2) Parallel breadth-first delta-debugging over what remains. The coarse→fine ordering drops
+			// the BIGGEST redundant blocks first, so even a partial budget yields a large reduction — that
+			// ordering, NOT a bigger budget, is what fixes the old depth-first bisection's "exhaust the
+			// budget in one subtree, commit nothing" failure. The cap bounds REAL trial cost: every search
+			// probe tests a distinct subset (a cache miss ⇒ a re-probe + judge, two full-context model
+			// calls); only the final re-verify below is a free memo hit. So keep it fixed and modest.
 			const budget = { remaining: MAX_MINIMIZE_TRIALS };
-			const mustKeep = await minimalKeepSubset([], entries, trialClears, budget);
+			const mustKeep = await minimizeClearingSet(freePass.kept, trialClears, {
+				concurrency: SHRINK_CONCURRENCY,
+				budget,
+			});
+
 			const keep = new Set(mustKeep);
 			const dropped = entries.filter(entry => !keep.has(entry));
 			if (dropped.length > 0) {
-				const droppedSet = new Set(dropped);
-				const minimized = entries.filter(entry => !droppedSet.has(entry));
-				// Re-confirm the full minimized set still clears before committing (each sub-trial was
-				// verified, but guard against model nondeterminism).
-				if (await trialClears(minimized)) {
-					entries = minimized;
+				// Re-confirm the minimized set still clears before committing — ONE guard covering both the
+				// free pre-pass and the search (each search removal was verified per-trial, but model
+				// nondeterminism could still surface). The committed set is the one tested here, usually a
+				// cache hit, so no extra model round-trip. On failure nothing is dropped (the original set,
+				// which cleared, stands).
+				if (await trialClears(mustKeep)) {
+					entries = mustKeep;
 					for (const d of dropped) step(`Dropped redundant pattern ${describeEntry(d)}`);
 				}
 			}
-			if (budget.remaining <= 0)
-				step(`Minimization budget reached; kept the remaining patterns instead of testing one-by-one.`);
+			if (budget.remaining <= 0) step(`Minimization budget reached; kept the remaining patterns.`);
 			step(`Minimized to ${plural(entries.length, "pattern")}.`);
 		}
 
@@ -528,6 +562,21 @@ function describeEntry(entry: SecretEntry): string {
 	return `/${entry.content}/${entry.flags ?? ""}`;
 }
 
+/**
+ * Canonical, order-preserving fingerprint of a pattern set — every field that affects masking
+ * (type/content/flags/mode/replacement/friendlyName) and the judge prompt (the content/flags list).
+ * Used to memoize trial verdicts. Keying on the SET (not the masked text) is sound: the judge prompt
+ * embeds the literal pattern list, so two subsets with identical masked transcripts but different
+ * patterns are different judge inputs. A differing friendlyName/flag is therefore a distinct key (so
+ * the friendly-name re-verify is never a false hit); the search always presents a subset in its
+ * original relative order, so every legitimate re-test still collapses to one key.
+ */
+export function trialKey(entries: readonly SecretEntry[]): string {
+	return JSON.stringify(
+		entries.map(e => [e.type, e.content, e.flags ?? "", e.mode ?? "", e.replacement ?? "", e.friendlyName ?? ""]),
+	);
+}
+
 /** Collapse whitespace and cap to `max` chars for a single-line panel preview. */
 function preview(text: string, max: number): string {
 	const flat = text.replace(/\s+/g, " ").trim();
@@ -563,31 +612,151 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 	if (signal?.aborted) throw new FixRefusalAbort();
 }
 
+/** Bounded-concurrency map: at most `limit` calls to `fn` in flight, results in input order. */
+async function mapPool<T, R>(
+	items: readonly T[],
+	limit: number,
+	fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+	const results = new Array<R>(items.length);
+	let next = 0;
+	const worker = async (): Promise<void> => {
+		for (;;) {
+			const i = next++;
+			if (i >= items.length) return;
+			results[i] = await fn(items[i]!, i);
+		}
+	};
+	const workers = Math.max(1, Math.min(limit, items.length));
+	await Promise.all(Array.from({ length: workers }, () => worker()));
+	return results;
+}
+
+/** Split `[0, length)` into `parts` contiguous, ~equal index ranges (never empty for parts ≤ length). */
+function chunkBounds(length: number, parts: number): Array<[number, number]> {
+	const bounds: Array<[number, number]> = [];
+	let start = 0;
+	for (let i = 1; i <= parts; i++) {
+		const end = Math.round((length * i) / parts);
+		if (end > start) bounds.push([start, end]);
+		start = end;
+	}
+	return bounds;
+}
+
+export interface MinimizeClearingOptions {
+	/** Maximum number of `clears` probes dispatched concurrently. */
+	concurrency: number;
+	/**
+	 * Shared trial budget, decremented once per dispatched probe; the search stops scheduling new
+	 * probes once it hits 0 and returns the current (still-clearing) working set. When `clears` is
+	 * memoized by the caller, repeats resolve with no real round-trip, so the budget effectively caps
+	 * DISTINCT expensive evaluations — and within one run every dispatched subset is distinct, so
+	 * dispatch-count ≈ miss-count.
+	 */
+	budget: { remaining: number };
+}
+
 /**
- * Minimal subset of `candidates` that must be ADDED to `base` for `clears` to hold,
- * found by divide-and-conquer (QuickXplain / delta-debugging "half and half").
- * Precondition: `clears([...base, ...candidates])` is true. The returned subset is
- * 1-minimal (removing any member makes `clears` fail) and ALWAYS clears together with
- * `base`. Uses ~O(|result|·log(|candidates|)) `clears` calls — and a single call when
- * the whole `candidates` block is droppable — vs O(|candidates|) for a one-at-a-time scan.
+ * Minimize `entries` to a subset that still satisfies the MONOTONE predicate `clears`, via a
+ * parallel, breadth-first delta-debugging ("ddmin") search. Precondition: `clears(entries)` is true.
+ * Monotonicity: if `clears(S)` then `clears(S')` for every S' ⊇ S, so a chunk whose removal still
+ * clears is redundant — chunk-removal is sound.
+ *
+ * Each round splits the working set into `g` contiguous chunks and tests the removal of every chunk
+ * IN PARALLEL (bounded by `concurrency`, each probe charging `budget`). Redundant chunks are dropped
+ * together in one extra verify trial when their union still clears (a big win that sheds a whole
+ * essential-free level at once); otherwise a single already-verified chunk is committed. Granularity
+ * climbs coarse→fine (`g` doubles each round, capped at the set size), so the BIGGEST redundant
+ * blocks drop FIRST — a partial budget therefore still yields a large reduction (unlike a depth-first
+ * bisection, which can burn the whole budget in one subtree with nothing committed). On a full budget
+ * the result is 1-minimal: no single remaining element is removable.
+ *
+ * Invariants: every committed removal is backed by a real `clears` trial (monotonicity alone is NOT
+ * trusted for multi-chunk drops); the working set always clears; the search terminates (each round
+ * removes ≥1 element or increases `g`, and `g` is capped at the set size).
  */
-export async function minimalKeepSubset<T>(
-	base: readonly T[],
-	candidates: readonly T[],
+export async function minimizeClearingSet<T>(
+	entries: readonly T[],
 	clears: (set: T[]) => Promise<boolean>,
-	budget?: { remaining: number },
+	options: MinimizeClearingOptions,
 ): Promise<T[]> {
-	if (candidates.length === 0) return [];
-	if (budget && budget.remaining <= 0) return [...candidates]; // out of budget → keep all remaining (precondition guarantees this clears)
-	if (budget) budget.remaining--; // counts the clears() about to run
-	if (await clears([...base])) return [];
-	if (candidates.length === 1) return [...candidates];
-	const mid = candidates.length >> 1;
-	const left = candidates.slice(0, mid);
-	const right = candidates.slice(mid);
-	const keepRight = await minimalKeepSubset([...base, ...left], right, clears, budget);
-	const keepLeft = await minimalKeepSubset([...base, ...keepRight], left, clears, budget);
-	return [...keepLeft, ...keepRight];
+	const { concurrency, budget } = options;
+	let keep = [...entries];
+
+	// Dispatch one removal trial, charging the shared budget. Returns `undefined` once the budget is
+	// exhausted (probe skipped → treated as "not verified droppable") so a partial budget never
+	// commits an unverified removal.
+	const probe = async (set: T[]): Promise<boolean | undefined> => {
+		if (budget.remaining <= 0) return undefined;
+		budget.remaining--;
+		return clears(set);
+	};
+
+	let g = 2;
+	for (;;) {
+		if (keep.length === 0) return keep;
+		if (budget.remaining <= 0) return keep;
+		const parts = Math.min(g, keep.length);
+		const bounds = chunkBounds(keep.length, parts);
+		const complementOf = (lo: number, hi: number): T[] => [...keep.slice(0, lo), ...keep.slice(hi)];
+		const verdicts = await mapPool(bounds, concurrency, ([lo, hi]) => probe(complementOf(lo, hi)));
+		const droppable = bounds.filter((_, i) => verdicts[i] === true);
+
+		if (droppable.length === 0) {
+			if (parts >= keep.length) return keep; // singletons, nothing removable → 1-minimal
+			g = Math.min(keep.length, g * 2);
+			continue;
+		}
+
+		if (droppable.length === 1) {
+			const [lo, hi] = droppable[0]!;
+			keep = complementOf(lo, hi); // already verified by its own trial this round
+		} else {
+			// Try removing the UNION of every droppable chunk in ONE verify trial. Removing two
+			// separately-removable chunks together is NOT guaranteed safe, so commit it only if it still
+			// clears; otherwise fall back to the first droppable chunk (already verified).
+			const remove = new Set<number>();
+			for (const [lo, hi] of droppable) for (let k = lo; k < hi; k++) remove.add(k);
+			const union = keep.filter((_, i) => !remove.has(i));
+			const [lo, hi] = droppable[0]!;
+			keep = (await probe(union)) === true ? union : complementOf(lo, hi);
+		}
+		g = Math.min(keep.length, g * 2);
+	}
+}
+
+/**
+ * Free pre-pass for {@link minimizeClearingSet}: drop every pattern that masks nothing UNIQUE — i.e.
+ * removing it leaves `maskKey` byte-identical because its spans are fully covered by other patterns.
+ * `maskKey` must serialize the masked re-probe surface (systemPrompt ∪ probeMessages) for a set; the
+ * caller supplies it so this stays a pure, model-call-free string comparison. SOUND: identical masked
+ * text ⇒ identical re-probe ⇒ identical clearing behavior. Greedy (remove one, recompute the baseline
+ * against the shrinking set) so two mutually-covering patterns are not both dropped, and so the rare
+ * hash-collision randomness in placeholder bases can only cause a MISSED drop, never a spurious one.
+ * Never drops the last remaining pattern — whether it is load-bearing is a question for the trial
+ * search, not byte-equality.
+ */
+export function dropRedundantlyCoveredPatterns(
+	entries: readonly SecretEntry[],
+	maskKey: (set: SecretEntry[]) => string,
+): { kept: SecretEntry[]; dropped: SecretEntry[] } {
+	const kept = [...entries];
+	const dropped: SecretEntry[] = [];
+	if (kept.length <= 1) return { kept, dropped };
+	let covered = maskKey(kept);
+	let i = 0;
+	while (i < kept.length && kept.length > 1) {
+		const without = kept.filter((_, j) => j !== i);
+		if (maskKey(without) === covered) {
+			dropped.push(kept[i]!);
+			kept.splice(i, 1);
+			covered = maskKey(kept);
+		} else {
+			i++;
+		}
+	}
+	return { kept, dropped };
 }
 
 /**
