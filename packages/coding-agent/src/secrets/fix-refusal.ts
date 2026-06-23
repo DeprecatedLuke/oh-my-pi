@@ -133,7 +133,7 @@ const DEFAULT_MAX_ITERATIONS = 6;
 const MAX_MINIMIZE_TRIALS = 64;
 
 /** Maximum re-probe trials run concurrently during minimization. */
-const SHRINK_CONCURRENCY = 6;
+const SHRINK_CONCURRENCY = 3;
 
 /** Default transient-error retries per model call before giving up. */
 const DEFAULT_TRANSIENT_RETRIES = 5;
