@@ -17,12 +17,12 @@ import {
 	FixRefusalAbort,
 	type FixRefusalComplete,
 	isRefusalMessage,
-	minimizeClearingSet,
+	minimizeBySelection,
 	runFixRefusal,
 	trialKey,
 } from "@oh-my-pi/pi-coding-agent/secrets/fix-refusal";
-import { appendManagedSecrets, loadSecrets } from "@oh-my-pi/pi-coding-agent/secrets/index";
 import type { SecretEntry } from "@oh-my-pi/pi-coding-agent/secrets/index";
+import { appendManagedSecrets, loadSecrets } from "@oh-my-pi/pi-coding-agent/secrets/index";
 import {
 	createTuiFixRefusalUi,
 	type FixRefusalUiClock,
@@ -62,6 +62,12 @@ function toolResponse(payload: unknown): AssistantMessage {
 	]);
 }
 
+function selectResponse(payload: unknown): AssistantMessage {
+	return assistant([
+		{ type: "toolCall", id: "1", name: "select_removable", arguments: payload as Record<string, unknown> },
+	]);
+}
+
 function userText(context: Context): string {
 	return context.messages
 		.map(message =>
@@ -90,6 +96,17 @@ function makeDriver(options: { flaggable: string[]; refusalCauses: string[] }): 
 	const complete: FixRefusalComplete = async ({ model, context }) => {
 		if (model === UNCENSORED) {
 			const text = userText(context);
+			// Model-guided minimization: pick the kept patterns whose term is NOT a refusal cause
+			// (i.e. not load-bearing), by 1-based index, capped to the requested target.
+			if (text.includes("select_removable")) {
+				const target = Number(/up to (\d+)/.exec(text)?.[1] ?? "0");
+				const list = section("patterns", text);
+				const remove = [...list.matchAll(/^(\d+)\. \/([^/]*)\/(\w*)/gm)]
+					.filter(match => !options.refusalCauses.includes(match[2] ?? ""))
+					.map(match => Number(match[1]))
+					.slice(0, target);
+				return selectResponse({ remove });
+			}
 			if (text.includes("friendlyName")) {
 				const list = section("patterns", text);
 				const patterns = [...list.matchAll(/^- \/(.*)\/(\w*)$/gm)].map(match => ({
@@ -213,13 +230,23 @@ describe("runFixRefusal", () => {
 		expect(steps).toContain("Minimized to 1 pattern.");
 	});
 
-	it("falls back to greedy removal when redundant patterns interact", async () => {
+	it("keeps one of two interacting patterns when masking either alone clears", async () => {
 		const probe: Message[] = [
 			{ role: "user", content: [{ type: "text", text: "Tell me about Alpha and Beta." }], timestamp: 0 },
 		];
 		const complete: FixRefusalComplete = async ({ model, context }) => {
 			if (model === UNCENSORED) {
 				const text = userText(context);
+				// Model-guided minimization: propose the first `target` patterns (front of the list). Either
+				// term alone clears, so whichever the verify accepts is committed; the other survives.
+				if (text.includes("select_removable")) {
+					const target = Number(/up to (\d+)/.exec(text)?.[1] ?? "0");
+					const list = section("patterns", text);
+					const remove = [...list.matchAll(/^(\d+)\. \/([^/]*)\/(\w*)/gm)]
+						.map(match => Number(match[1]))
+						.slice(0, target);
+					return selectResponse({ remove });
+				}
 				if (text.includes("friendlyName")) return toolResponse({ resolved: true, patterns: [] });
 				if (!section("target-response", text).includes("REFUSAL")) {
 					return toolResponse({ resolved: true, patterns: [] });
@@ -679,6 +706,16 @@ describe("runFixRefusal visibility + resilience", () => {
 		const complete: FixRefusalComplete = async ({ model, context }) => {
 			if (model === UNCENSORED) {
 				const text = userText(context);
+				// Minimization asks which patterns to drop: propose the first `target` (front of the list)
+				// so a verify re-probe is actually dispatched (and then blows up below).
+				if (text.includes("select_removable")) {
+					const target = Number(/up to (\d+)/.exec(text)?.[1] ?? "0");
+					const list = section("patterns", text);
+					const remove = [...list.matchAll(/^(\d+)\. \/([^/]*)\/(\w*)/gm)]
+						.map(match => Number(match[1]))
+						.slice(0, target);
+					return selectResponse({ remove });
+				}
 				if (text.includes("friendlyName")) return toolResponse({ resolved: true, patterns: [] });
 				if (!section("target-response", text).includes("REFUSAL")) {
 					return toolResponse({ resolved: true, patterns: [] });
@@ -693,8 +730,8 @@ describe("runFixRefusal visibility + resilience", () => {
 				clearedOnce = true;
 				return textResponse("OK, here is the answer about the companies.");
 			}
-			// A leave-one-out shrink trial after the full set already cleared: the
-			// provider blows up with a hard (non-refusal, non-transient) error.
+			// A verify re-probe of a model-proposed removal, after the full set already
+			// cleared: the provider blows up with a hard (non-refusal, non-transient) error.
 			if (clearedOnce) throw new Error("provider exploded: kaboom");
 			return textResponse(REFUSAL);
 		};
@@ -968,7 +1005,8 @@ describe("/fix-refusal spinner elapsed clock", () => {
 	});
 });
 
-describe("minimizeClearingSet (parallel breadth-first ddmin)", () => {
+describe("minimizeBySelection (model-guided removal loop)", () => {
+	// Count clears() (verify) calls; the predicate clears iff every essential survives in the set.
 	const counted = (clears: (s: string[]) => boolean) => {
 		let calls = 0;
 		const fn = async (s: string[]) => {
@@ -977,114 +1015,124 @@ describe("minimizeClearingSet (parallel breadth-first ddmin)", () => {
 		};
 		return { fn, calls: () => calls };
 	};
-	const opts = (remaining = 256, concurrency = 6) => ({ concurrency, budget: { remaining } });
+	// A proposer that names the first `target` NON-essential entries (front of keep) for removal —
+	// a model that correctly spots the safely-removable terms. Every proposal is verified regardless.
+	const dropNonEssentials =
+		(essentials: Set<string>) =>
+		async (keep: readonly string[], target: number): Promise<readonly string[]> =>
+			keep.filter(e => !essentials.has(e)).slice(0, target);
 
-	it("drops the entire redundant block when every element is independent", async () => {
-		const { fn } = counted(() => true);
-		const result = await minimizeClearingSet<string>(["a", "b", "c", "d"], fn, opts());
-		expect(result).toEqual([]); // union of all droppable chunks removed at once
-	});
-
-	it("isolates a single scattered essential", async () => {
-		const { fn, calls } = counted(s => s.includes("d"));
-		const result = await minimizeClearingSet<string>(["a", "b", "c", "d", "e", "f", "g", "h"], fn, opts());
-		expect(result).toEqual(["d"]);
-		expect(calls()).toBeLessThan(16);
-	});
-
-	it("isolates a single essential in a large clustered set with sub-linear trials", async () => {
-		const candidates = Array.from({ length: 32 }, (_, i) => `c${i}`);
-		const { fn, calls } = counted(s => s.includes("c0"));
-		const result = await minimizeClearingSet<string>(candidates, fn, opts());
-		expect(result).toEqual(["c0"]);
-		expect(calls()).toBeLessThan(32);
-	});
-
-	it("keeps both essentials when two redundant patterns interact (union-drop unsafe → greedy)", async () => {
-		const { fn } = counted(s => s.includes("b") && s.includes("f"));
-		const result = await minimizeClearingSet<string>(["a", "b", "c", "d", "e", "f", "g", "h"], fn, opts());
-		expect([...result].sort()).toEqual(["b", "f"]);
-	});
-
-	it("keeps every member when all are essential (1-minimal)", async () => {
-		const { fn } = counted(s => s.length === 3);
-		const result = await minimizeClearingSet<string>(["a", "b", "c"], fn, opts());
-		expect([...result].sort()).toEqual(["a", "b", "c"]);
-	});
-
-	it("soundness: the returned subset always clears", async () => {
-		const clears = (s: string[]) => s.includes("b") && s.includes("f");
-		const { fn } = counted(clears);
-		const result = await minimizeClearingSet<string>(["a", "b", "c", "d", "e", "f", "g", "h"], fn, opts());
-		expect(clears(result)).toBe(true);
-	});
-
-	it("respects the trial budget and keeps the still-clearing working set on exhaustion", async () => {
-		// All 8 essential: no chunk removal ever clears, so nothing is committed. A budget of 3 caps the
-		// probes; the precondition guarantees the kept (full) set still clears.
-		const candidates = ["a", "b", "c", "d", "e", "f", "g", "h"];
-		const clears = (s: string[]) => s.length === 8;
+	it("drops a big non-essential batch in one round, then converges to the essentials", async () => {
+		const essentials = new Set(["e0"]);
+		const candidates = ["e0", ...Array.from({ length: 9 }, (_, i) => `x${i}`)]; // 1 essential + 9 incidental
+		const clears = (s: string[]) => [...essentials].every(e => s.includes(e));
 		const { fn, calls } = counted(clears);
-		const result = await minimizeClearingSet<string>(candidates, fn, opts(3));
-		expect(calls()).toBeLessThanOrEqual(3);
-		expect(result).toHaveLength(8);
-		expect(clears(result)).toBe(true);
-	});
-
-	it("budget charges exactly one per dispatched probe (no double-count, hits never reached in-search)", async () => {
-		const candidates = Array.from({ length: 16 }, (_, i) => `c${i}`);
-		const { fn, calls } = counted(s => s.includes("c0"));
-		const budget = { remaining: 256 };
-		await minimizeClearingSet<string>(candidates, fn, { concurrency: 4, budget });
-		// Every dispatched subset in one run is distinct, so dispatches == real calls == budget spent.
-		expect(256 - budget.remaining).toBe(calls());
-	});
-
-	it("runs probes concurrently, bounded by `concurrency`", async () => {
-		let inFlight = 0;
-		let maxInFlight = 0;
-		const concurrency = 3;
-		const clearsFn = async (s: string[]) => {
-			inFlight++;
-			maxInFlight = Math.max(maxInFlight, inFlight);
-			await Bun.sleep(2);
-			inFlight--;
-			return s.includes("z");
-		};
-		// 8 candidates → first round splits in 2, later rounds widen to 4/8 chunks → several parallel probes.
-		const result = await minimizeClearingSet<string>(["z", "a", "b", "c", "d", "e", "f", "g"], clearsFn, {
-			concurrency,
-			budget: { remaining: 256 },
+		const result = await minimizeBySelection<string>(candidates, dropNonEssentials(essentials), fn, {
+			budget: { remaining: 64 },
 		});
-		expect(result).toEqual(["z"]);
-		expect(maxInFlight).toBeGreaterThan(1); // genuinely parallel
-		expect(maxInFlight).toBeLessThanOrEqual(concurrency); // bounded
+		expect(result).toEqual(["e0"]); // converged to the single load-bearing pattern
+		expect(clears(result)).toBe(true);
+		// Round 1 sheds round(0.5*10)=5 at once (the biggest batch), so it converges in a few rounds.
+		expect(calls()).toBeLessThan(6);
 	});
 
-	// ── Regression: the user's 162→162 "zero reduction" bug ────────────────────────────────────────
-	// A few SCATTERED essentials among many candidates, with a budget far below N. The breadth-first
-	// coarse→fine ordering (biggest redundant blocks dropped FIRST) MUST still shed a large fraction on
-	// a partial budget — the old depth-first bisection returned the whole input here. The assertion is
-	// deliberately `length <= N/2` (≥ half DROPPED): that FAILS under the zero-reduction behavior, where
-	// a `dropped <= N/2` bound would pass trivially and guard nothing.
-	it("regression: tight budget still drops ≥ half of a large scattered set, generous budget is exact", async () => {
+	it("keeps every entry when all are essential (proposer finds nothing safe → zero verify trials)", async () => {
+		const essentials = new Set(["a", "b", "c"]);
+		const candidates = ["a", "b", "c"];
+		const clears = (s: string[]) => [...essentials].every(e => s.includes(e));
+		const { fn, calls } = counted(clears);
+		const result = await minimizeBySelection<string>(candidates, dropNonEssentials(essentials), fn, {
+			budget: { remaining: 64 },
+		});
+		expect([...result].sort()).toEqual(["a", "b", "c"]);
+		expect(calls()).toBe(0); // nothing removable → no-shrink proposal → STOP before any verify
+	});
+
+	// ── Regression: the user's 162→162 "zero reduction" case ────────────────────────────────────────
+	// A few SCATTERED essentials among many candidates. The blind parallel ddmin needed dozens of probes
+	// (and a generous budget) to isolate them. A proposer that simply NAMES the non-load-bearing terms
+	// reaches the exact minimal set in a handful of ~halving rounds — the smart-vs-blind win this pins.
+	it("regression: isolates 3 scattered essentials among 120 with few verify trials", async () => {
 		const N = 120;
 		const essentials = new Set(["c5", "c60", "c110"]);
 		const candidates = Array.from({ length: N }, (_, i) => `c${i}`);
 		const clears = (s: string[]) => [...essentials].every(e => s.includes(e));
+		const { fn, calls } = counted(clears);
+		const result = await minimizeBySelection<string>(candidates, dropNonEssentials(essentials), fn, {
+			budget: { remaining: 64 },
+		});
+		expect([...result].sort()).toEqual(["c110", "c5", "c60"]); // exactly the 3 scattered essentials
+		expect(clears(result)).toBe(true);
+		// One verify per ~halving round (120→60→30→15→7→3), far below a blind search over 120 candidates.
+		expect(calls()).toBeLessThan(20);
+	});
 
-		// Tight budget: a small multiple of log2(N), far below N.
-		const tight = counted(clears);
-		const tightResult = await minimizeClearingSet<string>(candidates, tight.fn, opts(20, 6));
-		expect(clears(tightResult)).toBe(true); // (i) still clears
-		expect(tightResult.length).toBeLessThanOrEqual(N / 2); // (ii) ≥ half dropped — fails on zero-reduction
-		const droppedAtTightBudget = N - tightResult.length;
-		expect(droppedAtTightBudget).toBeGreaterThanOrEqual(N / 2);
+	it("backs off when the proposer over-reaches: a failed verify shrinks the next batch", async () => {
+		const essentials = new Set(["c0"]);
+		const candidates = ["c0", "c1", "c2"]; // c0 load-bearing; c1/c2 safely removable
+		const verdicts: boolean[] = [];
+		const verify = async (s: string[]): Promise<boolean> => {
+			const ok = clears(s);
+			verdicts.push(ok);
+			return ok;
+		};
+		// Over-reach when allowed 2+ removals: grab the FRONT of keep (which includes the essential c0).
+		// Once a failed verify halves aggression to target 1, propose only a safe non-essential.
+		const proposer = async (keep: readonly string[], target: number): Promise<readonly string[]> =>
+			target >= 2 ? keep.slice(0, target) : keep.filter(e => !essentials.has(e)).slice(0, target);
+		const result = await minimizeBySelection<string>(candidates, proposer, verify, {
+			budget: { remaining: 64 },
+		});
+		expect(verdicts[0]).toBe(false); // round 1 over-reached (dropped c0) → verify failed → NO commit
+		expect(verdicts.slice(1)).toContain(true); // a later, less-aggressive round committed
+		expect(clears(result)).toBe(true); // final set still clears
+		expect(result).toEqual(["c0"]); // and excludes the safely-removable c1/c2
 
-		// Generous budget: reaches the exact essential set (1-minimal).
-		const generous = counted(clears);
-		const exact = await minimizeClearingSet<string>(candidates, generous.fn, opts(2048, 6));
-		expect([...exact].sort()).toEqual(["c110", "c5", "c60"]);
+		function clears(s: readonly string[]): boolean {
+			return [...essentials].every(e => s.includes(e));
+		}
+	});
+
+	it("stops when the budget is exhausted, returning a still-clearing set", async () => {
+		const essentials = new Set(["c0"]);
+		const candidates = Array.from({ length: 10 }, (_, i) => `c${i}`); // c0 essential, rest removable
+		const clears = (s: string[]) => [...essentials].every(e => s.includes(e));
+		const budget = { remaining: 2 };
+		const { fn, calls } = counted(clears);
+		const result = await minimizeBySelection<string>(candidates, dropNonEssentials(essentials), fn, { budget });
+		expect(calls()).toBe(2); // exactly two verify trials before the budget gate stops scheduling
+		expect(budget.remaining).toBe(0); // one decrement per dispatched verify
+		expect(clears(result)).toBe(true); // precondition preserved: the kept set still clears
+		expect(result.length).toBeGreaterThan(1); // budget stopped it short of the 1-element minimum
+	});
+
+	it("stops with zero verify trials when the proposer returns nothing removable", async () => {
+		const candidates = ["a", "b", "c", "d"];
+		let verifyCalls = 0;
+		const verify = async (): Promise<boolean> => {
+			verifyCalls++;
+			return true;
+		};
+		const result = await minimizeBySelection<string>(candidates, async () => [], verify, {
+			budget: { remaining: 64 },
+		});
+		expect(verifyCalls).toBe(0); // empty proposal → no strict shrink → STOP, no verify, no halve-retry
+		expect(result).toEqual(candidates); // input returned unchanged
+	});
+
+	it("ignores out-of-set proposals (no strict shrink) and stops without a verify", async () => {
+		const candidates = ["a", "b", "c"];
+		let verifyCalls = 0;
+		const verify = async (): Promise<boolean> => {
+			verifyCalls++;
+			return true;
+		};
+		// Every proposed entry is NOT a current member of keep → filtered out → no strict shrink → STOP.
+		const result = await minimizeBySelection<string>(candidates, async () => ["z", "zz"], verify, {
+			budget: { remaining: 64 },
+		});
+		expect(verifyCalls).toBe(0);
+		expect(result).toEqual(candidates);
 	});
 });
 
@@ -1092,11 +1140,13 @@ describe("dropRedundantlyCoveredPatterns (free pre-pass)", () => {
 	const entry = (content: string): SecretEntry => ({ type: "regex", content });
 	// Simulate masking: each pattern blanks out occurrences of its `content` in a fixed probe text.
 	// A pattern whose spans are already covered by others leaves the masked text byte-identical.
-	const maskKeyOver = (probe: string) => (set: SecretEntry[]): string => {
-		let masked = probe;
-		for (const e of set) masked = masked.split(e.content).join("\u2588".repeat(e.content.length));
-		return masked;
-	};
+	const maskKeyOver =
+		(probe: string) =>
+		(set: SecretEntry[]): string => {
+			let masked = probe;
+			for (const e of set) masked = masked.split(e.content).join("\u2588".repeat(e.content.length));
+			return masked;
+		};
 
 	it("drops a fully-covered duplicate with no clears predicate involved (zero model calls)", () => {
 		// "Bar" is a substring of "FooBar": masking "FooBar" already blanks the "Bar" span, so "Bar" is
@@ -1133,7 +1183,9 @@ describe("trialKey (memoization key)", () => {
 	const e = (over: Partial<SecretEntry>): SecretEntry => ({ type: "regex", content: "X", ...over });
 
 	it("is stable for identical sets in the same order", () => {
-		expect(trialKey([e({ content: "a" }), e({ content: "b" })])).toBe(trialKey([e({ content: "a" }), e({ content: "b" })]));
+		expect(trialKey([e({ content: "a" }), e({ content: "b" })])).toBe(
+			trialKey([e({ content: "a" }), e({ content: "b" })]),
+		);
 	});
 
 	it("distinguishes a differing friendlyName so the friendly-name re-verify is never a false hit", () => {

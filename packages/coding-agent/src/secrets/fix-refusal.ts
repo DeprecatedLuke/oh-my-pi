@@ -6,6 +6,7 @@ import { z } from "zod/v4";
 import { extractTextContent, extractToolCall } from "../commit/utils";
 import fixRefusalDiagnoseTemplate from "../prompts/secrets/fix-refusal-diagnose.md" with { type: "text" };
 import fixRefusalNameTemplate from "../prompts/secrets/fix-refusal-name.md" with { type: "text" };
+import fixRefusalSelectTemplate from "../prompts/secrets/fix-refusal-select.md" with { type: "text" };
 import fixRefusalSystemPrompt from "../prompts/secrets/fix-refusal-system.md" with { type: "text" };
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import { PLACEHOLDER_RE, type SecretEntry, SecretObfuscator } from "./obfuscator";
@@ -55,6 +56,34 @@ const submitPatternsTool: Tool = {
 	description:
 		"Report whether the target model's latest response is still a refusal and, if so, propose narrow regex patterns whose masking would remove the trigger.",
 	parameters: submitPatternsSchema,
+	strict: false,
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// select_removable tool
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Name of the single tool the model is forced to call during model-guided minimization. */
+export const SELECT_REMOVABLE_TOOL = "select_removable";
+
+const selectRemovableSchema = z.object({
+	remove: z
+		.array(z.number().int())
+		.default([])
+		.describe(
+			"1-based indices, into the numbered pattern list shown, of the patterns that are NOT load-bearing and are safe to stop masking. Empty when none are confidently removable.",
+		),
+	reason: z.string().optional().describe("Brief explanation of why the chosen patterns are not load-bearing."),
+});
+
+/** Parsed `select_removable` payload. */
+export type SelectRemovablePayload = z.infer<typeof selectRemovableSchema>;
+
+const selectRemovableTool: Tool = {
+	name: SELECT_REMOVABLE_TOOL,
+	description:
+		"Select which of the currently-applied redaction patterns are NOT load-bearing for the refusal and can be safely unmasked, by their 1-based index in the numbered list.",
+	parameters: selectRemovableSchema,
 	strict: false,
 };
 
@@ -124,16 +153,13 @@ export class FixRefusalAbort extends Error {
 const DEFAULT_MAX_ITERATIONS = 6;
 
 /**
- * Floor for the re-probe trial budget of the parallel breadth-first ("ddmin") pattern minimization.
- * The actual cap scales with the working-set size (memoized re-tests cost no model round-trip, so a
- * larger cap is cheap); on exhaustion the still-clearing working set is kept rather than probed
- * further. The coarse→fine ordering — not this cap — is what guarantees a large reduction on a
- * partial budget.
+ * Cap on the re-probe VERIFY trials the model-guided pattern minimization may dispatch (one per
+ * proposed-removal batch). Memoized re-tests cost no model round-trip, so this bounds DISTINCT
+ * expensive evaluations; on exhaustion the still-clearing working set is kept rather than probed
+ * further. It also bounds the round count, so a stuck model cannot grind the loop — total select
+ * calls stay ≤ verify-rounds + 1.
  */
 const MAX_MINIMIZE_TRIALS = 64;
-
-/** Maximum re-probe trials run concurrently during minimization. */
-const SHRINK_CONCURRENCY = 3;
 
 /** Default transient-error retries per model call before giving up. */
 const DEFAULT_TRANSIENT_RETRIES = 5;
@@ -284,11 +310,11 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 	// A trial clears iff the main model stops refusing on the masked set. A
 	// structural (classifier/error) refusal is a certain "still refusing", so skip
 	// the judge call entirely; otherwise the uncensored model's verdict is authoritative.
-	// Memoize verdicts by canonical pattern-SET key (see {@link trialKey}) so the high-value repeats
-	// the breadth-first minimization generates — above all the post-search re-verify of the final
-	// committed set — cost no extra model round-trip. Keyed by SET, not masked text, because the judge
-	// prompt embeds the literal pattern list. (askUncensored may not be temperature 0; caching its
-	// verdict by set keeps repeats self-consistent, and every committed set is itself a re-verified hit.)
+	// Memoize verdicts by canonical pattern-SET key (see {@link trialKey}) so any repeated verify the
+	// model-guided minimization generates — above all the final re-verify of the committed set — costs
+	// no extra model round-trip. Keyed by SET, not masked text, because the judge prompt embeds the
+	// literal pattern list. (askUncensored may not be temperature 0; caching its verdict by set keeps
+	// repeats self-consistent, and every committed set is itself a re-verified hit.)
 	const clearsCache = new Map<string, Promise<boolean>>();
 	const trialClears = (trial: SecretEntry[]): Promise<boolean> => {
 		const cacheKey = trialKey(trial);
@@ -302,6 +328,50 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 		})();
 		clearsCache.set(cacheKey, pending);
 		return pending;
+	};
+
+	// Model-guided removal proposal for minimization: show the uncensored model the masked transcript
+	// and the numbered list of currently-applied patterns, and ask which are NOT load-bearing for this
+	// cyber-exploitation refusal (incidental / over-broad terms) and so safe to stop masking. The model
+	// only PROPOSES — every proposed removal is verified by a real `trialClears` before it is committed
+	// (see {@link minimizeBySelection}) — so a wrong domain guess never breaks clearing. The returned
+	// indices are validated (in-range, deduped), mapped back to the kept entries, and capped to `target`;
+	// the result is the subset of `kept` to remove.
+	const selectRemovals = async (kept: SecretEntry[], target: number): Promise<SecretEntry[]> => {
+		throwIfAborted(signal);
+		const instruction = prompt.render(fixRefusalSelectTemplate, {
+			transcript: serializeTranscript(maskMessages(kept)),
+			patterns: kept.map((entry, i) => ({
+				index: i + 1,
+				regex: entry.content,
+				flags: entry.flags ?? "",
+				friendlyName: entry.friendlyName,
+				reason: undefined,
+			})),
+			target,
+		});
+		const response = await completeWithRetry({
+			model: uncensoredModel,
+			context: {
+				systemPrompt: [prompt.render(fixRefusalSystemPrompt)],
+				messages: [{ role: "user", content: [{ type: "text", text: instruction }], timestamp: Date.now() }],
+				tools: [selectRemovableTool],
+			},
+			toolChoice: buildNamedToolChoice(SELECT_REMOVABLE_TOOL, uncensoredModel) ?? "required",
+		});
+		assertCompleted(response, "refusal model");
+		// Validate: keep only in-range 1-based indices, dedupe (first occurrence wins), map to entries,
+		// and cap to `target`. An invalid / empty proposal yields no removals (minimizeBySelection then
+		// stops the loop) — never an out-of-bounds entry.
+		const seen = new Set<number>();
+		const removals: SecretEntry[] = [];
+		for (const index of parseSelectRemovable(response)) {
+			if (!Number.isInteger(index) || index < 1 || index > kept.length || seen.has(index)) continue;
+			seen.add(index);
+			removals.push(kept[index - 1]!);
+			if (removals.length >= target) break;
+		}
+		return removals;
 	};
 
 	// ── Diagnose / re-probe loop ──────────────────────────────────────────────
@@ -405,25 +475,29 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 			// masked text is byte-identical without them and the clearing behavior cannot change.
 			const freePass = dropRedundantlyCoveredPatterns(entries, set => JSON.stringify(maskContext(set)));
 
-			// 2) Parallel breadth-first delta-debugging over what remains. The coarse→fine ordering drops
-			// the BIGGEST redundant blocks first, so even a partial budget yields a large reduction — that
-			// ordering, NOT a bigger budget, is what fixes the old depth-first bisection's "exhaust the
-			// budget in one subtree, commit nothing" failure. The cap bounds REAL trial cost: every search
-			// probe tests a distinct subset (a cache miss ⇒ a re-probe + judge, two full-context model
-			// calls); only the final re-verify below is a free memo hit. So keep it fixed and modest.
+			// 2) Model-guided removal loop over what remains. The uncensored model PROPOSES which patterns
+			// are not load-bearing for this cyber-exploitation refusal (incidental / over-broad terms); a
+			// real `trialClears` VERIFIES every proposed batch before it is committed, so soundness never
+			// depends on the model's guess. Aggression starts at ~50% of the working set and RESETS on each
+			// success (most-aggressive-first: batches ≈ 50%, 25%, 12.5% … of the original) but HALVES on a
+			// failed verify (the model over-reached). The budget caps REAL verify trials: each tests a
+			// distinct subset (a cache miss ⇒ a re-probe + judge, two full-context model calls); only the
+			// final re-verify below is a free memo hit. So keep it fixed and modest.
 			const budget = { remaining: MAX_MINIMIZE_TRIALS };
-			const mustKeep = await minimizeClearingSet(freePass.kept, trialClears, {
-				concurrency: SHRINK_CONCURRENCY,
-				budget,
-			});
+			const mustKeep = await minimizeBySelection(
+				freePass.kept,
+				(kept, target) => selectRemovals(kept, target),
+				trialClears,
+				{ budget },
+			);
 
 			const keep = new Set(mustKeep);
 			const dropped = entries.filter(entry => !keep.has(entry));
 			if (dropped.length > 0) {
 				// Re-confirm the minimized set still clears before committing — ONE guard covering both the
-				// free pre-pass and the search (each search removal was verified per-trial, but model
-				// nondeterminism could still surface). The committed set is the one tested here, usually a
-				// cache hit, so no extra model round-trip. On failure nothing is dropped (the original set,
+				// free pre-pass and the model-guided loop (each committed removal was verified per-round, but
+				// model nondeterminism could still surface). The committed set is the one tested here, usually
+				// a cache hit, so no extra model round-trip. On failure nothing is dropped (the original set,
 				// which cleared, stands).
 				if (await trialClears(mustKeep)) {
 					entries = mustKeep;
@@ -448,7 +522,9 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 	} catch (err) {
 		if (err instanceof FixRefusalAbort) throw err;
 		const msg = err instanceof Error ? err.message : String(err);
-		step(`Skipped minimization/naming after a provider error (${preview(msg, 80)}); keeping the ${plural(entries.length, "pattern")} that cleared the refusal.`);
+		step(
+			`Skipped minimization/naming after a provider error (${preview(msg, 80)}); keeping the ${plural(entries.length, "pattern")} that cleared the refusal.`,
+		);
 	}
 
 	return { resolved: true, entries, iterations, finalResponse: latest };
@@ -602,6 +678,24 @@ function parseSubmitPatterns(response: AssistantMessage): SubmitPatternsPayload 
 	return { resolved: false, patterns: [] };
 }
 
+function parseSelectRemovable(response: AssistantMessage): number[] {
+	const call = extractToolCall(response, SELECT_REMOVABLE_TOOL);
+	if (call) {
+		const parsed = selectRemovableSchema.safeParse(call.arguments);
+		if (parsed.success) return parsed.data.remove;
+	}
+	const text = extractTextContent(response);
+	if (text) {
+		try {
+			const parsed = selectRemovableSchema.safeParse(JSON.parse(text));
+			if (parsed.success) return parsed.data.remove;
+		} catch {
+			// fall through
+		}
+	}
+	return [];
+}
+
 function assertCompleted(response: AssistantMessage, label: string): void {
 	if (response.stopReason === "aborted") throw new FixRefusalAbort();
 	if (response.stopReason === "error")
@@ -612,130 +706,80 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 	if (signal?.aborted) throw new FixRefusalAbort();
 }
 
-/** Bounded-concurrency map: at most `limit` calls to `fn` in flight, results in input order. */
-async function mapPool<T, R>(
-	items: readonly T[],
-	limit: number,
-	fn: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-	const results = new Array<R>(items.length);
-	let next = 0;
-	const worker = async (): Promise<void> => {
-		for (;;) {
-			const i = next++;
-			if (i >= items.length) return;
-			results[i] = await fn(items[i]!, i);
-		}
-	};
-	const workers = Math.max(1, Math.min(limit, items.length));
-	await Promise.all(Array.from({ length: workers }, () => worker()));
-	return results;
-}
-
-/** Split `[0, length)` into `parts` contiguous, ~equal index ranges (never empty for parts ≤ length). */
-function chunkBounds(length: number, parts: number): Array<[number, number]> {
-	const bounds: Array<[number, number]> = [];
-	let start = 0;
-	for (let i = 1; i <= parts; i++) {
-		const end = Math.round((length * i) / parts);
-		if (end > start) bounds.push([start, end]);
-		start = end;
-	}
-	return bounds;
-}
-
-export interface MinimizeClearingOptions {
-	/** Maximum number of `clears` probes dispatched concurrently. */
-	concurrency: number;
-	/**
-	 * Shared trial budget, decremented once per dispatched probe; the search stops scheduling new
-	 * probes once it hits 0 and returns the current (still-clearing) working set. When `clears` is
-	 * memoized by the caller, repeats resolve with no real round-trip, so the budget effectively caps
-	 * DISTINCT expensive evaluations — and within one run every dispatched subset is distinct, so
-	 * dispatch-count ≈ miss-count.
-	 */
-	budget: { remaining: number };
-}
-
 /**
- * Minimize `entries` to a subset that still satisfies the MONOTONE predicate `clears`, via a
- * parallel, breadth-first delta-debugging ("ddmin") search. Precondition: `clears(entries)` is true.
- * Monotonicity: if `clears(S)` then `clears(S')` for every S' ⊇ S, so a chunk whose removal still
- * clears is redundant — chunk-removal is sound.
+ * Minimize `entries` to a subset that still satisfies the MONOTONE predicate `clears`, by a
+ * MODEL-GUIDED backoff loop: `selectRemovals` PROPOSES which entries to drop; a real `clears` trial
+ * DECIDES whether each proposed batch is committed. Precondition: `clears(entries)` is true (it is
+ * never re-checked here — if nothing is committed the original `entries` is returned unchanged).
  *
- * Each round splits the working set into `g` contiguous chunks and tests the removal of every chunk
- * IN PARALLEL (bounded by `concurrency`, each probe charging `budget`). Redundant chunks are dropped
- * together in one extra verify trial when their union still clears (a big win that sheds a whole
- * essential-free level at once); otherwise a single already-verified chunk is committed. Granularity
- * climbs coarse→fine (`g` doubles each round, capped at the set size), so the BIGGEST redundant
- * blocks drop FIRST — a partial budget therefore still yields a large reduction (unlike a depth-first
- * bisection, which can burn the whole budget in one subtree with nothing committed). On a full budget
- * the result is 1-minimal: no single remaining element is removable.
+ * SOUNDNESS: every commit is preceded by a real `clears(candidate)` returning true, so the returned
+ * set always clears. The domain hint the proposer uses (which terms look load-bearing) only improves
+ * PROPOSAL quality; correctness never depends on it — a wrong guess just fails a verify and backs off.
  *
- * Invariants: every committed removal is backed by a real `clears` trial (monotonicity alone is NOT
- * trusted for multi-chunk drops); the working set always clears; the search terminates (each round
- * removes ≥1 element or increases `g`, and `g` is capped at the set size).
+ * SCHEDULE (aggression starts 0.5): each round asks for up to `target = round(aggression * |keep|)`
+ * removals. A successful verify RESETS aggression to 0.5, so successive successes each shed ~50% of
+ * what REMAINS — batch sizes ≈ 50%, 25%, 12.5% … of the original (most-aggressive-first). A failed
+ * verify (the proposer over-reached and broke clearing) HALVES aggression, so the next round proposes
+ * a smaller, safer batch. This is the only backoff path.
+ *
+ * NO-OP / STRICT-SHRINK RULE: the proposed removals are validated to membership in `keep` (anything
+ * not currently in `keep` is ignored) and `candidate = keep \ removals`. A candidate that does NOT
+ * strictly shrink `keep` — i.e. the proposer returned nothing currently removable — STOPS the loop
+ * immediately: no verify, no aggression change, no commit. Halving-and-retrying a proposer that
+ * returned nothing only burns proposal calls without surfacing removals, so it is not done. Only a
+ * strictly smaller candidate is ever verified.
+ *
+ * TERMINATION (any of): `keep.length <= 1`; `round(aggression * |keep|) < 1` (aggression decayed too
+ * far to name even one removal); `budget.remaining <= 0`; or a no-shrink proposal. `budget.remaining`
+ * decrements once per dispatched VERIFY trial and so also bounds the round count — total proposal
+ * calls stay ≤ verify-rounds + 1 (one possible wasted proposal on the terminal no-shrink round).
  */
-export async function minimizeClearingSet<T>(
+export async function minimizeBySelection<T>(
 	entries: readonly T[],
+	selectRemovals: (keep: readonly T[], target: number) => Promise<readonly T[]>,
 	clears: (set: T[]) => Promise<boolean>,
-	options: MinimizeClearingOptions,
+	options: { budget: { remaining: number } },
 ): Promise<T[]> {
-	const { concurrency, budget } = options;
+	const { budget } = options;
 	let keep = [...entries];
-
-	// Dispatch one removal trial, charging the shared budget. Returns `undefined` once the budget is
-	// exhausted (probe skipped → treated as "not verified droppable") so a partial budget never
-	// commits an unverified removal.
-	const probe = async (set: T[]): Promise<boolean | undefined> => {
-		if (budget.remaining <= 0) return undefined;
-		budget.remaining--;
-		return clears(set);
-	};
-
-	let g = 2;
+	let aggression = 0.5;
 	for (;;) {
-		if (keep.length === 0) return keep;
-		if (budget.remaining <= 0) return keep;
-		const parts = Math.min(g, keep.length);
-		const bounds = chunkBounds(keep.length, parts);
-		const complementOf = (lo: number, hi: number): T[] => [...keep.slice(0, lo), ...keep.slice(hi)];
-		const verdicts = await mapPool(bounds, concurrency, ([lo, hi]) => probe(complementOf(lo, hi)));
-		const droppable = bounds.filter((_, i) => verdicts[i] === true);
+		if (keep.length <= 1) break; // nothing left to minimize
+		if (budget.remaining <= 0) break; // verify budget (and round count) exhausted
+		const target = Math.round(aggression * keep.length);
+		if (target < 1) break; // aggression decayed below naming even one removal
 
-		if (droppable.length === 0) {
-			if (parts >= keep.length) return keep; // singletons, nothing removable → 1-minimal
-			g = Math.min(keep.length, g * 2);
-			continue;
-		}
+		const proposed = await selectRemovals(keep, target);
+		// Validate to membership in the CURRENT keep set (a stale / out-of-range pick is ignored), then
+		// derive the candidate. removalSet ⊆ keep, so the candidate strictly shrinks keep iff it is
+		// non-empty.
+		const keepSet = new Set<T>(keep);
+		const removalSet = new Set<T>();
+		for (const entry of proposed) if (keepSet.has(entry)) removalSet.add(entry);
+		if (removalSet.size === 0) break; // no strict shrink → STOP (no verify, no backoff, no commit)
+		const candidate = keep.filter(entry => !removalSet.has(entry));
 
-		if (droppable.length === 1) {
-			const [lo, hi] = droppable[0]!;
-			keep = complementOf(lo, hi); // already verified by its own trial this round
+		budget.remaining--; // one dispatched verify trial
+		if (await clears(candidate)) {
+			keep = candidate; // verified — commit
+			aggression = 0.5; // success: stay aggressive (next batch ≈ 50% of what remains)
 		} else {
-			// Try removing the UNION of every droppable chunk in ONE verify trial. Removing two
-			// separately-removable chunks together is NOT guaranteed safe, so commit it only if it still
-			// clears; otherwise fall back to the first droppable chunk (already verified).
-			const remove = new Set<number>();
-			for (const [lo, hi] of droppable) for (let k = lo; k < hi; k++) remove.add(k);
-			const union = keep.filter((_, i) => !remove.has(i));
-			const [lo, hi] = droppable[0]!;
-			keep = (await probe(union)) === true ? union : complementOf(lo, hi);
+			aggression /= 2; // over-reached and broke clearing: back off to a smaller next batch
 		}
-		g = Math.min(keep.length, g * 2);
 	}
+	return keep;
 }
 
 /**
- * Free pre-pass for {@link minimizeClearingSet}: drop every pattern that masks nothing UNIQUE — i.e.
+ * Free pre-pass for {@link minimizeBySelection}: drop every pattern that masks nothing UNIQUE — i.e.
  * removing it leaves `maskKey` byte-identical because its spans are fully covered by other patterns.
  * `maskKey` must serialize the masked re-probe surface (systemPrompt ∪ probeMessages) for a set; the
  * caller supplies it so this stays a pure, model-call-free string comparison. SOUND: identical masked
  * text ⇒ identical re-probe ⇒ identical clearing behavior. Greedy (remove one, recompute the baseline
  * against the shrinking set) so two mutually-covering patterns are not both dropped, and so the rare
  * hash-collision randomness in placeholder bases can only cause a MISSED drop, never a spurious one.
- * Never drops the last remaining pattern — whether it is load-bearing is a question for the trial
- * search, not byte-equality.
+ * Never drops the last remaining pattern — whether it is load-bearing is a question for the verified
+ * minimization, not byte-equality.
  */
 export function dropRedundantlyCoveredPatterns(
 	entries: readonly SecretEntry[],
