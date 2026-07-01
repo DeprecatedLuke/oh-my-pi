@@ -1310,6 +1310,14 @@
 - Fixed session titles occasionally showing raw `{"title": "..."}` JSON. Online title generation now always uses the `<title>...</title>` marker prompt instead of a forced `set_title` tool call — hosts that ignored or rejected forced `tool_choice` echoed the prompt's JSON example verbatim as the title — and JSON-shaped responses (bare, code-fenced, marker-wrapped, or truncated) are unwrapped to the bare title.
 - Fixed Linux startup prompt construction to read the CPU model from `/proc/cpuinfo` instead of `os.cpus()`, avoiding per-core sysfs frequency probes on many-core hosts ([#4712](https://github.com/can1357/oh-my-pi/issues/4712)).
 - Fixed llama.cpp model discovery to honor per-model `architecture.input_modalities` from `/v1/models`, so router presets that advertise image input are no longer treated as text-only ([#4719](https://github.com/can1357/oh-my-pi/issues/4719)).
+- Optimized argument streaming to throttle JSON re-parsing for renderers that do not require raw input
+- Reinforced the redacted-token policy in the system prompt: redacted `#XXXX#` tokens MUST be reproduced verbatim and in full — never shortened, paraphrased, or replaced with descriptive labels or invented placeholders (e.g. `#SECRET#`, `<redacted>`, `some-secret-hash`).
+
+### Fixed
+
+- Fixed the terminal bell / completion notification ringing at turn end while background jobs were still running; the notification now fires only once all pending async work (running jobs and queued deliveries) has settled.
+
+- Fixed memory leaks in benchmark CLI by properly closing provider sessions after completion
 
 ## [16.3.10] - 2026-07-06
 
