@@ -99,7 +99,6 @@ export async function executeFixRefusal(deps: FixRefusalDeps): Promise<FixRefusa
 		expandRoleAlias(pattern, settings),
 		available,
 		getModelMatchPreferences(settings),
-		registry,
 	);
 	if (!uncensoredModel) {
 		ui.step(`Could not resolve refusal-fix model "${pattern}".`);

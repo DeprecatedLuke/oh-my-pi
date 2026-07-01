@@ -303,8 +303,8 @@ async function resolveKnowledgeRuntime(modelOverride: string | undefined): Promi
 	const available = modelRegistry.getAvailable();
 	const matchPreferences = { usageOrder: settings.getStorage()?.getModelUsageOrder() };
 	const selected = modelOverride
-		? resolveModelRoleValue(modelOverride, available, { settings, matchPreferences, modelRegistry })
-		: (resolveRoleSelection(KNOWLEDGE_MODEL_ROLES, settings, available, modelRegistry) ?? { model: available[0] });
+		? resolveModelRoleValue(modelOverride, available, { settings, matchPreferences })
+		: (resolveRoleSelection(KNOWLEDGE_MODEL_ROLES, settings, available) ?? { model: available[0] });
 	const model = selected.model;
 	if (!model) {
 		throw new Error("No model available for knowledge building");

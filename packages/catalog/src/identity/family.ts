@@ -200,6 +200,22 @@ export const isOpenAISamplingRestrictedModelId = memo((modelId: string): boolean
 });
 
 /**
+ * OpenAI Codex models that honor `reasoning.context: "all_turns"` (full
+ * cross-turn reasoning replay). The `reasoning.context` field itself exists for
+ * the whole gpt-5/o-series family, but the `all_turns` value is only accepted
+ * from gpt-5.4 onward; earlier ids (`gpt-5.1-codex`, `gpt-5.3-codex`, and
+ * `gpt-5.3-codex-spark`) reject it with
+ * `Unsupported value: 'all_turns' is not supported with this model`. Version
+ * floor (not an allowlist) so 5.6/6.x inherit support automatically. Callers
+ * fall back to omitting `context`, letting the server default to `current_turn`.
+ */
+export const supportsAllTurnsReasoningContext = memo((modelId: string): boolean => {
+	const parsed = parseOpenAIModel(bareModelId(modelId));
+	if (!parsed) return false;
+	return semverGte(parsed.version, "5.4");
+});
+
+/**
  * Reasoning-capable GLM coding SKUs: glm-4.5 and up on the base / `-air` /
  * `-turbo` lines. Excludes the vision (`…v`) shape, the non-reasoning
  * `-flash`/`-flashx`/`-preview` variants, and pre-4.5 ids. Matching the family

@@ -1283,6 +1283,12 @@
 - A bundled `knowledge` agent role, spawnable via the `task` tool, that maintains the `.omp/knowledge` base (explore the repo and author, verify, reconcile, or prune notes). It is the only delegated agent permitted to write `knowledge://` — the executor grants `canWriteKnowledge` solely to this bundled agent identity (name + `bundled` source), so a user-defined agent named `knowledge` cannot self-grant write access. It is an ordinary `task` subagent (identified by agent name), not a separate job type.
 - Knowledge maintenance (`/knowledge build|update|compact`) now runs in an isolated worktree and emits a **native patch** instead of writing+committing `.omp/knowledge` directly: the pass auto-applies + commits to a clean repo, or — when the repo is dirty or the patch conflicts — leaves a durable `patch://` the main agent surfaces for manual `patch apply` (same flow as an isolated `task` spawn). The capture is scoped to `.omp/knowledge`, so a stray write or `bash` side-effect outside the subtree can never ride along into the auto-applied patch. `createNativePatch` gained an optional capture-scope `pathFilter` to support this. (`/knowledge save` — the foreground, awaited distill — still commits in-process, unchanged.)
 - The automatic background session-knowledge distill (the compaction/handoff trigger) is now patch-based too, and runs as a tracked background job. Previously it ran fire-and-forget and direct-committed `.omp/knowledge` underneath the user; now it registers a `KnowledgeDistill` async job whose completion delivers the patch outcome to the main agent — auto-applied on a clean repo, or surfaced as a pending `patch://` (for manual `patch apply`) when the repo is dirty. Because the in-process distill needs the parent session's live history and shared tools (so it can't run in a worktree like the isolated passes), it writes the real tree, the edits are captured as a native patch, and the working tree is then reverted — so an unattended distill never leaves a surprise background commit or lingering uncommitted edits. A throwing/aborted distill still reverts the tree.
+## [16.2.12] - 2026-07-01
+
+### Breaking Changes
+
+- Removed the canonical-alias grouping and resolution layer. The `equivalence` key (`overrides`/`exclude`) in `models.yml`/`models.json` is now inert, and canonical-related methods have been removed from `ModelRegistry`.
+- Removed the "CANONICAL" tab from the interactive model selector and the `omp models canonical` subcommand.
 
 ### Changed
 
@@ -1318,6 +1324,8 @@
 - Fixed the terminal bell / completion notification ringing at turn end while background jobs were still running; the notification now fires only once all pending async work (running jobs and queued deliveries) has settled.
 
 - Fixed memory leaks in benchmark CLI by properly closing provider sessions after completion
+- Simplified model selection and matching by resolving bare model IDs in `--model`, `modelRoles`, and `enabledModels` via exact/flat-ID and provider-preference matching instead of cross-spelling canonical coalescing.
+- Improved cold start performance by removing the catalog-wide canonical index build from the startup path.
 
 ## [16.3.10] - 2026-07-06
 
