@@ -1613,6 +1613,11 @@
 ### Changed
 
 - Status line token throughput segment now uses a dedicated tachometer icon (`icon.throughput`) instead of reusing the output arrow; cache read/write segments use a single database icon instead of stacking input/output arrows alongside it.
+- Per-turn transcript usage row now uses `theme.icon.cache` (database icon) instead of a hardcoded `cache:` label, and shows TTFT (time to first token) and token throughput (`tok/s`) when duration data is available.
+
+### Fixed
+
+- Hashline no-op diagnostic now shows the matching line content and line number, so the model can identify which body row was byte-identical without a separate `read`.
 
 ## [16.2.12] - 2026-07-01
 

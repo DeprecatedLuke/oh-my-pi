@@ -42,16 +42,43 @@ export interface ExecuteHashlineSingleOptions {
 	beginDeferredDiagnosticsForPath: (path: string) => WritethroughDeferredHandle;
 }
 
-function noChangeDiagnostic(path: string): string {
+/**
+ * Extract the first body row and its target line from a prepared section's
+ * edits, so the noop diagnostic can show *what* matched instead of just
+ * saying "something matched."
+ */
+function firstBodyRowFromEdits(prepared: PreparedSection): { lineText: string; lineNum: number } | undefined {
+	const fileLines = prepared.normalized.split("\n");
+	for (const edit of prepared.section.edits) {
+		let lineNum: number | undefined;
+		if (edit.kind === "insert") {
+			lineNum = edit.cursor.kind === "before_anchor" || edit.cursor.kind === "after_anchor"
+				? edit.cursor.anchor.line
+				: undefined;
+		} else if (edit.kind === "delete") {
+			lineNum = edit.anchor.line;
+		}
+		if (lineNum && lineNum >= 1 && lineNum <= fileLines.length) {
+			return { lineText: fileLines[lineNum - 1], lineNum };
+		}
+	}
+	return undefined;
+}
+
+function noChangeDiagnostic(path: string, prepared?: PreparedSection): string {
 	// The patch parsed and applied cleanly but produced no change — the
 	// `|literal` body rows matched the file content at the targeted lines
 	// byte-for-byte. The model usually misreads this as "wrong anchor, try
 	// again with a bigger payload" and starts duplicating content; the
 	// message below names the cause directly so the next turn can re-read
 	// instead of expanding the patch.
+	const match = prepared ? firstBodyRowFromEdits(prepared) : undefined;
+	const matchBlock = match
+		? `\nBody matches line ${match.lineNum} exactly:\n  ${match.lineText}`
+		: "";
 	return (
 		`Edits to ${path} parsed and applied cleanly, but produced no change: ` +
-		`your body row(s) are byte-identical to the file at the targeted lines. ` +
+		`your body row(s) are byte-identical to the file at the targeted lines.${matchBlock}\n` +
 		`The bug is somewhere else — re-read the file before issuing another edit. ` +
 		`Do NOT widen the payload or add lines; verify the anchor first.`
 	);
@@ -212,7 +239,6 @@ export async function executeHashlineSingle(
 	const snapshots = getFileSnapshotStore(options.session);
 	const enforceSeenLines = options.session.settings.get("edit.enforceSeenLines");
 	const patcher = new Patcher({ fs, snapshots, blockResolver: nativeBlockResolver, enforceSeenLines });
-
 	// Single-section fast path: prepare, commit, render.
 	const inputHash = hashPatchInput(options.input);
 	if (patch.sections.length === 1) {
@@ -224,7 +250,11 @@ export async function executeHashlineSingle(
 			if (escalate) {
 				throw new ToolError(noChangeLoopDiagnostic(sectionResult.path, count));
 			}
-			return renderSection(sectionResult, undefined, prepared.section.path).toolResult;
+			const toolResult: AgentToolResult<EditToolDetails, typeof hashlineEditParamsSchema> = {
+				content: [{ type: "text", text: noChangeDiagnostic(sectionResult.path, prepared) }],
+				details: { diff: "", op: "update", meta: outputMeta().get() },
+			};
+			return toolResult;
 		}
 		resetNoopEdit(options.session, sectionResult.canonicalPath);
 		return renderSection(sectionResult, fs.consumeDiagnostics(sectionResult.path), prepared.section.path).toolResult;
@@ -240,7 +270,7 @@ export async function executeHashlineSingle(
 			const { count, escalate } = recordNoopEdit(options.session, entry.canonicalPath, inputHash);
 			throw escalate
 				? new ToolError(noChangeLoopDiagnostic(entry.section.path, count))
-				: new ToolError(noChangeDiagnostic(entry.section.path));
+				: new ToolError(noChangeDiagnostic(entry.section.path, entry));
 		}
 	}
 	// Then commit each one, narrowing the LSP batch flush flag to the final
@@ -255,7 +285,7 @@ export async function executeHashlineSingle(
 			const { count, escalate } = recordNoopEdit(options.session, sectionResult.canonicalPath, inputHash);
 			throw escalate
 				? new ToolError(noChangeLoopDiagnostic(sectionResult.path, count))
-				: new ToolError(noChangeDiagnostic(sectionResult.path));
+				: new ToolError(noChangeDiagnostic(sectionResult.path, prepared[i]));
 		}
 		resetNoopEdit(options.session, sectionResult.canonicalPath);
 		rendered.push(renderSection(sectionResult, fs.consumeDiagnostics(sectionResult.path), prepared[i].section.path));
