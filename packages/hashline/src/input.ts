@@ -295,6 +295,15 @@ function prependBareRangeVerb(lines: string[]): string[] {
 				}
 			}
 		}
+		// Truncated verb: `SWAP 277.=` — model wrote the start line and separator
+		const TRUNCATED_VERB_RE = /^\s*(SWAP|DEL)\s+([1-9]\d*)\s*(?:[-. …=]+)\s*\.?:?\s*$/i;
+		const truncatedVerb = TRUNCATED_VERB_RE.exec(line);
+		if (truncatedVerb !== null) {
+			const verb = truncatedVerb[1]!.toUpperCase();
+			const n = truncatedVerb[2]!;
+			result.push(verb === "DEL" ? `DEL ${n}.=${n}` : `SWAP ${n}.=${n}:`);
+			continue;
+		}
 		// Range with inline content: `N.=M:content` — split into verb header
 		// + body row. Must check before BARE_RANGE_RE (which requires the
 		// line to end at the colon) and after paste checks (N.=M:content

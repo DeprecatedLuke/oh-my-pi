@@ -397,3 +397,29 @@ describe("hashline apply — duplicate boundary payloads", () => {
 		expect(applyPatch(text, diff)).toBe("aaa\nbbb\nccc\nbbb\nccc\nNEW");
 	});
 });
+
+describe("hashline — truncated verb recovery", () => {
+	it("recovers SWAP N.= as single-line swap", () => {
+		const text = ["line1", "line2", "line3"].join("\n");
+		const section = Patch.parseSingle("[f.ts#1A2B]\nSWAP 2.=\n+replaced");
+		expect(section.applyTo(text).text).toBe("line1\nreplaced\nline3");
+	});
+
+	it("recovers DEL N.= as single-line delete", () => {
+		const text = ["line1", "line2", "line3"].join("\n");
+		const section = Patch.parseSingle("[f.ts#1A2B]\nDEL 2.=");
+		expect(section.applyTo(text).text).toBe("line1\nline3");
+	});
+
+	it("recovers SWAP N.=: with trailing colon", () => {
+		const text = ["line1", "line2", "line3"].join("\n");
+		const section = Patch.parseSingle("[f.ts#1A2B]\nSWAP 2.=:\n+replaced");
+		expect(section.applyTo(text).text).toBe("line1\nreplaced\nline3");
+	});
+
+	it("does not regress SWAP N.=M: (valid range)", () => {
+		const text = ["line1", "line2", "line3"].join("\n");
+		const section = Patch.parseSingle("[f.ts#1A2B]\nSWAP 1.=2:\n+replaced1\n+replaced2");
+		expect(section.applyTo(text).text).toBe("replaced1\nreplaced2\nline3");
+	});
+});
