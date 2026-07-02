@@ -260,10 +260,23 @@ function skipStrayDot(line: string, index: number, end: number): number {
 	return index;
 }
 
+/**
+ * GLM 5.2 merges the range separator with the header colon, producing
+ * `SWAP 293-301:=` instead of `SWAP 293-301.:` (or `SWAP 293-301:`).
+ * `consumeOptionalColon` eats the `:` but leaves a trailing `=` that makes
+ * `tryParseHunkHeader` reject the line (`nextIndex !== end`). A `=` is never
+ * valid after the colon, so skip it.
+ */
 function consumeOptionalColon(line: string, index: number, end: number): number {
 	let cursor = skipWhitespace(line, index, end);
 	cursor = skipStrayDot(line, cursor, end);
-	return cursor < end && line.charCodeAt(cursor) === CHAR_COLON ? skipWhitespace(line, cursor + 1, end) : cursor;
+	if (cursor < end && line.charCodeAt(cursor) === CHAR_COLON) {
+		cursor = skipWhitespace(line, cursor + 1, end);
+		if (cursor < end && line.charCodeAt(cursor) === CHAR_EQUALS) {
+			cursor = skipWhitespace(line, cursor + 1, end);
+		}
+	}
+	return cursor;
 }
 /**
  * Recover local-model replace trailers that permute `:` and `=` as `:=:` or

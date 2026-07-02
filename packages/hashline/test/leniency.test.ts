@@ -379,6 +379,14 @@ describe("hashline — apply_patch / unified-diff contamination", () => {
 		expect(patch.sections[0].path).toBe("foo.ts");
 	});
 
+	it("recovers bare `:` separator: paste + `:` + new → SWAP + new", () => {
+		// Model wrote `3:old\n:\nnew` — old/new pair with bare `:` separator
+		// (instead of `===`). Same recovery: convert paste to SWAP 3.=3:.
+		const patch = Patch.parse("[cli.ts#BEE4]\n3:if (x !== 1) {\n:\nif (x !== 0) {");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits("a\nb\nif (x !== 1) {\n}", patch.sections[0].edits).text).toBe("a\nb\nif (x !== 0) {\n}");
+	});
+
 	it("treats top-level `+TEXT` as an orphan literal payload", () => {
 		expect(() => parsePatch("+const X = 1;\nSWAP 2.=2:")).toThrow(/payload line has no preceding hunk header/);
 	});

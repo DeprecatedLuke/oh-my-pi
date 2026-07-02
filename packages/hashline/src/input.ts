@@ -212,7 +212,7 @@ function wrapMissingBrackets(line: string): string {
  * error so the model sees a clear diagnostic instead of a double-header conflict.
  */
 function prependBareRangeVerb(lines: string[]): string[] {
-	// Bare range: `N.=M:` / `N.=M` — missing SWAP verb. Also accepts `:=` (GLM
+	// Bare Range: `N.=M:` / `N.=M` — missing SWAP verb. Also accepts `:=` (GLM
 	// writes `N:=M:` instead of `N.=M:`) and a stray trailing dot (`N.=M.:`).
 	const BARE_RANGE_RE = /^\s*([1-9]\d*)\s*(?:[-. …=]+|:=)\s*([1-9]\d*)\s*\.?:?\s*$/;
 	// Range with inline content: `N.=M:content` — range header and body on
@@ -223,13 +223,16 @@ function prependBareRangeVerb(lines: string[]): string[] {
 	const VERB_PREFIX = /^\s*(?:SWAP|DEL|INS)\b/i;
 	// Extract the range numbers from a verb header like `SWAP 45.=45:`.
 	const VERB_RANGE_RE = /^\s*(?:SWAP|DEL|INS)[^\d]*([1-9]\d*)\s*(?:[-. …=]+|:=)\s*([1-9]\d*)/i;
-	const result: string[] = [];
 	// Read-tool paste: `N:content` — the model copied a snapshot line.
 	const PASTE_LINE_RE = /^\s*([1-9]\d*):(.+)$/;
-	// Apply_patch-style old/new separator: a standalone `===` line between
-	// the old content and the replacement content. The model writes its
-	// body as `old lines\n===\nnew lines` instead of just `+new lines`.
-	const SEP_LINE_RE = /^\s*={3,}\s*$/;
+	// Truncated verb: `SWAP 277.=` — start line + separator but no end line.
+	const TRUNCATED_VERB_RE = /^\s*(SWAP|DEL)\s+([1-9]\d*)\s*(?:[-. …=]+)\s*\.?:?\s*$/i;
+	// Apply_patch-style old/new separator: a standalone `===` or `:` line
+	// between the old content and the replacement content. The model writes
+	// its body as `old lines\n===\nnew lines` or `old lines\n:\nnew lines`
+	// instead of just `+new lines`.
+	const SEP_LINE_RE = /^\s*(?:={3,}|:)\s*$/;
+	const result: string[] = [];
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
 		// Same-line paste+verb merge: `N:SWAP N.=N:` — the model pasted
@@ -240,21 +243,21 @@ function prependBareRangeVerb(lines: string[]): string[] {
 			result.push(sameLineMerge[2]);
 			continue;
 		}
-		// Apply_patch old/new separator in body: `===` between old and new.
-		// Discard everything above (old content) back to the last verb
-		// header or section header, then let subsequent body rows through.
+		// Apply_patch old/new separator in body: `===` or `:` between old
+		// and new. Discard everything above (old content) back to the last
+		// verb header or section header, then let subsequent body rows through.
 		if (SEP_LINE_RE.test(line)) {
 			// Pop backward through consecutive paste lines (`N:content`)
-			// before `===` — the model may paste multiple old lines, then
-			// write `===`, then the new content. Convert the block into a
-			// single `SWAP <first>.=<last>:` header covering the full range.
-			// If the line before `===` is not a paste, pop body rows back
-			// to the last verb/section header (like the non-paste path below).
+			// before the separator — the model may paste multiple old lines,
+			// then write `===`/`:`, then the new content. Convert the block
+			// into a single `SWAP <first>.=<last>:` header covering the full
+			// range. If the line before is not a paste, pop body rows back to
+			// the last verb/section header.
 			const pasteStarts: string[] = [];
 			while (result.length > 0) {
 				const top = result[result.length - 1];
 				// Skip blank lines between paste lines (parity with the
-				// paste+verb-header forward lookahead at line ~274).
+				// paste+verb-header forward lookahead below).
 				if (top.trim().length === 0) {
 					result.pop();
 					continue;
@@ -268,6 +271,22 @@ function prependBareRangeVerb(lines: string[]): string[] {
 				const first = pasteStarts[0]!;
 				const last = pasteStarts[pasteStarts.length - 1]!;
 				result.push(`SWAP ${first}.=${last}:`);
+				// Convert subsequent paste lines (`N:content`) to `+content`
+				// body rows — the model pasted new content with line-number
+				// prefixes (copied from the read result) instead of using
+				// `+content` body rows.
+				let k = i + 1;
+				while (k < lines.length) {
+					const pm = PASTE_LINE_RE.exec(lines[k]);
+					if (pm === null && lines[k].trim().length === 0) {
+						k++;
+						continue;
+					}
+					if (pm === null) break;
+					result.push(`+${pm[2]}`);
+					k++;
+				}
+				i = k - 1;
 			} else {
 				// Pop body rows back to the last verb header or section
 				// header (exclusive — never pop a section `[path#TAG]`).
@@ -295,8 +314,8 @@ function prependBareRangeVerb(lines: string[]): string[] {
 				}
 			}
 		}
-		// Truncated verb: `SWAP 277.=` — model wrote the start line and separator
-		const TRUNCATED_VERB_RE = /^\s*(SWAP|DEL)\s+([1-9]\d*)\s*(?:[-. …=]+)\s*\.?:?\s*$/i;
+		// Truncated verb: `SWAP 277.=` — model wrote the start line and
+		// separator but omitted the end line. Recover as a single-line swap.
 		const truncatedVerb = TRUNCATED_VERB_RE.exec(line);
 		if (truncatedVerb !== null) {
 			const verb = truncatedVerb[1]!.toUpperCase();
