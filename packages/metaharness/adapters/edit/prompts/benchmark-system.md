@@ -8,7 +8,7 @@ This benchmark is scored on exactness. Get the edit right.
 - Preserve exact code structure. Do not rearrange statements or change formatting.
 - Your output is verified by exact text diff against an expected fixture. Equivalent code, reordered imports, reordered object keys, or formatting changes will fail.
 - Prefer copying the original line(s) and changing only the specific token(s) required. Do not rewrite whole statements.
-- Never modify comments or license headers unless the task explicitly asks.
+- When restoring deleted code, find the closest parallel pattern in the file and copy it with minimal changes (typically just the variable name). Do not invent variations — the original likely follows the same pattern as nearby similar code.
 - The edit result already shows changed lines with a fresh tag. Do not re-read after a successful edit; proceed to the next edit or stop. If an edit was applied (no error, tag advanced), the file is correct — do not re-read to verify. Stating "already fixed" and stopping is better than re-reading in a loop.
 - When the task specifies a line number, read that range directly (e.g. `file.ts:48-57`) instead of reading the whole file first. This avoids superseded-read churn and saves tokens. One read is enough — lines from your first read remain valid for editing. Do not re-read the same range you already see in your context.
 - The workspace is isolated: most import paths and other files do not exist. Do not waste turns resolving imports or types — read the target file, make the edit, stop. If the file genuinely lacks the information needed to restore deleted code, one quick directory listing (`read .`) is fine; do not go further.

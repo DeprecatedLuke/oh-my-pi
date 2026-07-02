@@ -215,6 +215,9 @@ function prependBareRangeVerb(lines: string[]): string[] {
 	// Bare range: `N.=M:` / `N.=M` — missing SWAP verb. Also accepts `:=` (GLM
 	// writes `N:=M:` instead of `N.=M:`) and a stray trailing dot (`N.=M.:`).
 	const BARE_RANGE_RE = /^\s*([1-9]\d*)\s*(?:[-. …=]+|:=)\s*([1-9]\d*)\s*\.?:?\s*$/;
+	// Range with inline content: `N.=M:content` — range header and body on
+	// the same line, no SWAP verb. Split into verb header + `+content` body row.
+	const RANGE_WITH_CONTENT_RE = /^\s*([1-9]\d*)\s*(?:[-. …=]+|:=)\s*([1-9]\d*)\s*:(.+)$/;
 	// Misplaced verb: `N SWAP M:` — GLM puts SWAP between the numbers.
 	const MISPLACED_VERB_RE = /^\s*([1-9]\d*)\s+SWAP\s+([1-9]\d*)\s*:?\s*$/i;
 	const VERB_PREFIX = /^\s*(?:SWAP|DEL|INS)\b/i;
@@ -223,6 +226,10 @@ function prependBareRangeVerb(lines: string[]): string[] {
 	const result: string[] = [];
 	// Read-tool paste: `N:content` — the model copied a snapshot line.
 	const PASTE_LINE_RE = /^\s*([1-9]\d*):(.+)$/;
+	// Apply_patch-style old/new separator: a standalone `===` line between
+	// the old content and the replacement content. The model writes its
+	// body as `old lines\n===\nnew lines` instead of just `+new lines`.
+	const SEP_LINE_RE = /^\s*={3,}\s*$/;
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
 		// Same-line paste+verb merge: `N:SWAP N.=N:` — the model pasted
@@ -233,19 +240,70 @@ function prependBareRangeVerb(lines: string[]): string[] {
 			result.push(sameLineMerge[2]);
 			continue;
 		}
+		// Apply_patch old/new separator in body: `===` between old and new.
+		// Discard everything above (old content) back to the last verb
+		// header or section header, then let subsequent body rows through.
+		if (SEP_LINE_RE.test(line)) {
+			// Pop backward through consecutive paste lines (`N:content`)
+			// before `===` — the model may paste multiple old lines, then
+			// write `===`, then the new content. Convert the block into a
+			// single `SWAP <first>.=<last>:` header covering the full range.
+			// If the line before `===` is not a paste, pop body rows back
+			// to the last verb/section header (like the non-paste path below).
+			const pasteStarts: string[] = [];
+			while (result.length > 0) {
+				const top = result[result.length - 1];
+				// Skip blank lines between paste lines (parity with the
+				// paste+verb-header forward lookahead at line ~274).
+				if (top.trim().length === 0) {
+					result.pop();
+					continue;
+				}
+				const m = PASTE_LINE_RE.exec(top);
+				if (m === null) break;
+				pasteStarts.unshift(m[1]);
+				result.pop();
+			}
+			if (pasteStarts.length > 0) {
+				const first = pasteStarts[0]!;
+				const last = pasteStarts[pasteStarts.length - 1]!;
+				result.push(`SWAP ${first}.=${last}:`);
+			} else {
+				// Pop body rows back to the last verb header or section
+				// header (exclusive — never pop a section `[path#TAG]`).
+				let k = result.length - 1;
+				while (k >= 0 && !VERB_PREFIX.test(result[k]) && !result[k].startsWith(HL_FILE_PREFIX)) k--;
+				result.length = k + 1;
+			}
+			continue;
+		}
 		// Check for read-tool paste followed by a verb header for the same
 		// line number — model pasted old content then wrote the correction
 		// below. Drop the paste so the verb header succeeds.
 		const pasteMatch = PASTE_LINE_RE.exec(line);
 		if (pasteMatch !== null) {
+			// Skip blank lines AND additional paste lines — the model may
+			// paste multiple consecutive `N:content` rows before the verb
+			// header (e.g. lines 29-33 pasted, then `SWAP 29.=33:`).
 			let j = i + 1;
-			while (j < lines.length && lines[j].trim().length === 0) j++;
+			while (j < lines.length && (lines[j].trim().length === 0 || PASTE_LINE_RE.test(lines[j]))) j++;
 			if (j < lines.length) {
 				const verbMatch = VERB_RANGE_RE.exec(lines[j]);
 				if (verbMatch !== null && verbMatch[1] === pasteMatch[1]) {
-					continue; // skip the paste line, keep the verb header
+					i = j - 1; // skip all consumed paste lines; for-loop i++ lands on verb header
+					continue;
 				}
 			}
+		}
+		// Range with inline content: `N.=M:content` — split into verb header
+		// + body row. Must check before BARE_RANGE_RE (which requires the
+		// line to end at the colon) and after paste checks (N.=M:content
+		// doesn't match PASTE_LINE_RE since `.=M:` follows the first number).
+		const rangeContent = RANGE_WITH_CONTENT_RE.exec(line);
+		if (rangeContent !== null) {
+			result.push(`SWAP ${rangeContent[1]}.=${rangeContent[2]}:`);
+			result.push(`+${rangeContent[3]}`);
+			continue;
 		}
 		const misplaced = MISPLACED_VERB_RE.exec(line);
 		const match = misplaced ?? BARE_RANGE_RE.exec(line);

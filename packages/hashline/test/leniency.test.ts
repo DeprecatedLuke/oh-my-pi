@@ -109,6 +109,17 @@ describe("hashline core — verb header forms", () => {
 		expect(applyPatch(FILE, "INS.HEAD.:\n+X")).toBe("X\na\nb\nc\nd\ne");
 		expect(applyPatch(FILE, "INS.TAIL.:\n+X")).toBe("a\nb\nc\nd\ne\nX");
 	});
+
+	it("tolerates GLM 5.2 stray equals after the trailing colon (N:=M:=)", () => {
+		// GLM 5.2 merges range separator with header colon: `SWAP 293-301:=`
+		// instead of `SWAP 293-301:` — trailing `=` after colon.
+		expect(applyPatch(FILE, "SWAP 2.=3:=\n+X")).toBe("a\nX\nd\ne");
+		expect(applyPatch(FILE, "SWAP 2.=2:=\n+X")).toBe("a\nX\nc\nd\ne");
+		expect(applyPatch(FILE, "INS.POST 2:=\n+X")).toBe("a\nb\nX\nc\nd\ne");
+		expect(applyPatch(FILE, "INS.PRE 2:=\n+X")).toBe("a\nX\nb\nc\nd\ne");
+		expect(applyPatch(FILE, "INS.HEAD:=\n+X")).toBe("X\na\nb\nc\nd\ne");
+		expect(applyPatch(FILE, "INS.TAIL:=\n+X")).toBe("a\nb\nc\nd\ne\nX");
+	});
 });
 
 describe("hashline body contracts", () => {
@@ -235,12 +246,20 @@ describe("hashline — apply_patch / unified-diff contamination", () => {
 		expect(() => parsePatch("86.=\n+X")).toThrow(/SWAP 86/);
 	});
 
-	it("detects bare range with inline content after colon", () => {
-		// Model wrote `5.=5:import {...}` — range header + body on same line, no verb
-		expect(() => parsePatch("5.=5:import { formatMoreItems } from '../tools/render-utils';")).toThrow(
-			/has content on the same line/,
+	it("auto-recovers range header with inline content after colon", () => {
+		// Model wrote `5.=5:import {...}` — range header + body on same line, no verb.
+		// Auto-recover: split into `SWAP 5.=5:` + `+import {...}` body row.
+		const patch = Patch.parse("[foo.ts#ABCD]\n5.=5:import { formatMoreItems } from '../tools/render-utils';");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits("a\nb\nc\nd\ne", patch.sections[0].edits).text).toBe(
+			"a\nb\nc\nd\nimport { formatMoreItems } from '../tools/render-utils';",
 		);
-		expect(() => parsePatch("3.=3:const x = 1;")).toThrow(/Add `SWAP` before the range/);
+		// Also recovers `3.=3:const x = 1;`
+		const patch2 = Patch.parse("[foo.ts#ABCD]\n3.=3:const x = 1;");
+		expect(applyEdits("a\nb\nc\nd\ne", patch2.sections[0].edits).text).toBe("a\nb\nconst x = 1;\nd\ne");
+		// Preserves indentation: `4.=4:    const y = 2;` keeps the 4-space indent
+		const patch3 = Patch.parse("[foo.ts#ABCD]\n4.=4:    const y = 2;");
+		expect(applyEdits("a\nb\nc\nd\ne", patch3.sections[0].edits).text).toBe("a\nb\nc\n    const y = 2;\ne");
 	});
 
 	it("splits merged `[path#TAG] OP` header onto separate lines", () => {
@@ -299,6 +318,13 @@ describe("hashline — apply_patch / unified-diff contamination", () => {
 		expect(applyEdits(FILE, patch.sections[0].edits).text).toBe("a\nX\nc\nd\ne");
 	});
 
+	it("drops multi-line paste block when SWAP for the same start line follows", () => {
+		// Model pasted lines 2-4 then wrote SWAP 2.=4: — drop all paste lines
+		const patch = Patch.parse("[foo.ts#ABCD]\n2:b\n3:c\n4:d\nSWAP 2.=4:\n+X\n+Y\n+Z");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits(FILE, patch.sections[0].edits).text).toBe("a\nX\nY\nZ\ne");
+	});
+
 	it("strips N: prefix when paste and SWAP header are merged on one line", () => {
 		// Model wrote `2:SWAP 2.=2:` — paste + verb header on same line
 		const patch = Patch.parse("[foo.ts#ABCD]\n2:SWAP 2.=2:\n+X");
@@ -316,6 +342,41 @@ describe("hashline — apply_patch / unified-diff contamination", () => {
 	it("does not drop bare range when next line is verb for a DIFFERENT range", () => {
 		// Model wrote `2.=2:` then `SWAP 3.=3:` — different ranges, keep bare range error
 		expect(() => parsePatch("[foo.ts#ABCD]\n2.=2:\nSWAP 3.=3:\n+X")).toThrow(/bare range/);
+	});
+
+	it("recovers apply_patch === separator: paste + old/new → SWAP + new", () => {
+		// Model wrote `3:old\n===\nnew` — old/new pair with === separator.
+		// Recovery: convert paste to SWAP 3.=3:, drop old content and ===.
+		const patch = Patch.parse("[cli.ts#BEE4]\n3:if (x !== 1) {\n===\nif (x !== 0) {");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits("a\nb\nif (x !== 1) {\n}", patch.sections[0].edits).text).toBe("a\nb\nif (x !== 0) {\n}");
+	});
+
+	it("recovers apply_patch === separator: multi-line paste → SWAP range + new", () => {
+		// Model wrote `3:old\n4:old2\n===\nnew` — multiple paste lines before ===.
+		// Recovery: pop both paste lines, synthesize SWAP 3.=4: covering the range.
+		const patch = Patch.parse("[app.ts#BEE4]\n3:const a = 1;\n4:const b = 2;\n===\nconst x = 3;");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits("a\nb\nconst a = 1;\nconst b = 2;\nc", patch.sections[0].edits).text).toBe(
+			"a\nb\nconst x = 3;\nc",
+		);
+	});
+
+	it("recovers apply_patch === separator inside SWAP body: drop old, keep new", () => {
+		// Model wrote SWAP with old content, ===, then new content.
+		// Recovery: drop old content + ===, keep only new content as body.
+		const patch = Patch.parse("[segs.ts#A104]\nSWAP 2.=2:\noldValue\n===\nnewValue");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits("a\noldValue\nc", patch.sections[0].edits).text).toBe("a\nnewValue\nc");
+	});
+
+	it("leaves === with no preceding verb as a no-op (guard preserves section header)", () => {
+		// `===` right after section header with no op — guard prevents
+		// popping the `[path#TAG]` header. The === is dropped; +X becomes
+		// an orphan payload (no op header) which errors on edit access.
+		const patch = Patch.parse("[foo.ts#ABCD]\n===\n+X");
+		expect(patch.sections).toHaveLength(1);
+		expect(patch.sections[0].path).toBe("foo.ts");
 	});
 
 	it("treats top-level `+TEXT` as an orphan literal payload", () => {
