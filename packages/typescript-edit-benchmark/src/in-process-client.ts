@@ -54,7 +54,7 @@ export async function discoverSharedInfra(options: DiscoverSharedInfraOptions = 
 		const modelRegistry = new ModelRegistry(authStorage);
 
 		// Initialize global Settings singleton (required by code paths that use the global `settings` proxy)
-		const overrides: Record<string, unknown> = {};
+		const overrides: Record<string, unknown> = { "advisor.enabled": false };
 		if (options.editVariant && options.editVariant !== "auto") {
 			overrides["edit.mode"] = options.editVariant;
 		}
@@ -98,7 +98,7 @@ export class InProcessClient {
 			modelRegistry: shared?.modelRegistry,
 			sessionManager: SessionManager.inMemory(this.#options.cwd),
 			systemPrompt: this.#options.appendSystemPrompt
-				? (defaultPrompt: string[]) => [...defaultPrompt, this.#options.appendSystemPrompt!]
+				? (_defaultPrompt: string[]) => [this.#options.appendSystemPrompt!]
 				: undefined,
 			toolNames: this.#options.tools ?? ["read", "edit", "write"],
 			hasUI: false,
@@ -112,6 +112,67 @@ export class InProcessClient {
 
 		this.#sessionResult = result;
 		this.#session = result.session;
+		// Force-exclude custom tools (generate_image, etc.) that createAgentSession
+		// force-includes via alwaysInclude, regardless of the toolNames filter.
+		// This rebuilds the system prompt without their descriptions, saving ~300 tokens.
+		await this.#session.setActiveToolsByName(this.#options.tools ?? ["read", "edit", "write"]);
+
+		// Disable structural summary for read tool — benchmark tasks need to see
+		// full file content with line numbers on the first read. The structural
+		// summary elides function bodies with `…`, forcing the model to re-read
+		// with a range selector (double-read pattern wastes ~2K-10K tokens on 003 tasks).
+		this.#session.settings.override("read.summarize.enabled", false);
+
+		// Strip irrelevant sections from the read tool's API description to save ~590
+		// tokens/turn. For a local file-edit benchmark, Documents/Images/Archives/SQLite/
+		// URLs/Internal-URIs sections are dead weight — the model only reads local source
+		// files. The proxy getter from applyToolProxy is configurable, so we shadow it.
+		const readTool = this.#session.agent.state.tools.find(t => t.name === "read");
+		if (readTool) {
+			const trimmed = readTool.description
+				.replace(/^Read files,[^\n]*\n/, "Read files and directories via one `path`.\n")
+				.replace(
+					/- `path` — required\.[^\n]*\n/,
+					"- `path` — required. Local path. Append `:<sel>` for ranges/modes (e.g. `src/foo.ts:50-200`, `src/foo.ts:raw`).\n",
+				)
+				.replace(
+					/- SHOULD use `read` \(not a browser tool\) for web content; browser only when `read` can't deliver\.\n/,
+					"",
+				)
+				.replace(/# Documents & Notebooks[\s\S]*?(?=<critical>)/, "")
+				// Structural summary is disabled in benchmark mode — remove its
+				// description so the model doesn't expect elided output or try to
+				// re-read elided ranges that will never appear.
+				.replace(/- Parseable code, no selector.*?re-issue ONLY those ranges\.\n/g, "")
+				.replace(/- Summary footer names elided ranges\?.*?NEVER guess.*?\n/g, "")
+				.replace(
+					/- _\(none\)_ — parseable code → structural summary;[^\n]*\n/,
+					"- _(none)_ — full file with line numbers + tag (up to 300 lines).\n",
+				)
+				.trim();
+			Object.defineProperty(readTool, "description", {
+				value: trimmed,
+				writable: true,
+				configurable: true,
+				enumerable: true,
+			});
+		}
+
+		// Strip archive/SQLite conditions from the write tool's description.
+		// Benchmark tasks never create archives or SQLite files (~40 tokens/turn saved).
+		const writeTool = this.#session.agent.state.tools.find(t => t.name === "write");
+		if (writeTool) {
+			const trimmed = writeTool.description
+				.replace(/- Supports \.tar.*\n/g, "")
+				.replace(/- Supports SQLite.*\n/g, "")
+				.trim();
+			Object.defineProperty(writeTool, "description", {
+				value: trimmed,
+				writable: true,
+				configurable: true,
+				enumerable: true,
+			});
+		}
 
 		// Subscribe to events and forward to listeners
 		this.#unsubscribe = this.#session.subscribe((event: AgentSessionEvent) => {

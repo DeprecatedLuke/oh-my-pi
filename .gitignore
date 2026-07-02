@@ -51,6 +51,7 @@ changes/
 __pycache__/
 
 # Scratch files
+tmp/
 syntax.jsonl
 out.jsonl
 out.html

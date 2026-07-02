@@ -169,11 +169,125 @@ function normalizeFallbackInput(input: string, options: SplitOptions): string {
 	return `${HL_FILE_PREFIX}${fallbackPath}${HL_FILE_SUFFIX}\n${input}`;
 }
 
-function splitRawSections(input: string, options: SplitOptions = {}): RawSection[] {
-	const stripped = stripLeadingBlankLines(normalizeFallbackInput(input, options));
-	const lines = stripped.split(/\r?\n/);
-	const firstLine = lines[0] ?? "";
+function splitMergedHeader(line: string): string[] {
+	// When the model writes `[path#TAG] OP` on one line (header + hunk
+	// header merged), split it into two lines so both parse normally.
+	// Common GLM-5.2 pattern: `[foo.ts#C123] SWAP 37.=37:`.
+	if (!line.startsWith(HL_FILE_PREFIX)) return [line];
+	const closeIdx = line.indexOf(HL_FILE_SUFFIX);
+	if (closeIdx <= 0) return [line];
+	const after = line.slice(closeIdx + 1).trim();
+	if (after.length === 0) return [line];
+	// Verify the bracket portion is a valid header (has #TAG).
+	const bracketPart = line.slice(0, closeIdx + 1);
+	const token = TOKENIZER.tokenize(bracketPart);
+	if (token.kind !== "header" || token.fileHash === undefined) return [line];
+	return [bracketPart, after];
+}
 
+/**
+ * GLM-5.2 sometimes omits the brackets around a section header, writing
+ * `path#TAG` instead of `[path#TAG]`. Detect this pattern (a filename
+ * followed by `#` and a 4-hex tag) and wrap it in brackets. Only fires
+ * for lines that don't already start with `[` — body lines are unaffected
+ * because they're inside a section and won't match the path#TAG pattern
+ * at the start of a line.
+ */
+function wrapMissingBrackets(line: string): string {
+	if (line.startsWith(HL_FILE_PREFIX)) return line;
+	// Don't fire on body rows (`+TEXT`) — they can contain `path#TAG` patterns.
+	if (line.startsWith("+")) return line;
+	// Match `path#hex4` where path looks like a file path and hex4 is 4 hex chars.
+	const trimmed = line.trimStart();
+	const match = /^(\S+\.\w+)\s*#\s*([0-9a-fA-F]{4})\s*$/.exec(trimmed);
+	if (match === null) return line;
+	return `[${match[1]}#${match[2]}]`;
+}
+/**
+ * GLM-5.2 often writes a bare range header `N.=M:` (or `N.=M`) without the
+ * required `SWAP` verb. Rather than failing and costing a retry, auto-prepend
+ * `SWAP` when the line is a bare range followed by body content (not another
+ * verb header). If the next non-blank line starts with `SWAP`/`DEL`/`INS`, the
+ * model already corrected itself — leave the bare range to surface its normal
+ * error so the model sees a clear diagnostic instead of a double-header conflict.
+ */
+function prependBareRangeVerb(lines: string[]): string[] {
+	// Bare range: `N.=M:` / `N.=M` — missing SWAP verb. Also accepts `:=` (GLM
+	// writes `N:=M:` instead of `N.=M:`) and a stray trailing dot (`N.=M.:`).
+	const BARE_RANGE_RE = /^\s*([1-9]\d*)\s*(?:[-. …=]+|:=)\s*([1-9]\d*)\s*\.?:?\s*$/;
+	// Misplaced verb: `N SWAP M:` — GLM puts SWAP between the numbers.
+	const MISPLACED_VERB_RE = /^\s*([1-9]\d*)\s+SWAP\s+([1-9]\d*)\s*:?\s*$/i;
+	const VERB_PREFIX = /^\s*(?:SWAP|DEL|INS)\b/i;
+	// Extract the range numbers from a verb header like `SWAP 45.=45:`.
+	const VERB_RANGE_RE = /^\s*(?:SWAP|DEL|INS)[^\d]*([1-9]\d*)\s*(?:[-. …=]+|:=)\s*([1-9]\d*)/i;
+	const result: string[] = [];
+	// Read-tool paste: `N:content` — the model copied a snapshot line.
+	const PASTE_LINE_RE = /^\s*([1-9]\d*):(.+)$/;
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		// Same-line paste+verb merge: `N:SWAP N.=N:` — the model pasted
+		// old content and wrote the verb header on the same line. Strip the
+		// `N:` prefix, keep just the verb header.
+		const sameLineMerge = PASTE_LINE_RE.exec(line);
+		if (sameLineMerge !== null && VERB_PREFIX.test(sameLineMerge[2])) {
+			result.push(sameLineMerge[2]);
+			continue;
+		}
+		// Check for read-tool paste followed by a verb header for the same
+		// line number — model pasted old content then wrote the correction
+		// below. Drop the paste so the verb header succeeds.
+		const pasteMatch = PASTE_LINE_RE.exec(line);
+		if (pasteMatch !== null) {
+			let j = i + 1;
+			while (j < lines.length && lines[j].trim().length === 0) j++;
+			if (j < lines.length) {
+				const verbMatch = VERB_RANGE_RE.exec(lines[j]);
+				if (verbMatch !== null && verbMatch[1] === pasteMatch[1]) {
+					continue; // skip the paste line, keep the verb header
+				}
+			}
+		}
+		const misplaced = MISPLACED_VERB_RE.exec(line);
+		const match = misplaced ?? BARE_RANGE_RE.exec(line);
+		if (match === null) {
+			result.push(line);
+			continue;
+		}
+		// Look ahead: skip blank lines to find the next content line.
+		let j = i + 1;
+		while (j < lines.length && lines[j].trim().length === 0) j++;
+		if (j < lines.length) {
+			const nextLine = lines[j];
+			// Model wrote both bare range AND verb header for the SAME range —
+			// drop the redundant bare range so the verb header succeeds cleanly.
+			const verbMatch = VERB_RANGE_RE.exec(nextLine);
+			if (verbMatch !== null && verbMatch[1] === match[1] && verbMatch[2] === match[2]) {
+				continue; // skip the bare range line
+			}
+			// Verb header for a DIFFERENT range — leave bare range to surface
+			// its normal error (clearer than double-header conflict).
+			if (VERB_PREFIX.test(nextLine)) {
+				result.push(line);
+				continue;
+			}
+		}
+		// Bare range followed by body — auto-prepend SWAP.
+		result.push(`SWAP ${match[1]}.=${match[2]}:`);
+	}
+	return result;
+}
+function splitRawSections(input: string, options: SplitOptions = {}): RawSection[] {
+	// Pre-split merged `[path#TAG] OP` lines into separate header/op lines
+	// before any parsing — normalizeFallbackInput and the first-line check both
+	// call parseHashlineHeaderLine which throws on merged headers.
+	const preSplit = input.startsWith("\uFEFF") ? input.slice(1) : input;
+	const rawInput = preSplit
+		.split(/\r?\n/)
+		.flatMap(line => splitMergedHeader(wrapMissingBrackets(line)))
+		.join("\n");
+	const stripped = stripLeadingBlankLines(normalizeFallbackInput(rawInput, options));
+	const lines = prependBareRangeVerb(stripped.split(/\r?\n/));
+	const firstLine = lines[0] ?? "";
 	if (parseHashlineHeaderLine(firstLine, options.cwd) === null) {
 		// Catch unified-diff hunk-header contamination on the first line so
 		// the model sees a focused error.

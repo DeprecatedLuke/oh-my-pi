@@ -71,6 +71,15 @@
 - Fixed an issue where snapshot tag collisions could cause line-anchored edits to be incorrectly applied to unrelated content, improving recovery and edit-preview safety.
 - Fixed tracking of edit anchors when earlier in-session insertions or deletions shift unchanged target lines.
 - Fixed hashline edit guidance and parsing errors for Markdown list rows.
+### Changed
+
+- Compressed the hashline prompt: merged three separate examples into one combined block, converted standalone file-op examples to a one-liner description (165 to 108 lines, ~170 tokens saved) without affecting edit success rate.
+- Auto-recover GLM-5.2 syntax errors at the text level before parsing: merged `[path#TAG] OP` headers split onto two lines (`splitMergedHeader`); bare range headers `N.=M:` auto-prepended with `SWAP` (`prependBareRangeVerb`); colon-equals separator `N:=M:`, stray trailing dot `N.=M.:`, misplaced verb `N SWAP M:`, and same-range/different-range double-header conflicts handled; read-tool paste lines `N:content` dropped when a verb header for the same line follows (reverse double-header drop); same-line paste+verb merge `N:SWAP N.=N:` stripped to `SWAP N.=N:`; missing brackets `path#TAG` wrapped to `[path#TAG]`.
+- Added directive error detection for apply_patch contamination: `N:content` paste without hunk header, truncated range `N.=`, range-with-content `N.=M:content`, bare `=` as range separator.
+
+### Fixed
+
+- Tolerated a stray `.` before the trailing `:` in hunk headers (e.g. `SWAP 2.=3.:`, `INS.POST 2.:`, `DEL 2.=3.`), recovering from GLM 5.2's tendency to insert an extra dot between the line number/range and the colon. The parser now skips the spurious dot so these headers parse correctly instead of failing with "payload line has no preceding hunk header."
 
 ## [16.2.8] - 2026-06-30
 

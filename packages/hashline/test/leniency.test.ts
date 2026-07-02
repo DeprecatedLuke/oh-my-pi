@@ -63,7 +63,6 @@ describe("hashline core — verb header forms", () => {
 	it("rejects a bare single-number hunk header with verb guidance", () => {
 		expect(() => parsePatch("2\n+B")).toThrow(/hunk headers need a verb/);
 	});
-
 	it("rejects a bare numeric range with verb guidance", () => {
 		expect(() => parsePatch("2 3\n+X")).toThrow(/Hunk headers need a verb/);
 	});
@@ -88,6 +87,7 @@ describe("hashline core — verb header forms", () => {
 		expect(applyPatch(FILE, "SWAP 2 3:\n+X")).toBe("a\nX\nd\ne");
 		expect(applyPatch(FILE, "SWAP 2..3:\n+X")).toBe("a\nX\nd\ne"); // legacy `..` still accepted
 		expect(applyPatch(FILE, "SWAP 2.=3\n+X")).toBe("a\nX\nd\ne"); // missing colon
+		expect(applyPatch(FILE, "SWAP 2=3:\n+X")).toBe("a\nX\nd\ne"); // bare `=` (GLM drops dot from `.=`)
 	});
 
 	it("accepts missing colon on insert headers", () => {
@@ -219,6 +219,103 @@ describe("hashline — apply_patch / unified-diff contamination", () => {
 
 	it("rejects unified-diff hunk headers as contamination", () => {
 		expect(() => parsePatch("@@ -1,3 +1,3 @@\nSWAP 2.=2:\n+X")).toThrow(/unified-diff hunk header/);
+	});
+
+	it("detects read-tool line-number prefix without hunk header", () => {
+		// Model pasted `38:if (foo)` — a read-tool snapshot line — without SWAP above
+		expect(() => parsePatch("38:if (foo)")).toThrow(/line 38 content was pasted without a hunk header/);
+		expect(() => parsePatch("45:  if (!pythonCmd) {")).toThrow(/Add `SWAP 45/);
+		// With a pending hunk, `N:content` is a bare body row (existing leniency), not contamination
+		expect(() => parsePatch("SWAP 2.=2:\n3:not_a_line_number_prefix")).not.toThrow(/pasted without a hunk header/);
+	});
+
+	it("detects truncated range header missing end number", () => {
+		// Model wrote `86.=` then body on next line — separator but no end number
+		expect(() => parsePatch("86.=\n+    const x = 1;")).toThrow(/truncated range .* missing the end line number/);
+		expect(() => parsePatch("86.=\n+X")).toThrow(/SWAP 86/);
+	});
+
+	it("detects bare range with inline content after colon", () => {
+		// Model wrote `5.=5:import {...}` — range header + body on same line, no verb
+		expect(() => parsePatch("5.=5:import { formatMoreItems } from '../tools/render-utils';")).toThrow(
+			/has content on the same line/,
+		);
+		expect(() => parsePatch("3.=3:const x = 1;")).toThrow(/Add `SWAP` before the range/);
+	});
+
+	it("splits merged `[path#TAG] OP` header onto separate lines", () => {
+		// Model wrote `[foo.ts#ABCD] SWAP 2.=2:` on one line — split into header + op
+		const patch = Patch.parse("[foo.ts#ABCD] SWAP 2.=2:\n+X");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits(FILE, patch.sections[0].edits).text).toBe("a\nX\nc\nd\ne");
+	});
+
+	it("wraps missing brackets around path#TAG header", () => {
+		// Model wrote `foo.ts#ABCD` without brackets — auto-wrap to [foo.ts#ABCD]
+		const patch = Patch.parse("foo.ts#ABCD\nSWAP 2.=2:\n+X");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits(FILE, patch.sections[0].edits).text).toBe("a\nX\nc\nd\ne");
+	});
+
+	it("does not wrap body rows that look like path#TAG", () => {
+		// Body row `+config.ts#ABCD` should NOT be wrapped in brackets
+		const patch = Patch.parse("[foo.ts#ABCD]\nSWAP 1.=1:\n++config.ts#ABCD");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits(FILE, patch.sections[0].edits).text).toBe("+config.ts#ABCD\nb\nc\nd\ne");
+	});
+
+	it("auto-prepends SWAP to bare range followed by body content", () => {
+		// Model wrote `2.=2:` then body — auto-recover to SWAP 2.=2:
+		const patch = Patch.parse("[foo.ts#ABCD]\n2.=2:\n+X");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits(FILE, patch.sections[0].edits).text).toBe("a\nX\nc\nd\ne");
+	});
+
+	it("auto-prepends SWAP to N:=M: pattern (colon-equals separator)", () => {
+		// Model wrote `2:=2:` — `:=` instead of `.=` — auto-recover to SWAP 2.=2:
+		const patch = Patch.parse("[foo.ts#ABCD]\n2:=2:\n+X");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits(FILE, patch.sections[0].edits).text).toBe("a\nX\nc\nd\ne");
+	});
+
+	it("auto-prepends SWAP to range with stray trailing dot (N.=M.:)", () => {
+		// Model wrote `2.=2.:` — stray dot before colon — auto-recover to SWAP 2.=2:
+		const patch = Patch.parse("[foo.ts#ABCD]\n2.=2.:\n+X");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits(FILE, patch.sections[0].edits).text).toBe("a\nX\nc\nd\ne");
+	});
+
+	it("auto-recovers misplaced verb (N SWAP M: → SWAP N.=M:)", () => {
+		// Model wrote `2 SWAP 2:` — verb between numbers — auto-recover to SWAP 2.=2:
+		const patch = Patch.parse("[foo.ts#ABCD]\n2 SWAP 2:\n+X");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits(FILE, patch.sections[0].edits).text).toBe("a\nX\nc\nd\ne");
+	});
+
+	it("drops read-tool paste when SWAP for same line follows", () => {
+		// Model wrote `2:old content` then `SWAP 2.=2:` — drop the paste, keep SWAP
+		const patch = Patch.parse("[foo.ts#ABCD]\n2:b\nSWAP 2.=2:\n+X");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits(FILE, patch.sections[0].edits).text).toBe("a\nX\nc\nd\ne");
+	});
+
+	it("strips N: prefix when paste and SWAP header are merged on one line", () => {
+		// Model wrote `2:SWAP 2.=2:` — paste + verb header on same line
+		const patch = Patch.parse("[foo.ts#ABCD]\n2:SWAP 2.=2:\n+X");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits(FILE, patch.sections[0].edits).text).toBe("a\nX\nc\nd\ne");
+	});
+
+	it("drops redundant bare range when next line is SWAP for the same range", () => {
+		// Model wrote both `2.=2:` AND `SWAP 2.=2:` — drop the bare range, keep SWAP
+		const patch = Patch.parse("[foo.ts#ABCD]\n2.=2:\nSWAP 2.=2:\n+X");
+		expect(patch.sections).toHaveLength(1);
+		expect(applyEdits(FILE, patch.sections[0].edits).text).toBe("a\nX\nc\nd\ne");
+	});
+
+	it("does not drop bare range when next line is verb for a DIFFERENT range", () => {
+		// Model wrote `2.=2:` then `SWAP 3.=3:` — different ranges, keep bare range error
+		expect(() => parsePatch("[foo.ts#ABCD]\n2.=2:\nSWAP 3.=3:\n+X")).toThrow(/bare range/);
 	});
 
 	it("treats top-level `+TEXT` as an orphan literal payload", () => {

@@ -184,6 +184,14 @@ function scanRangeSeparator(line: string, index: number, end: number): number | 
 				continue;
 			}
 		}
+		// GLM 5.2 sometimes drops the dot from `.=`, writing `N=M:` instead
+		// of `N.=M:`. A bare `=` is never valid at this position except as a
+		// range separator, so accept it as leniency.
+		if (code === CHAR_EQUALS) {
+			cursor++;
+			consumedSeparator = true;
+			continue;
+		}
 		break;
 	}
 	if (!consumedSeparator) return null;

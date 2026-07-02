@@ -304,6 +304,22 @@ async function collectOriginalFileContents(cwd: string, files: string[]): Promis
 	return originals;
 }
 
+async function checkFilesModified(cwd: string, files: string[], originalFiles: Map<string, string>): Promise<boolean> {
+	for (const file of files) {
+		const fullPath = path.join(cwd, file);
+		const original = originalFiles.get(fullPath);
+		if (original === undefined) continue;
+		try {
+			const current = await Bun.file(fullPath).text();
+			if (current !== original) return true;
+		} catch {
+			// File was deleted or is unreadable — that's a modification.
+			return true;
+		}
+	}
+	return false;
+}
+
 function buildMutationPreviewAgainstOriginal(original: string, current: string): string | null {
 	if (original === current) return null;
 
@@ -371,6 +387,7 @@ export interface PromptAttemptTelemetry {
 	eventCount: number;
 	toolExecutionStarts: number;
 	toolExecutionEnds: number;
+	toolNamesUsed: string[];
 	messageEnds: number;
 	lastEventType?: string;
 	recentEventTypes: string[];
@@ -416,15 +433,28 @@ export interface MutationIntentValidation {
 	lineNumber?: number;
 }
 
-function buildTimeoutRetryContext(telemetry: PromptAttemptTelemetry, retryNumber: number, retryLimit: number): string {
+function buildTimeoutRetryContext(
+	telemetry: PromptAttemptTelemetry,
+	retryNumber: number,
+	retryLimit: number,
+	fileModified: boolean,
+): string {
+	const toolSummary = telemetry.toolNamesUsed.length > 0 ? telemetry.toolNamesUsed.join(", ") : "none";
+	const editAttempted = telemetry.toolNamesUsed.some(isEditTool);
+	// Telemetry can miss edits that applied to disk before the timeout fired
+	// (the tool_execution_start event wasn't collected). If the file changed on
+	// disk, trust the filesystem over the event log.
+	const editLanded = editAttempted || fileModified;
 	return [
-		`Previous attempt timed out waiting for agent_end after ${telemetry.elapsedMs}ms.`,
-		`Observed events=${telemetry.eventCount}, tool_starts=${telemetry.toolExecutionStarts}, tool_ends=${telemetry.toolExecutionEnds}, message_ends=${telemetry.messageEnds}.`,
-		telemetry.lastEventType
-			? `Last event type: ${telemetry.lastEventType}.`
-			: "No events were observed before timeout.",
+		`Previous attempt timed out after ${telemetry.elapsedMs}ms.`,
+		`Tools used: ${toolSummary}. Edit was ${editLanded ? "applied" : "NOT attempted"}.`,
+		editLanded
+			? "An edit was applied to disk before the timeout fired. The file has been modified — do not assume it is unchanged."
+			: "You read the file but never called the edit tool. The file is unchanged — do not assume any prior edit succeeded.",
 		`Timeout retry ${retryNumber}/${retryLimit}: emit one minimal, concrete edit attempt quickly and stop.`,
-	].join("\n");
+	]
+		.filter(Boolean)
+		.join("\n");
 }
 
 const AUTH_FAILURE_RE =
@@ -1165,8 +1195,26 @@ async function runSingleTask(
 					if (err instanceof PromptTimeoutError) {
 						timeoutTelemetry = err.telemetry;
 						await logEvent({ type: "timeout", attempt: attempt + 1, telemetry: err.telemetry });
+						// A timed-out attempt's edit may have applied to disk before the
+						// timeout fired (the tool execution events weren't logged, but
+						// the write reached the filesystem). Verify before retrying.
+						const timeoutVerification = await verifyExpectedFiles(expectedDir, cwd);
+						if (timeoutVerification.success) {
+							patchApplied = false;
+							verificationPassed = true;
+							indentScore = timeoutVerification.indentScore;
+							formattedEquivalent = timeoutVerification.formattedEquivalent;
+							diffStats = timeoutVerification.diffStats;
+							break;
+						}
 						timeoutRetriesUsed += 1;
-						retryContext = buildTimeoutRetryContext(err.telemetry, timeoutRetriesUsed, maxTimeoutRetries);
+						const fileModified = await checkFilesModified(cwd, task.files, originalFiles);
+						retryContext = buildTimeoutRetryContext(
+							err.telemetry,
+							timeoutRetriesUsed,
+							maxTimeoutRetries,
+							fileModified,
+						);
 						if (timeoutRetriesUsed >= maxTimeoutRetries) {
 							error = `Timeout exhausted after ${maxTimeoutRetries} retries (last: ${err.telemetry.elapsedMs}ms, events=${err.telemetry.eventCount}, last_event=${err.telemetry.lastEventType ?? "none"})`;
 							await logEvent({
@@ -1310,12 +1358,26 @@ async function runSingleTask(
 					}
 				}
 
-				// Retry if the model didn't attempt any edit/write (read-only or no tool calls)
+				// Retry if the model didn't attempt any edit/write (read-only or no tool calls).
+				// But first check if the file is already correct — a previous timed-out
+				// attempt's edit may have applied successfully before the timeout fired.
 				const madeEditAttempt = toolStats.edit > 0 || toolStats.write > 0;
 				if (!madeEditAttempt && zeroToolRetries < noOpRetryLimit) {
+					const earlyVerification = await verifyExpectedFiles(expectedDir, cwd);
+					if (earlyVerification.success) {
+						patchApplied = false;
+						verificationPassed = true;
+						indentScore = earlyVerification.indentScore;
+						formattedEquivalent = earlyVerification.formattedEquivalent;
+						diffStats = earlyVerification.diffStats;
+						break;
+					}
 					zeroToolRetries++;
 					await logEvent({ type: "zero_tool_retry", attempt: attempt + 1, retryNumber: zeroToolRetries });
-					retryContext = `Previous attempt read files but made no edit attempt — you must use the edit or vim tool to apply the fix. Retry ${zeroToolRetries}/${noOpRetryLimit}.`;
+					const fileModified = await checkFilesModified(cwd, task.files, originalFiles);
+					retryContext = fileModified
+						? `Previous attempt's edit applied to disk but was not logged as a tool event. The file has been modified — check if the fix is already applied, and if not, make one minimal edit. Retry ${zeroToolRetries}/${noOpRetryLimit}.`
+						: `Previous attempt read files but made no edit attempt — you must use the edit or vim tool to apply the fix. Retry ${zeroToolRetries}/${noOpRetryLimit}.`;
 					attempt--; // Don't consume a regular attempt slot
 					continue;
 				}
@@ -1519,9 +1581,10 @@ async function collectPromptEvents(
 	const events: Array<{ type: string; [key: string]: unknown }> = [];
 	let unsubscribe: (() => void) | undefined;
 	const startedAt = Date.now();
-	let pendingRetry = false;
 	let toolExecutionStarts = 0;
 	let toolExecutionEnds = 0;
+	const toolNamesUsed: string[] = [];
+	let pendingRetry = false;
 	let messageEnds = 0;
 	let lastEventType: string | undefined;
 	const recentEventTypes: string[] = [];
@@ -1567,6 +1630,7 @@ async function collectPromptEvents(
 					eventCount: events.length,
 					toolExecutionStarts,
 					toolExecutionEnds,
+					toolNamesUsed: [...toolNamesUsed],
 					messageEnds,
 					lastEventType,
 					recentEventTypes: [...recentEventTypes],
@@ -1625,6 +1689,8 @@ async function collectPromptEvents(
 			}
 			if (typedEvent.type === "tool_execution_start") {
 				toolExecutionStarts += 1;
+				const name = (typedEvent as { toolName?: unknown }).toolName;
+				if (typeof name === "string") toolNamesUsed.push(name);
 			}
 			if (typedEvent.type === "tool_execution_end") {
 				toolExecutionEnds += 1;

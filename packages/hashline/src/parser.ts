@@ -76,7 +76,7 @@ const BARE_LITERAL_VALUE_RE = /^\s*(?:"[^"]*"|'[^']*'|[-+]?\d+(?:\.\d+)?)\s*,?\s
  */
 const MD_BULLET_ROW_RE = /^\s*- \S/;
 
-function detectApplyPatchContamination(text: string, _hasPending: boolean): string | null {
+function detectApplyPatchContamination(text: string, hasPending: boolean): string | null {
 	const trimmed = text.trimStart();
 	if (trimmed.length === 0) return null;
 	if (
@@ -116,6 +116,33 @@ function detectApplyPatchContamination(text: string, _hasPending: boolean): stri
 		return (
 			`bare range hunk header ${JSON.stringify(trimmed)} is not valid. ` +
 			`Hunk headers need a verb: write \`SWAP ${bareRange[1]}${HL_RANGE_SEP}${bareRange[2]}:\` or \`DEL ${bareRange[1]}${HL_RANGE_SEP}${bareRange[2]}\`.`
+		);
+	}
+	// Detect truncated range: `86.=` — number + separator but no end number.
+	const truncatedRange = /^([1-9]\d*)\s*[-. …=]+\s*$/.exec(trimmed);
+	if (truncatedRange !== null) {
+		return (
+			`truncated range ${JSON.stringify(trimmed)} is missing the end line number. ` +
+			`Write \`SWAP ${truncatedRange[1]}${HL_RANGE_SEP}${truncatedRange[1]}:\` followed by the replacement lines.`
+		);
+	}
+	// Detect bare range with inline content: `5.=5:import {…}` — the model
+	// wrote a range header and body on the same line without a verb.
+	const rangeWithContent = /^([1-9]\d*)\s*[-. …=]+\s*([1-9]\d*):\s*(.+)$/.exec(trimmed);
+	if (rangeWithContent !== null && !hasPending) {
+		return (
+			`range header \`${rangeWithContent[1]}${HL_RANGE_SEP}${rangeWithContent[2]}:\` has content on the same line. ` +
+			`Add \`SWAP\` before the range and put the content on the next line: \`SWAP ${rangeWithContent[1]}${HL_RANGE_SEP}${rangeWithContent[2]}:\`.`
+		);
+	}
+	// Detect read-tool line-number prefix: `38:if (foo)` — the model copied
+	// a snapshot output line (format `N:content`) and forgot to add a hunk
+	// header above it. Give a directive error pointing to the fix.
+	const lineNumberPrefix = /^([1-9]\d*):(.+)$/.exec(trimmed);
+	if (lineNumberPrefix !== null && !hasPending) {
+		return (
+			`line ${lineNumberPrefix[1]} content was pasted without a hunk header. ` +
+			`Add \`SWAP ${lineNumberPrefix[1]}${HL_RANGE_SEP}${lineNumberPrefix[1]}:\` on the line above, then the body rows below.`
 		);
 	}
 	return null;
