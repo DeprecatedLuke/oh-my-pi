@@ -449,8 +449,8 @@ function buildTimeoutRetryContext(
 		`Previous attempt timed out after ${telemetry.elapsedMs}ms.`,
 		`Tools used: ${toolSummary}. Edit was ${editLanded ? "applied" : "NOT attempted"}.`,
 		editLanded
-			? "An edit was applied to disk before the timeout fired. The file has been modified — do not assume it is unchanged."
-			: "You read the file but never called the edit tool. The file is unchanged — do not assume any prior edit succeeded.",
+			? "An edit was applied to disk before the timeout fired. The file is modified — do not re-read, do not verify. Your context already has the file content. Emit one different edit to fix the remaining issue."
+			: "You read the file but never called the edit tool. The file is unchanged — do not re-read. Emit one edit now.",
 		`Timeout retry ${retryNumber}/${retryLimit}: emit one minimal, concrete edit attempt quickly and stop.`,
 	]
 		.filter(Boolean)
@@ -1376,7 +1376,7 @@ async function runSingleTask(
 					await logEvent({ type: "zero_tool_retry", attempt: attempt + 1, retryNumber: zeroToolRetries });
 					const fileModified = await checkFilesModified(cwd, task.files, originalFiles);
 					retryContext = fileModified
-						? `Previous attempt's edit applied to disk but was not logged as a tool event. The file has been modified — check if the fix is already applied, and if not, make one minimal edit. Retry ${zeroToolRetries}/${noOpRetryLimit}.`
+						? `Previous attempt's edit was applied to disk but the fix is incorrect. Do not re-read — the file content is already in your context. Make one different edit to fix the remaining issue. Retry ${zeroToolRetries}/${noOpRetryLimit}.`
 						: `Previous attempt read files but made no edit attempt — you must use the edit or vim tool to apply the fix. Retry ${zeroToolRetries}/${noOpRetryLimit}.`;
 					attempt--; // Don't consume a regular attempt slot
 					continue;
