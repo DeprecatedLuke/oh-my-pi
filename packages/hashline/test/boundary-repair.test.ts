@@ -599,6 +599,30 @@ describe("boundary-balance repair", () => {
 		expect(text).toBe(["const log = createLog(`", "prefix", "`);", "const obj = {", "\ta: 2", "};"].join("\n"));
 		expect(warnings.filter(warning => /structural closing line/.test(warning))).toHaveLength(1);
 	});
+	// GLM 5.2 pattern: the model wrote SWAP N.=N: +<line N+1> when it meant
+	// DEL N — the entire payload restates the surviving line just below the
+	// range, creating a duplicate. The repair converts this to an effective
+	// deletion and warns the model to use DEL instead.
+	it("repairs a SWAP-where-DEL: single-line payload restating the line below", () => {
+		const file = ["use spin::Mutex;", "use wherror::Error;", "use stompy::core;"].join("\n");
+		const diff = ["SWAP 1.=1:", "+use wherror::Error;"].join("\n");
+
+		const { text, warnings } = apply(file, diff);
+
+		expect(text).toBe(["use wherror::Error;", "use stompy::core;"].join("\n"));
+		expect(text.split("\n").filter(l => l === "use wherror::Error;")).toHaveLength(1);
+		expect(warnings.some(warning => /SWAP-where-DEL/.test(warning))).toBe(true);
+	});
+
+	it("repairs a SWAP-where-DEL with multi-line payload fully restating lines below", () => {
+		const file = ["use old::A;", "use new::B;", "use new::C;"].join("\n");
+		const diff = ["SWAP 1.=1:", "+use new::B;", "+use new::C;"].join("\n");
+
+		const { text, warnings } = apply(file, diff);
+
+		expect(text).toBe(["use new::B;", "use new::C;"].join("\n"));
+		expect(warnings.some(warning => /SWAP-where-DEL/.test(warning))).toBe(true);
+	});
 });
 
 describe("boundary-balance repair through stale-snapshot recovery", () => {

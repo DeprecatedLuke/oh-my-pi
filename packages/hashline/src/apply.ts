@@ -718,22 +718,36 @@ function describeBoundaryRepair(group: ReplacementGroup, action: string): string
 function findOneSidedBoundaryEcho(
 	group: ReplacementGroup,
 	fileLines: readonly string[],
-): { side: "leading" | "trailing"; count: number } | undefined {
+): { side: "leading" | "trailing"; count: number; fullPayload?: boolean } | undefined {
 	const leading = countDuplicateLeadingBoundaryLines(group, fileLines);
 	const trailing = countDuplicateTrailingBoundaryLines(group, fileLines);
 	if (leading > 0 === trailing > 0) return undefined;
 	const side = leading > 0 ? "leading" : "trailing";
 	const count = leading > 0 ? leading : trailing;
-	if (count >= group.payload.length) return undefined;
+	// Full-payload trailing echo on a single-line range: the model wrote
+	// SWAP N.=N: +<line N+1> when it meant DEL N. The entire payload restates
+	// the surviving line just below the range — no new content, so the
+	// replacement is always a boundary mistake, not an intentional duplicate.
+	const fullPayloadTrailingEcho =
+		side === "trailing" && count === group.payload.length && group.deleteIndices.length === 1;
+	if (count >= group.payload.length && !fullPayloadTrailingEcho) return undefined;
 	const echoLines =
 		side === "leading" ? group.payload.slice(0, count) : group.payload.slice(group.payload.length - count);
 	if (!balanceIsZero(computeDelimiterBalance(echoLines))) return undefined;
-	if (group.deleteIndices.length <= 1) {
+	if (group.deleteIndices.length <= 1 && !fullPayloadTrailingEcho) {
 		if (side !== "trailing" || !echoLines.every(isStructuralCloserLine)) return undefined;
 		const payloadPrefix = group.payload.slice(0, group.payload.length - count);
 		if (payloadHasJsxOpenerForEcho(payloadPrefix, echoLines)) return undefined;
 	}
-	return { side, count };
+	return { side, count, fullPayload: fullPayloadTrailingEcho };
+}
+
+function describeSwapWhereDelRepair(group: ReplacementGroup): string {
+	return (
+		`Auto-repaired a SWAP-where-DEL at line ${group.startLine}: ` +
+		`the entire payload restated the surviving line just below the range. ` +
+		`Use \`DEL N\` to delete a line — never \`SWAP N.=N:\` with the content of an adjacent line.`
+	);
 }
 
 function describeOneSidedEchoRepair(group: ReplacementGroup, side: "leading" | "trailing", count: number): string {
@@ -876,7 +890,9 @@ function repairReplacementBoundaries(
 				slots.push({
 					kind: "edits",
 					edits: [...trimmed, ...deletes],
-					warning: describeOneSidedEchoRepair(group, oneSided.side, oneSided.count),
+					warning: oneSided.fullPayload
+						? describeSwapWhereDelRepair(group)
+						: describeOneSidedEchoRepair(group, oneSided.side, oneSided.count),
 				});
 				continue;
 			}
