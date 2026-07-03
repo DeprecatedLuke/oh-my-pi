@@ -299,7 +299,10 @@ const defaultFixRefusalClock: FixRefusalUiClock = {
  * Build a live TUI progress block: a single growing dim text panel plus a
  * spinner working-message, so the full refusal-fix run stays visible.
  */
-export function createTuiFixRefusalUi(ctx: InteractiveModeContext, clock: FixRefusalUiClock = defaultFixRefusalClock): TuiFixRefusalUi {
+export function createTuiFixRefusalUi(
+	ctx: InteractiveModeContext,
+	clock: FixRefusalUiClock = defaultFixRefusalClock,
+): TuiFixRefusalUi {
 	const lines: string[] = [];
 	let panel: Text | undefined;
 	const render = () => {
