@@ -2119,7 +2119,14 @@ export const CLINEPASS_STATIC_MODELS: readonly ModelSpec<"openai-completions">[]
 		["text", "image"],
 		CLINEPASS_EFFORTS,
 	),
-	createClinepassStaticModel("kimi-k2.6", "Kimi K2.6 (ClinePass)", 262144, 65536, ["text"], CLINEPASS_EFFORTS),
+	createClinepassStaticModel(
+		"kimi-k2.6",
+		"Kimi K2.6 (ClinePass)",
+		262144,
+		65536,
+		["text", "image"],
+		CLINEPASS_EFFORTS,
+	),
 	createClinepassStaticModel(
 		"deepseek-v4-pro",
 		"DeepSeek V4 Pro (ClinePass)",
@@ -2136,7 +2143,14 @@ export const CLINEPASS_STATIC_MODELS: readonly ModelSpec<"openai-completions">[]
 		["text"],
 		CLINEPASS_EFFORTS,
 	),
-	createClinepassStaticModel("mimo-v2.5", "MiMo V2.5 (ClinePass)", 262144, 128000, ["text"], CLINEPASS_MIMO_EFFORTS),
+	createClinepassStaticModel(
+		"mimo-v2.5",
+		"MiMo V2.5 (ClinePass)",
+		1_048_576,
+		128000,
+		["text", "image"],
+		CLINEPASS_MIMO_EFFORTS,
+	),
 	createClinepassStaticModel(
 		"mimo-v2.5-pro",
 		"MiMo V2.5 Pro (ClinePass)",
@@ -2152,7 +2166,7 @@ export const CLINEPASS_STATIC_MODELS: readonly ModelSpec<"openai-completions">[]
 		"Qwen3.7 Plus (ClinePass)",
 		1_000_000,
 		65536,
-		["text"],
+		["text", "image"],
 		CLINEPASS_EFFORTS,
 	),
 ];

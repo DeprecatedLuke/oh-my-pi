@@ -13630,7 +13630,8 @@
 			"baseUrl": "https://api.cline.bot/api/v1",
 			"reasoning": true,
 			"input": [
-				"text"
+				"text",
+				"image"
 			],
 			"cost": {
 				"input": 0,
@@ -13703,7 +13704,8 @@
 			"baseUrl": "https://api.cline.bot/api/v1",
 			"reasoning": true,
 			"input": [
-				"text"
+				"text",
+				"image"
 			],
 			"cost": {
 				"input": 0,
@@ -13711,7 +13713,7 @@
 				"cacheRead": 0,
 				"cacheWrite": 0
 			},
-			"contextWindow": 262144,
+			"contextWindow": 1048576,
 			"maxTokens": 128000,
 			"thinking": {
 				"mode": "effort",
@@ -13719,12 +13721,7 @@
 					"low",
 					"medium",
 					"high"
-				],
-				"effortMap": {
-					"low": "low",
-					"medium": "medium",
-					"high": "high"
-				}
+				]
 			}
 		},
 		"mimo-v2.5-pro": {
@@ -13751,12 +13748,7 @@
 					"low",
 					"medium",
 					"high"
-				],
-				"effortMap": {
-					"low": "low",
-					"medium": "medium",
-					"high": "high"
-				}
+				]
 			}
 		},
 		"minimax-m3": {
@@ -13839,7 +13831,8 @@
 			"baseUrl": "https://api.cline.bot/api/v1",
 			"reasoning": true,
 			"input": [
-				"text"
+				"text",
+				"image"
 			],
 			"cost": {
 				"input": 0,
