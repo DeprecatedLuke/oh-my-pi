@@ -178,6 +178,15 @@ const MIMO_REASONING_EFFORT_MAP: NonNullable<OpenAICompat["reasoningEffortMap"]>
 	xhigh: "high",
 };
 
+/** ClinePass accepts the standard OpenAI effort ladder through `xhigh` and rejects `max`. */
+const CLINEPASS_REASONING_EFFORT_MAP: NonNullable<OpenAICompat["reasoningEffortMap"]> = {
+	minimal: "minimal",
+	low: "low",
+	medium: "medium",
+	high: "high",
+	xhigh: "xhigh",
+};
+
 function mergeModelReasoningEffortMap(
 	compat: ResolvedOpenAISharedCompat,
 	modelId: string,
@@ -272,6 +281,11 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 	const hostModel = { provider, baseUrl };
 
 	const isCerebras = modelMatchesHost(hostModel, "cerebras");
+	// ClinePass fronts many upstream vendors (GLM, DeepSeek, Kimi, Qwen, MiMo,
+	// MiniMax) behind one OpenAI-compatible gateway. Gate its compat on the host
+	// so the per-vendor id-family remaps (which key off the bare model id) do not
+	// mis-shape ClinePass requests.
+	const isClinePass = modelMatchesHost(hostModel, "clinepass");
 	const isZai = modelMatchesHost(hostModel, "zai");
 	const isZhipu = modelMatchesHost(hostModel, "zhipu");
 	const supportsZaiReasoningEffort = (isZai || isZhipu) && isGlm52ReasoningEffortModelId(spec.id);
@@ -429,21 +443,31 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 			? "firepass"
 			: provider === "fireworks"
 				? "fireworks"
+				: isClinePass
+					? "clinepass"
+					: isOpenRouter
+						? "openrouter"
+						: "raw";
+	const thinkingFormat: ResolvedOpenAISharedCompat["thinkingFormat"] =
+		// ClinePass is a uniform OpenAI-compatible gateway: it drives reasoning
+		// through plain `reasoning_effort` for every backend (including the Qwen
+		// SKUs) and merely tolerates the Qwen `enable_thinking` params without
+		// needing them (verified live). Pin `openai` so the Qwen models keep the
+		// full `xhigh` effort ladder ClinePass accepts, and no vendor-specific
+		// thinking fields are emitted.
+		isClinePass
+			? "openai"
+			: isZai || isZhipu || (isMoonshotKimi && !isMoonshotKimiK3) || isXiaomiMimo
+				? "zai"
 				: isOpenRouter
 					? "openrouter"
-					: "raw";
-	const thinkingFormat: ResolvedOpenAISharedCompat["thinkingFormat"] =
-		(isMoonshotKimi && !isMoonshotKimiK3) || isZai || isZhipu || isXiaomiMimo
-			? "zai"
-			: isOpenRouter
-				? "openrouter"
-				: isQwen && isNvidiaNim
-					? "qwen-chat-template"
-					: isQwen && isFireworks
-						? "openai"
-						: isAlibaba || isQwen
-							? "qwen"
-							: "openai";
+					: isQwen && isNvidiaNim
+						? "qwen-chat-template"
+						: isQwen && isFireworks
+							? "openai"
+							: isAlibaba || isQwen
+								? "qwen"
+								: "openai";
 
 	const compat: ResolvedOpenAICompat = {
 		supportsStore: !isNonStandard,
@@ -461,7 +485,7 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		// OpenAI proprietary reasoning models (o-series, gpt-5+) reject explicit
 		// temperature/top_p/… with a 400 on every serving host (#5606).
 		supportsSamplingParams: !isOpenAISamplingRestrictedModelId(spec.id),
-		reasoningEffortMap: {},
+		reasoningEffortMap: isClinePass ? CLINEPASS_REASONING_EFFORT_MAP : {},
 		supportsUsageInStreaming: !isCerebras,
 		// pi-ai's thinking-loop guard is gemini-only; default the flag from the
 		// family classifier so OpenAI-compat proxies serving Gemini are covered.
@@ -502,7 +526,9 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		includeEncryptedReasoning: true,
 		filterReasoningHistory: isOpenRouter && isAnthropicModel,
 		thinkingKeep: usesMoonshotKimiPreservedThinking ? "all" : undefined,
-		reasoningContentField: "reasoning_content",
+		// ClinePass streams chain-of-thought in `delta.reasoning` (OpenRouter-style),
+		// not the OpenAI-compat default `delta.reasoning_content` (verified live).
+		reasoningContentField: isClinePass ? "reasoning" : "reasoning_content",
 		// Backends that 400 follow-up requests when prior assistant tool-call turns lack `reasoning_content`:
 		//   - Kimi: documented invariant on its native API.
 		//   - DeepSeek-family reasoning models, including aliased OpenCode Zen models
