@@ -31,6 +31,7 @@ import { PROVIDER_DESCRIPTORS } from "../src/provider-models/descriptors";
 import {
 	ALIBABA_TOKEN_PLAN_STATIC_MODELS,
 	ANTHROPIC_CURATED_FALLBACK_MODELS,
+	buildClinepassSeed,
 	buildFireworksFastSeed,
 	buildXaiOAuthStaticSeed,
 	clampFireworksKimiMaxTokens,
@@ -578,6 +579,12 @@ async function generateModels() {
 	// surfaces them; the seed projects each base entry into a fast variant.
 	// Deduped behind any identical previous-snapshot entry.
 	allModels.push(...buildFireworksFastSeed());
+	// Seed the curated ClinePass catalog. ClinePass has no `/v1/models` endpoint
+	// (discovery 404s) and its descriptor deliberately omits `catalogDiscovery`,
+	// so the generator never fetches it; this seed is the source of truth and
+	// makes a credential-free regen reproduce the ten models. Deduped behind any
+	// identical previous-snapshot entry.
+	allModels.push(...buildClinepassSeed());
 
 	const specialDiscoverySources = [
 		{ label: "Antigravity", providerId: "google-antigravity", authoritative: false, fetch: fetchAntigravityModels },
