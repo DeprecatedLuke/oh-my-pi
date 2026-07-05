@@ -451,6 +451,7 @@ export function clearAnthropicFastModeFallback(
 	}
 }
 
+
 function hasStrictAnthropicTools(params: MessageCreateParamsStreaming): boolean {
 	return params.tools?.some(tool => tool.strict === true) ?? false;
 }
