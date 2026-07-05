@@ -487,7 +487,14 @@ export function buildOpenAICompat(spec: ModelSpec<"openai-completions">): Resolv
 		// OpenAI proprietary reasoning models (o-series, gpt-5+) reject explicit
 		// temperature/top_p/… with a 400 on every serving host (#5606).
 		supportsSamplingParams: !isOpenAISamplingRestrictedModelId(spec.id),
-		reasoningEffortMap: isClinePass ? CLINEPASS_REASONING_EFFORT_MAP : {},
+		// ClinePass MiMo SKUs retain the model's low/medium/high clamp; other
+		// ClinePass models use the gateway's identity ladder through xhigh.
+		reasoningEffortMap:
+			isClinePass && !isMimoReasoningEffortModel
+				? CLINEPASS_REASONING_EFFORT_MAP
+				: isMimoReasoningEffortModel
+					? MIMO_REASONING_EFFORT_MAP
+					: {},
 		supportsUsageInStreaming: !isCerebras,
 		// pi-ai's thinking-loop guard is gemini-only; default the flag from the
 		// family classifier so OpenAI-compat proxies serving Gemini are covered.
