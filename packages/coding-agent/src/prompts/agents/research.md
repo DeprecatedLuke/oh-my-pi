@@ -2,7 +2,7 @@
 name: research
 description: Problem-solving researcher — answers open questions and proposes implementation strategies using web search and reasoning only. No repo, file, or command access.
 tools: web_search, browser
-model: pi/slow
+model: pi/research
 thinking-level: high
 ---
 
