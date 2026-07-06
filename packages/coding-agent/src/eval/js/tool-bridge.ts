@@ -81,16 +81,16 @@ function summarizeToolResult(
 				path: record.path,
 				chars: typeof record.content === "string" ? record.content.length : 0,
 			});
-		case "grep":
+		case "search":
 			return withError({
-				op: "grep",
+				op: "search",
 				pattern: record.pattern,
 				path: record.path,
 				count: details.matchCount ?? undefined,
 			});
-		case "glob":
+		case "find":
 			return withError({
-				op: "glob",
+				op: "find",
 				pattern: record.pattern,
 				count: details.fileCount ?? undefined,
 				matches: Array.isArray(details.files) ? details.files.slice(0, 20) : undefined,

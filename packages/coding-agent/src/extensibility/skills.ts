@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
-import { getProjectDir, prompt } from "@oh-my-pi/pi-utils";
+import { getProjectDir } from "@oh-my-pi/pi-utils";
 import {
 	isValidManagedSkillName,
 	MANAGED_SKILLS_PROVIDER_ID,
@@ -11,8 +11,6 @@ import type { SourceMeta } from "../capability/types";
 import type { SkillsSettings } from "../config/settings";
 import { type Skill as CapabilitySkill, loadCapability } from "../discovery";
 import { compareSkillOrder, scanSkillsFromDir } from "../discovery/helpers";
-import autoloadTemplate from "../prompts/skills/autoload.md" with { type: "text" };
-import userInvocationTemplate from "../prompts/skills/user-invocation.md" with { type: "text" };
 import type { SkillPromptDetails } from "../session/messages";
 import { expandTilde } from "../tools/path-utils";
 export interface Skill {
@@ -190,18 +188,12 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	const disabledSkillNames = new Set(
 		(disabledExtensions ?? []).filter(id => id.startsWith("skill:")).map(id => id.slice(6)),
 	);
-	// Select authored skills from the pre-dedup superset. `loadCapability`
-	// dedupes before source toggles, so a disabled high-priority provider must
-	// not hide an enabled lower-priority provider with the same skill name.
-	const seenAuthoredSkillNames = new Set<string>();
-	const filteredSkills = result.all.filter(capSkill => {
-		if (capSkill._source.provider === MANAGED_SKILLS_PROVIDER_ID) return false;
+	// Filter skills by source and patterns first
+	const filteredSkills = result.items.filter(capSkill => {
 		if (disabledSkillNames.has(capSkill.name)) return false;
 		if (!isSourceEnabled(capSkill._source)) return false;
 		if (matchesIgnorePatterns(capSkill.name)) return false;
 		if (!matchesIncludePatterns(capSkill.name)) return false;
-		if (seenAuthoredSkillNames.has(capSkill.name)) return false;
-		seenAuthoredSkillNames.add(capSkill.name);
 		return true;
 	});
 
@@ -219,6 +211,9 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	// Process skills with resolved paths
 	for (let i = 0; i < filteredSkills.length; i++) {
 		const capSkill = filteredSkills[i];
+		// Managed (auto-learn) skills are resolved dead-last (below) so any
+		// authored skill of the same name — from ANY provider or custom dir — wins.
+		if (capSkill._source.provider === MANAGED_SKILLS_PROVIDER_ID) continue;
 		const resolvedPath = realPaths[i];
 
 		// Skip silently if we've already loaded this exact file (via symlink)
@@ -466,39 +461,18 @@ function startsWithLocalExecutionPrefix(trimmedStart: string): boolean {
 	return next === 32 /* space */ || next === 9 /* tab */ || next === 10 /* LF */ || next === 13 /* CR */;
 }
 
-export type SkillInvocationKind = "user" | "autoload";
-
 export async function buildSkillPromptMessage(
-	skill: Pick<Skill, "name" | "filePath" | "baseDir">,
+	skill: Pick<Skill, "name" | "filePath">,
 	args: string,
-	invocation: SkillInvocationKind = "user",
 ): Promise<BuiltSkillPromptMessage> {
 	const content = await Bun.file(skill.filePath).text();
 	const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
+	const metaLines = [`Skill: ${skill.filePath}`];
 	const trimmedArgs = args.trim();
-	let message: string;
-	if (invocation === "user") {
-		// User-invoked skills announce themselves and expose their skill directory
-		// so the model resolves the skill's own relative paths (scripts/, templates/).
-		message = prompt
-			.render(userInvocationTemplate, {
-				name: skill.name,
-				body,
-				baseDir: skill.baseDir,
-				userArgs: trimmedArgs || undefined,
-			})
-			.trim();
-	} else {
-		// Autoload skills are hidden, non-user context — they MUST NOT claim the
-		// user invoked them; this keeps the minimal provenance-only format.
-		message = prompt
-			.render(autoloadTemplate, {
-				body,
-				filePath: skill.filePath,
-				userArgs: trimmedArgs || undefined,
-			})
-			.trim();
+	if (trimmedArgs) {
+		metaLines.push(`User: ${trimmedArgs}`);
 	}
+	const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
 	return {
 		message,
 		details: {

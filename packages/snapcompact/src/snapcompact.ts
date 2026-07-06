@@ -1542,6 +1542,20 @@ export function frames(text: string, options?: Pick<RenderManyOptions, "shape" |
 // Archive helpers
 // ============================================================================
 
+/**
+ * A frame's `data` must be well-formed standard base64 (every char in the
+ * base64 alphabet, length a multiple of 4). A historical egress-obfuscation
+ * bug could splice a `#…#` secret placeholder into a kept frame's bytes
+ * (frames in `preserveData` lacked a `type` field the scrubber's skip keyed
+ * on); the result is unrecoverable garbage that trips a provider `400` on
+ * `image.source.base64` on every replay. Such frames are dropped here so a
+ * once-poisoned archive heals instead of bricking the session forever.
+ */
+const FRAME_BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+function isValidFrameData(data: string): boolean {
+	return data.length % 4 === 0 && FRAME_BASE64_RE.test(data);
+}
+
 /** Validate and extract a persisted frame archive from `preserveData`. */
 export function getPreservedArchive(preserveData: Record<string, unknown> | undefined): Archive | undefined {
 	const candidate = preserveData?.[PRESERVE_KEY];
@@ -1556,7 +1570,8 @@ export function getPreservedArchive(preserveData: Record<string, unknown> | unde
 					typeof frame.mimeType === "string" &&
 					typeof frame.cols === "number" &&
 					typeof frame.rows === "number" &&
-					typeof frame.chars === "number",
+					typeof frame.chars === "number" &&
+					isValidFrameData(frame.data),
 			)
 		: [];
 	const text = typeof archive.text === "string" && archive.text.length > 0 ? archive.text : undefined;

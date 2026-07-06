@@ -629,7 +629,7 @@ export class Agent {
 	 * inlining). Exposed so derived one-shot runs (knowledge pass) can reuse the
 	 * parent's exact transform and keep the prompt-cache prefix warm.
 	 */
-	get transformProviderContext(): ((context: Context, model: Model) => Context) | undefined {
+	get transformProviderContext(): ((context: Context, model: Model) => Context | Promise<Context>) | undefined {
 		return this.#transformProviderContext;
 	}
 

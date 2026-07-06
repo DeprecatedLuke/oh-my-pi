@@ -513,6 +513,24 @@ export class TranscriptContainer
 		this.#stableRowsFloor = Math.min(stableFloorBefore, stableRows, row);
 		return lines;
 	}
+
+	/**
+	 * Whether `component` sits below a still-mutating block — i.e. inside the
+	 * live region, where its rows cannot have been committed to native
+	 * scrollback yet (commits are prefix-only and stop at the first
+	 * still-live block). Callers that retract ephemeral blocks (IRC cards)
+	 * must check this: removing a block whose rows may already be in history
+	 * is an interior deletion of the committed prefix, which the engine can
+	 * only repair by recommitting everything below it — duplication.
+	 */
+	isWithinLiveRegion(component: Component): boolean {
+		const index = this.children.indexOf(component);
+		if (index < 0) return false;
+		for (let i = 0; i < index; i++) {
+			if (!isBlockFinalized(this.children[i]!)) return true;
+		}
+		return false;
+	}
 }
 
 /**

@@ -24,9 +24,6 @@ export interface ObservableSession {
 	progress?: AgentProgress;
 }
 
-/** Coarse source of an observer change; callers use it to separate lifecycle work from high-frequency progress. */
-export type SessionObserverChangeKind = "main" | "reset" | "lifecycle" | "progress";
-
 const STATUS_MAP: Record<string, ObservableSession["status"]> = {
 	started: "active",
 	completed: "completed",
@@ -36,20 +33,20 @@ const STATUS_MAP: Record<string, ObservableSession["status"]> = {
 
 export class SessionObserverRegistry {
 	#sessions = new Map<string, ObservableSession>();
-	#listeners = new Set<(kind: SessionObserverChangeKind) => void>();
+	#listeners = new Set<() => void>();
 	#eventBusUnsubscribers: Array<() => void> = [];
 	#sortOrderById = new Map<string, number>();
 	#parentSortOrderById = new Map<string, number>();
 	#nextSortOrder = 0;
 
 	/** Add a change listener. Returns unsubscribe function. */
-	onChange(cb: (kind: SessionObserverChangeKind) => void): () => void {
+	onChange(cb: () => void): () => void {
 		this.#listeners.add(cb);
 		return () => this.#listeners.delete(cb);
 	}
 
-	#notifyListeners(kind: SessionObserverChangeKind): void {
-		for (const cb of this.#listeners) cb(kind);
+	#notifyListeners(): void {
+		for (const cb of this.#listeners) cb();
 	}
 
 	#ensureSortOrder(id: string): number {
@@ -88,7 +85,7 @@ export class SessionObserverRegistry {
 			sessionFile: sessionFile ?? existing?.sessionFile,
 			lastUpdate: Date.now(),
 		});
-		this.#notifyListeners("main");
+		this.#notifyListeners();
 	}
 
 	getSessions(): ObservableSession[] {
@@ -124,7 +121,7 @@ export class SessionObserverRegistry {
 		this.#sortOrderById.clear();
 		this.#parentSortOrderById.clear();
 		this.#nextSortOrder = 0;
-		this.#notifyListeners("reset");
+		this.#notifyListeners();
 	}
 
 	dispose(): void {
@@ -174,7 +171,7 @@ export class SessionObserverRegistry {
 						lastUpdate: Date.now(),
 					});
 				}
-				this.#notifyListeners("lifecycle");
+				this.#notifyListeners();
 			}),
 		);
 
@@ -211,7 +208,7 @@ export class SessionObserverRegistry {
 						progress,
 					});
 				}
-				this.#notifyListeners("progress");
+				this.#notifyListeners();
 			}),
 		);
 	}

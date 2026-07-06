@@ -183,6 +183,7 @@ export class SelectorController {
 						const result = await previewTheme(themeName);
 						if (result.success) {
 							this.ctx.statusLine.invalidate();
+							this.ctx.updateEditorTopBorder();
 							this.ctx.ui.invalidate();
 							this.ctx.ui.requestRender();
 						}
@@ -200,6 +201,7 @@ export class SelectorController {
 							compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
 							...previewSettings,
 						});
+						this.ctx.updateEditorTopBorder();
 						this.ctx.ui.requestRender();
 					},
 					getStatusLinePreview: () => {
@@ -228,6 +230,7 @@ export class SelectorController {
 							transparent: settings.get("statusLine.transparent"),
 							compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
 						});
+						this.ctx.updateEditorTopBorder();
 						this.ctx.ui.requestRender();
 					},
 				},
@@ -521,6 +524,7 @@ export class SelectorController {
 			case "tui.tight":
 				setTuiTight(value as boolean);
 				this.ctx.ui.invalidate();
+				this.ctx.updateEditorTopBorder();
 				this.ctx.ui.requestRender();
 				break;
 
@@ -540,7 +544,7 @@ export class SelectorController {
 			case "theme": {
 				setTheme(value as string, true).then(result => {
 					this.ctx.statusLine.invalidate();
-					this.ctx.ui.requestRender();
+					this.ctx.updateEditorTopBorder();
 					this.ctx.ui.invalidate();
 					if (!result.success) {
 						this.ctx.showError(`Failed to load theme "${value}": ${result.error}\nFell back to dark theme.`);
@@ -551,7 +555,7 @@ export class SelectorController {
 			case "symbolPreset": {
 				setSymbolPreset(value as "unicode" | "nerd" | "ascii").then(() => {
 					this.ctx.statusLine.invalidate();
-					this.ctx.ui.requestRender();
+					this.ctx.updateEditorTopBorder();
 					this.ctx.ui.invalidate();
 				});
 				break;
@@ -625,6 +629,7 @@ export class SelectorController {
 					compactThinkingLevel: settings.get("statusLine.compactThinkingLevel"),
 				};
 				this.ctx.statusLine.updateSettings(statusLineSettings);
+				this.ctx.updateEditorTopBorder();
 				this.ctx.ui.requestRender();
 				break;
 			}
@@ -1461,7 +1466,7 @@ export class SelectorController {
 		this.ctx.clearTransientSessionUi();
 		this.ctx.statusLine.invalidate();
 		this.ctx.statusLine.resetActiveTime();
-		this.ctx.ui.requestRender();
+		this.ctx.updateEditorTopBorder();
 		this.ctx.updateEditorBorderColor();
 		this.ctx.renderInitialMessages({ clearTerminalHistory: true });
 		await this.ctx.reloadTodos();

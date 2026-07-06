@@ -38,7 +38,8 @@ Reviewer MUST:
 1. Focus ONLY on assigned files
 2. {{#if skipDiff}}{{diffInstruction}}{{else}}MUST use diff hunks below (NEVER re-run git diff){{/if}}
 3. {{contextInstruction}}
-4. Use incremental `yield` sections for findings and verdict fields; do NOT call a separate finding tool
+4. Call `issues` with `op: add` for each finding (persisted under `.omp/issues/`)
+5. Call `yield` with verdict when done
 
 {{#if skipDiff}}
 ### Diff Previews

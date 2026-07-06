@@ -94,7 +94,14 @@ describe("role thinking helper propagation", () => {
 		};
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "end_turn",
-			content: [{ type: "text", text: "<title>Investigate resolver</title>" }],
+			content: [
+				{
+					type: "toolCall",
+					id: "call-title",
+					name: "set_title",
+					arguments: { title: "Investigate resolver" },
+				},
+			],
 		} as never);
 
 		const title = await generateSessionTitle("Investigate resolver", registry as never, settings);

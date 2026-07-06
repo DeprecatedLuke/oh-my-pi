@@ -24,24 +24,11 @@ import {
 import { ToolError } from "./tool-errors";
 
 const jobSchema = type({
-	"poll?": type("string[]").describe("job ids to wait for; omit to wait on all running jobs"),
 	"cancel?": type("string[]").describe("job ids to cancel"),
 	"list?": type("boolean").describe("snapshot all jobs"),
 });
 
 type JobParams = typeof jobSchema.infer;
-
-const WAIT_DURATION_MS: Record<string, number> = {
-	"5s": 5_000,
-	"10s": 10_000,
-	"30s": 30_000,
-	"1m": 60_000,
-	"5m": 5 * 60_000,
-};
-
-function parseWaitDurationMs(value: string | undefined): number {
-	return (value ? WAIT_DURATION_MS[value] : undefined) ?? WAIT_DURATION_MS["30s"];
-}
 
 interface JobSnapshot {
 	id: string;
@@ -67,10 +54,10 @@ export interface JobToolDetails {
 }
 
 /**
- * A poll snapshot where every watched job is still running and nothing was
- * cancelled — pure "still waiting" noise once a newer poll exists. The TUI
- * keeps such a block un-finalized (displaceable) so a follow-up `job` call
- * replaces it instead of stacking another waiting frame in the transcript.
+ * A `job` snapshot where every job is still running and nothing was cancelled
+ * — pure "still waiting" noise once a newer `job` call exists. The TUI keeps
+ * such a block un-finalized (displaceable) so a follow-up `job` call replaces
+ * it instead of stacking another waiting frame in the transcript.
  */
 export function isWaitingPollDetails(details: unknown): boolean {
 	const d = details as JobToolDetails | undefined;
@@ -96,8 +83,8 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 	async execute(
 		_toolCallId: string,
 		params: JobParams,
-		signal?: AbortSignal,
-		onUpdate?: AgentToolUpdateCallback<JobToolDetails>,
+		_signal?: AbortSignal,
+		_onUpdate?: AgentToolUpdateCallback<JobToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<JobToolDetails>> {
 		const manager = this.session.asyncJobManager;
@@ -113,15 +100,19 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		const ownerId = this.session.getAgentId?.() ?? undefined;
 		const ownerFilter = ownerId ? { ownerId } : undefined;
 
-		// `list` is a read-only snapshot mode. Replaces the legacy `jobs://` URL.
-		if (params.list) {
-			if (params.cancel?.length || params.poll?.length) {
-				throw new ToolError("`list` cannot be combined with `poll` or `cancel`.");
-			}
+		const cancelIds = params.cancel ?? [];
+		if (params.list && cancelIds.length > 0) {
+			throw new ToolError("`list` cannot be combined with `cancel`.");
+		}
+
+		// No cancellation requested — `list` (or a bare call) is a read-only
+		// snapshot of every job for the calling agent. Background results are
+		// delivered automatically as follow-up turns, so the tool never blocks
+		// waiting for jobs to finish.
+		if (cancelIds.length === 0) {
 			return this.#buildResult(manager, manager.getAllJobs(ownerFilter), []);
 		}
 
-		const cancelIds = params.cancel ?? [];
 		const cancelOutcomes: CancelOutcome[] = [];
 		for (const id of cancelIds) {
 			const existing = manager.getJob(id);
@@ -145,109 +136,8 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 			);
 		}
 
-		const requestedPollIds = params.poll;
-		// If only `cancel` was provided (no `poll`), don't wait \u2014 return immediately.
-		const shouldPoll = requestedPollIds !== undefined || cancelIds.length === 0;
-
-		if (!shouldPoll) {
-			const cancelledJobs = this.#visibleJobs(manager, cancelIds, ownerId);
-			return this.#buildResult(manager, cancelledJobs, cancelOutcomes);
-		}
-
-		// Resolve which jobs to watch.
-		// - If `poll` was passed explicitly, watch exactly those (filtered to existing).
-		// - If `poll` was omitted (and so was `cancel`), default to all running jobs.
-		const jobsToWatch = requestedPollIds
-			? this.#visibleJobs(manager, requestedPollIds, ownerId)
-			: manager.getRunningJobs(ownerFilter);
-
-		if (jobsToWatch.length === 0) {
-			if (cancelOutcomes.length > 0) {
-				const cancelledJobs = this.#visibleJobs(manager, cancelIds, ownerId);
-				return this.#buildResult(manager, cancelledJobs, cancelOutcomes);
-			}
-			const message = requestedPollIds?.length
-				? `No matching jobs found for IDs: ${requestedPollIds.join(", ")}`
-				: "No running background jobs to wait for.";
-			return {
-				content: [{ type: "text", text: message }],
-				details: { jobs: [] },
-				// Nothing found / nothing to wait for is noise once consumed —
-				// the follow-up call has already corrected course.
-				useless: true,
-			};
-		}
-
-		// If all watched jobs are already done, build immediate result.
-		const runningJobs = jobsToWatch.filter(j => j.status === "running");
-		if (runningJobs.length === 0) {
-			const cancelledJobs = cancelIds.map(id => manager.getJob(id)).filter(j => j != null);
-			return this.#buildResult(manager, [...cancelledJobs, ...jobsToWatch], cancelOutcomes);
-		}
-
-		// Wait until at least one running job finishes, the wait window elapses,
-		// or the call is aborted. With `async.pollWaitDuration` set to `smart`,
-		// the window adapts: it starts at the ladder floor and climbs as the agent
-		// polls in a tight loop, then resets to the floor once the agent steps
-		// away from polling (see AsyncJobManager.nextPollWaitMs). Any fixed value
-		// waits that exact duration every time.
-		const racePromises: Promise<unknown>[] = runningJobs.map(j => j.promise);
-		const pollSetting = this.session.settings.get("async.pollWaitDuration");
-		const smartPoll = pollSetting === "smart";
-		const waitMs = smartPoll ? manager.nextPollWaitMs(ownerId) : parseWaitDurationMs(pollSetting);
-		const { promise: timeoutPromise, resolve: timeoutResolve } = Promise.withResolvers<void>();
-		const timeoutHandle = setTimeout(() => timeoutResolve(), waitMs);
-		racePromises.push(timeoutPromise);
-
-		const watchedJobIds = runningJobs.map(job => job.id);
-		manager.watchJobs(watchedJobIds);
-
 		const cancelledJobs = this.#visibleJobs(manager, cancelIds, ownerId);
-		const allTrackedJobs = [...cancelledJobs, ...jobsToWatch];
-
-		const PROGRESS_INTERVAL_MS = 500;
-		const emitProgress = () => {
-			if (!onUpdate) return;
-			const snapshot = this.#snapshotJobs(allTrackedJobs);
-			onUpdate({
-				content: [{ type: "text", text: "" }],
-				details: {
-					jobs: snapshot,
-					...(cancelOutcomes.length
-						? { cancelled: cancelOutcomes.map(({ id, status }) => ({ id, status })) }
-						: {}),
-				},
-			});
-		};
-		const progressTimer = onUpdate ? setInterval(emitProgress, PROGRESS_INTERVAL_MS) : undefined;
-		emitProgress();
-
-		try {
-			if (signal) {
-				const { promise: abortPromise, resolve: abortResolve } = Promise.withResolvers<void>();
-				const onAbort = () => abortResolve();
-				signal.addEventListener("abort", onAbort, { once: true });
-				racePromises.push(abortPromise);
-				try {
-					await Promise.race(racePromises);
-				} finally {
-					signal.removeEventListener("abort", onAbort);
-				}
-			} else {
-				await Promise.race(racePromises);
-			}
-		} finally {
-			manager.unwatchJobs(watchedJobIds);
-			clearTimeout(timeoutHandle);
-			if (progressTimer) clearInterval(progressTimer);
-			if (smartPoll) {
-				// Reset the idle-gap clock: escalate if the agent polls again soon,
-				// drop back to the floor once it goes quiet for a while.
-				manager.recordPollWaitEnd(ownerId);
-			}
-		}
-
-		return this.#buildResult(manager, allTrackedJobs, cancelOutcomes);
+		return this.#buildResult(manager, cancelledJobs, cancelOutcomes);
 	}
 
 	/**
@@ -370,7 +260,6 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 // =============================================================================
 
 interface JobRenderArgs {
-	poll?: string[];
 	cancel?: string[];
 	list?: boolean;
 }
@@ -434,18 +323,9 @@ function flattenStructuredPreview(text: string): string {
 }
 
 function describeTarget(args: JobRenderArgs | undefined): string {
-	if (args?.list) return "background jobs";
-	const poll = args?.poll ?? [];
 	const cancel = args?.cancel ?? [];
-	const parts: string[] = [];
-	if (cancel.length > 0) {
-		parts.push(cancel.length === 1 ? `cancel ${cancel[0]}` : `cancel ${cancel.length} jobs`);
-	}
-	if (poll.length > 0) {
-		parts.push(poll.length === 1 ? `poll ${poll[0]}` : `poll ${poll.length} jobs`);
-	}
-	if (parts.length === 0) return "all running jobs";
-	return parts.join(", ");
+	if (cancel.length === 0) return "all jobs";
+	return cancel.length === 1 ? `cancel ${cancel[0]}` : `cancel ${cancel.length} jobs`;
 }
 
 export const jobToolRenderer = {
@@ -462,23 +342,12 @@ export const jobToolRenderer = {
 		uiTheme: Theme,
 		args?: JobRenderArgs,
 	): Component {
-		let jobs = result.details?.jobs ?? [];
+		const jobs = result.details?.jobs ?? [];
 
 		if (jobs.length === 0) {
 			const fallback = result.content?.find(c => c.type === "text")?.text || "No jobs to process";
 			const header = renderStatusLine({ icon: "warning", title: describeTarget(args) || "Job" }, uiTheme);
 			return new Text([header, formatEmptyMessage(fallback, uiTheme)].join("\n"), 0, 0);
-		}
-
-		const isPollCall = args
-			? !args.list && (!args.cancel || args.cancel.length === 0 || args.poll !== undefined)
-			: true;
-
-		if (!options.isPartial && isPollCall) {
-			jobs = jobs.filter(job => job.status !== "running");
-			if (jobs.length === 0) {
-				return new Text("", 0, 0);
-			}
 		}
 
 		const counts = { completed: 0, failed: 0, cancelled: 0, running: 0 };

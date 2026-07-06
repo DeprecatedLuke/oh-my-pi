@@ -659,8 +659,10 @@ describe("leaked thinking healing through stream()", () => {
 		return Object.assign(fn, { preconnect: fetch.preconnect });
 	}
 
-	function anthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}): Model<"anthropic-messages"> {
-		return buildModel({
+	it("splits a leaked fence from a provider with no own healer", async () => {
+		// Anthropic has no provider-local visible-text healer, so a split here
+		// proves the central wrapper is composed into stream().
+		const model: Model<"anthropic-messages"> = buildModel({
 			id: "claude-sonnet-4-5",
 			name: "Claude Sonnet 4.5",
 			api: "anthropic-messages",
@@ -671,37 +673,13 @@ describe("leaked thinking healing through stream()", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 200_000,
 			maxTokens: 8_192,
-			...overrides,
 		});
-	}
-
-	const leaked = "```thinking\nDeliberate.\n```\nFinal answer.";
-	const context: Context = { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] };
-
-	it("leaves a leaked fence intact for the official Anthropic API", async () => {
-		// Official first-party endpoints return structured thinking and are exempt
-		// from the central healer, so a leaked fence must stay verbatim visible text.
-		const result = await stream(anthropicModel(), context, {
+		const leaked = "```thinking\nDeliberate.\n```\nFinal answer.";
+		const context: Context = { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] };
+		const result = await stream(model, context, {
 			apiKey: "test",
 			fetch: anthropicLeakFetch(leaked),
 		}).result();
-
-		expect(result.content.map(b => b.type)).toEqual(["text"]);
-		expect(thinks(result)).toHaveLength(0);
-		expect(texts(result).join("")).toBe(leaked);
-	});
-
-	it("splits a leaked fence for a non-official anthropic-messages endpoint", async () => {
-		// A third-party gateway reusing the anthropic-messages wire format may leak,
-		// so the central wrapper still heals when the endpoint is not official.
-		const result = await stream(
-			anthropicModel({ provider: "zai", baseUrl: "https://api.z.ai/api/anthropic" }),
-			context,
-			{
-				apiKey: "test",
-				fetch: anthropicLeakFetch(leaked),
-			},
-		).result();
 
 		expect(result.content.map(b => b.type)).toEqual(["thinking", "text"]);
 		const thinking = thinks(result)

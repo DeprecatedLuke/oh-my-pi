@@ -27,7 +27,6 @@ function assistantEntry(opts: {
 	id: string;
 	parentId?: string | null;
 	provider: string;
-	api?: string;
 	premiumRequests?: number;
 }): Record<string, unknown> {
 	return {
@@ -38,7 +37,7 @@ function assistantEntry(opts: {
 		message: {
 			role: "assistant",
 			content: [{ type: "text", text: "ok" }],
-			api: opts.api ?? "openai-responses",
+			api: "openai-responses",
 			provider: opts.provider,
 			model: "gpt-5.4",
 			stopReason: "stop",
@@ -64,10 +63,7 @@ describe("priority service-tier premium-request backfill", () => {
 				{ type: "service_tier_change", id: "stc1", timestamp: new Date().toISOString(), serviceTier: "priority" },
 				assistantEntry({ id: "a1", provider: "openai" }),
 				assistantEntry({ id: "a2", provider: "openai-codex" }),
-				// Direct Anthropic always records api "anthropic-messages" — the
-				// service-tier family is classified by api, not provider (Bedrock/
-				// Vertex Claude belong to the anthropic knob too).
-				assistantEntry({ id: "a3", provider: "anthropic", api: "anthropic-messages" }),
+				assistantEntry({ id: "a3", provider: "anthropic" }),
 				{ type: "service_tier_change", id: "stc2", timestamp: new Date().toISOString(), serviceTier: null },
 				assistantEntry({ id: "a4", provider: "openai" }),
 			],

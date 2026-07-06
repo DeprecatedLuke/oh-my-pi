@@ -46,6 +46,19 @@
 - Prevented incorrect auto-repairing of structural closing lines when payload placement is ambiguous.
 - Fixed a bug in stale-hash recovery that could incorrectly relocate edits onto duplicated context after the original target changed.
 
+### Changed
+
+- Compressed the hashline prompt: merged three separate examples into one combined block, converted standalone file-op examples to a one-liner description (165 to 108 lines, ~170 tokens saved) without affecting edit success rate.
+- Auto-recover GLM-5.2 syntax errors at the text level before parsing: merged `[path#TAG] OP` headers split onto two lines (`splitMergedHeader`); bare range headers `N.=M:` auto-prepended with `SWAP` (`prependBareRangeVerb`); colon-equals separator `N:=M:`, stray trailing dot `N.=M.:`, misplaced verb `N SWAP M:`, and same-range/different-range double-header conflicts handled; read-tool paste lines `N:content` dropped when a verb header for the same line follows (reverse double-header drop); same-line paste+verb merge `N:SWAP N.=N:` stripped to `SWAP N.=N:`; missing brackets `path#TAG` wrapped to `[path#TAG]`.
+- Auto-recover apply_patch-style `===` old/new separators: when a standalone `===` line appears between old content and new content, the old content is discarded and only new content is kept as body rows. Handles multi-line pastes (consecutive `N:content` lines, including blank-line separators) by synthesizing `SWAP <first>.=<last>:` covering the full range, and `SWAP` body with old/new pair (`SWAP N.=M:\nold\n===\nnew` — old content popped back to the last verb/section header).
+- Auto-recover apply_patch-style `===` and bare `:` old/new separators: when a standalone `===` or `:` line appears between old content and new content, the old content is discarded and only new content is kept as body rows. Handles multi-line pastes (consecutive `N:content` lines, including blank-line separators) by synthesizing `SWAP <first>.=<last>:` covering the full range, and `SWAP` body with old/new pair (`SWAP N.=M:\nold\n===\nnew` — old content popped back to the last verb/section header).
+- Auto-recover truncated verb headers: `SWAP N.=` / `DEL N.=` (start line and separator but no end line) recovers as `SWAP N.=N:` / `DEL N.=N`.
+- Added directive error detection for apply_patch contamination: `N:content` paste without hunk header, truncated range `N.=`, range-with-content `N.=M:content`, bare `=` as range separator.
+
+### Fixed
+
+- Tolerated a stray `.` before the trailing `:` in hunk headers (e.g. `SWAP 2.=3.:`, `INS.POST 2.:`, `DEL 2.=3.`), recovering from GLM 5.2's tendency to insert an extra dot between the line number/range and the colon. The parser now skips the spurious dot so these headers parse correctly instead of failing with "payload line has no preceding hunk header."
+- Added directive error detection for apply_patch contamination: `N:content` paste without hunk header, truncated range `N.=`, range-with-content `N.=M:content`, bare `=` as range separator.
 ## [16.3.3] - 2026-07-02
 
 ### Breaking Changes
@@ -71,18 +84,18 @@
 - Fixed an issue where snapshot tag collisions could cause line-anchored edits to be incorrectly applied to unrelated content, improving recovery and edit-preview safety.
 - Fixed tracking of edit anchors when earlier in-session insertions or deletions shift unchanged target lines.
 - Fixed hashline edit guidance and parsing errors for Markdown list rows.
-### Changed
 
-- Compressed the hashline prompt: merged three separate examples into one combined block, converted standalone file-op examples to a one-liner description (165 to 108 lines, ~170 tokens saved) without affecting edit success rate.
-- Auto-recover GLM-5.2 syntax errors at the text level before parsing: merged `[path#TAG] OP` headers split onto two lines (`splitMergedHeader`); bare range headers `N.=M:` auto-prepended with `SWAP` (`prependBareRangeVerb`); colon-equals separator `N:=M:`, stray trailing dot `N.=M.:`, misplaced verb `N SWAP M:`, and same-range/different-range double-header conflicts handled; read-tool paste lines `N:content` dropped when a verb header for the same line follows (reverse double-header drop); same-line paste+verb merge `N:SWAP N.=N:` stripped to `SWAP N.=N:`; missing brackets `path#TAG` wrapped to `[path#TAG]`.
-- Auto-recover apply_patch-style `===` old/new separators: when a standalone `===` line appears between old content and new content, the old content is discarded and only new content is kept as body rows. Handles multi-line pastes (consecutive `N:content` lines, including blank-line separators) by synthesizing `SWAP <first>.=<last>:` covering the full range, and `SWAP` body with old/new pair (`SWAP N.=M:\nold\n===\nnew` — old content popped back to the last verb/section header).
-- Auto-recover apply_patch-style `===` and bare `:` old/new separators: when a standalone `===` or `:` line appears between old content and new content, the old content is discarded and only new content is kept as body rows. Handles multi-line pastes (consecutive `N:content` lines, including blank-line separators) by synthesizing `SWAP <first>.=<last>:` covering the full range, and `SWAP` body with old/new pair (`SWAP N.=M:\nold\n===\nnew` — old content popped back to the last verb/section header).
-- Auto-recover truncated verb headers: `SWAP N.=` / `DEL N.=` (start line and separator but no end line) recovers as `SWAP N.=N:` / `DEL N.=N`.
-- Added directive error detection for apply_patch contamination: `N:content` paste without hunk header, truncated range `N.=`, range-with-content `N.=M:content`, bare `=` as range separator.
+## [16.2.8] - 2026-06-30
 
 ### Fixed
 
-- Tolerated a stray `.` before the trailing `:` in hunk headers (e.g. `SWAP 2.=3.:`, `INS.POST 2.:`, `DEL 2.=3.`), recovering from GLM 5.2's tendency to insert an extra dot between the line number/range and the colon. The parser now skips the spurious dot so these headers parse correctly instead of failing with "payload line has no preceding hunk header."
+- Fixed hashline writes preserving UTF-8 BOM bytes when the host text decoder hides the leading `U+FEFF`. ([#3867](https://github.com/can1357/oh-my-pi/issues/3867))
+
+## [16.2.6] - 2026-06-29
+
+### Fixed
+
+- Fixed a parser error ("payload line has no preceding hunk header") caused by stray dots before the trailing colon in hunk headers, improving compatibility with GLM 5.2 outputs.
 
 ## [16.2.8] - 2026-06-30
 

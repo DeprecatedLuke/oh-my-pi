@@ -55,12 +55,12 @@ import type { ReadonlySessionManager, SessionManager } from "../../session/sessi
 import type {
 	BashToolDetails,
 	BashToolInput,
-	GlobToolDetails,
-	GlobToolInput,
-	GrepToolDetails,
-	GrepToolInput,
+	FindToolDetails,
+	FindToolInput,
 	ReadToolDetails,
 	ReadToolInput,
+	SearchToolDetails,
+	SearchToolInput,
 	WriteToolInput,
 } from "../../tools";
 import type { ApprovalMode } from "../../tools/approval";
@@ -802,14 +802,14 @@ export interface WriteToolCallEvent extends ToolCallEventBase {
 	input: WriteToolInput;
 }
 
-export interface GrepToolCallEvent extends ToolCallEventBase {
-	toolName: "grep";
-	input: GrepToolInput;
+export interface SearchToolCallEvent extends ToolCallEventBase {
+	toolName: "search";
+	input: SearchToolInput;
 }
 
-export interface GlobToolCallEvent extends ToolCallEventBase {
-	toolName: "glob";
-	input: GlobToolInput;
+export interface FindToolCallEvent extends ToolCallEventBase {
+	toolName: "find";
+	input: FindToolInput;
 }
 
 export interface CustomToolCallEvent extends ToolCallEventBase {
@@ -823,8 +823,8 @@ export type ToolCallEvent =
 	| ReadToolCallEvent
 	| EditToolCallEvent
 	| WriteToolCallEvent
-	| GrepToolCallEvent
-	| GlobToolCallEvent
+	| SearchToolCallEvent
+	| FindToolCallEvent
 	| CustomToolCallEvent;
 
 interface ToolResultEventBase {
@@ -855,14 +855,14 @@ export interface WriteToolResultEvent extends ToolResultEventBase {
 	details: undefined;
 }
 
-export interface GrepToolResultEvent extends ToolResultEventBase {
-	toolName: "grep";
-	details: GrepToolDetails | undefined;
+export interface SearchToolResultEvent extends ToolResultEventBase {
+	toolName: "search";
+	details: SearchToolDetails | undefined;
 }
 
-export interface GlobToolResultEvent extends ToolResultEventBase {
-	toolName: "glob";
-	details: GlobToolDetails | undefined;
+export interface FindToolResultEvent extends ToolResultEventBase {
+	toolName: "find";
+	details: FindToolDetails | undefined;
 }
 
 export interface CustomToolResultEvent extends ToolResultEventBase {
@@ -876,8 +876,8 @@ export type ToolResultEvent =
 	| ReadToolResultEvent
 	| EditToolResultEvent
 	| WriteToolResultEvent
-	| GrepToolResultEvent
-	| GlobToolResultEvent
+	| SearchToolResultEvent
+	| FindToolResultEvent
 	| CustomToolResultEvent;
 
 /**
@@ -904,8 +904,8 @@ export function isToolCallEventType(toolName: "bash", event: ToolCallEvent): eve
 export function isToolCallEventType(toolName: "read", event: ToolCallEvent): event is ReadToolCallEvent;
 export function isToolCallEventType(toolName: "edit", event: ToolCallEvent): event is EditToolCallEvent;
 export function isToolCallEventType(toolName: "write", event: ToolCallEvent): event is WriteToolCallEvent;
-export function isToolCallEventType(toolName: "grep", event: ToolCallEvent): event is GrepToolCallEvent;
-export function isToolCallEventType(toolName: "glob", event: ToolCallEvent): event is GlobToolCallEvent;
+export function isToolCallEventType(toolName: "search", event: ToolCallEvent): event is SearchToolCallEvent;
+export function isToolCallEventType(toolName: "find", event: ToolCallEvent): event is FindToolCallEvent;
 export function isToolCallEventType<TName extends string, TInput extends Record<string, unknown>>(
 	toolName: TName,
 	event: ToolCallEvent,

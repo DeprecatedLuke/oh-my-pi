@@ -20,13 +20,15 @@
 
 - Updated archived transcript rendering to use a more compact format with `¶user:`, `¶think:`, `¶ai:`, and `¶call:` scopes, omitting repeated adjacent scope headers and appending tool-call intents as comments.
 
+### Fixed
+
+- `getPreservedArchive` now drops frames whose `data` is not well-formed standard base64, so a once-poisoned archive heals instead of failing forever. An older egress-secret-obfuscation bug could splice a `#…#` placeholder into a kept frame's base64 (frames in `preserveData` carry no `type` field for the scrubber's image-skip to key on) and persist it; every subsequent replay then shipped the corrupt frame and the provider rejected the whole request with a `400` on `messages[n].content[m].image.source.base64`. Validation lives in the single load gate used by both replay and the next compaction's frame carry-over, so a dropped frame is also evicted from the archive permanently. The companion obfuscation-side fix (never rewriting binary `data`) lives in the coding-agent secret scrubber.
 ## [16.3.7] - 2026-07-05
 
 ### Fixed
 
 - Fixed `resolveShapeForText(..., "auto")` to correctly select the `silver16-bw` shape for CJK-heavy transcript text while preserving explicit shape overrides.
 
-- `getPreservedArchive` now drops frames whose `data` is not well-formed standard base64, so a once-poisoned archive heals instead of failing forever. An older egress-secret-obfuscation bug could splice a `#…#` placeholder into a kept frame's base64 (frames in `preserveData` carry no `type` field for the scrubber's image-skip to key on) and persist it; every subsequent replay then shipped the corrupt frame and the provider rejected the whole request with a `400` on `messages[n].content[m].image.source.base64`. Validation lives in the single load gate used by both replay and the next compaction's frame carry-over, so a dropped frame is also evicted from the archive permanently. The companion obfuscation-side fix (never rewriting binary `data`) lives in the coding-agent secret scrubber.
 ## [16.2.8] - 2026-06-30
 
 ### Fixed
@@ -113,9 +115,6 @@
 ### Fixed
 
 - Fixed improper splitting of assistant messages around useless tool calls
-### Fixed
-
-- `getPreservedArchive` now drops frames whose `data` is not well-formed standard base64, so a once-poisoned archive heals instead of failing forever. An older egress-secret-obfuscation bug could splice a `#…#` placeholder into a kept frame's base64 (frames in `preserveData` carry no `type` field for the scrubber's image-skip to key on) and persist it; every subsequent replay then shipped the corrupt frame and the provider rejected the whole request with a `400` on `messages[n].content[m].image.source.base64`. Validation lives in the single load gate used by both replay and the next compaction's frame carry-over, so a dropped frame is also evicted from the archive permanently. The companion obfuscation-side fix (never rewriting binary `data`) lives in the coding-agent secret scrubber.
 
 ## [16.0.1] - 2026-06-15
 

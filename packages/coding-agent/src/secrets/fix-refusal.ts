@@ -197,8 +197,8 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 	const step = (line: string) => options.onStep?.(line);
 	const working = (message?: string) => options.onWorking?.(message);
 
-	const maskMessages = (entries: SecretEntry[]): Message[] =>
-		entries.length === 0 ? probeMessages : new SecretObfuscator(entries).obfuscateObject(probeMessages);
+	const maskMessages = (entries: readonly SecretEntry[]): Message[] =>
+		entries.length === 0 ? probeMessages : new SecretObfuscator([...entries]).obfuscateObject(probeMessages);
 
 	const maskContext = (entries: SecretEntry[]): Context => {
 		if (entries.length === 0) return { systemPrompt, messages: probeMessages, tools: [] };
@@ -337,7 +337,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 	// (see {@link minimizeBySelection}) — so a wrong domain guess never breaks clearing. The returned
 	// indices are validated (in-range, deduped), mapped back to the kept entries, and capped to `target`;
 	// the result is the subset of `kept` to remove.
-	const selectRemovals = async (kept: SecretEntry[], target: number): Promise<SecretEntry[]> => {
+	const selectRemovals = async (kept: readonly SecretEntry[], target: number): Promise<SecretEntry[]> => {
 		throwIfAborted(signal);
 		const instruction = prompt.render(fixRefusalSelectTemplate, {
 			transcript: serializeTranscript(maskMessages(kept)),

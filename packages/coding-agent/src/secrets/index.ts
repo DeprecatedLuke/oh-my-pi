@@ -100,6 +100,7 @@ export {
 	deobfuscateToolArguments,
 	obfuscateMessages,
 	obfuscateProviderContext,
+	obfuscateProviderTools,
 	type SecretEntry,
 	SecretObfuscator,
 	secretEntriesNeedPlaceholderKey,

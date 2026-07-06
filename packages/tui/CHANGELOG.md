@@ -336,6 +336,7 @@
 
 ### Added
 
+- Added `TerminalInfo.ringBell()`, which writes a raw `BEL` (`\x07`) regardless of the negotiated `notifyProtocol` (honoring `PI_NOTIFICATIONS` suppression). `sendNotification` collapses to a desktop notification on OSC 9/99 terminals; `ringBell` is the audible alert for callers that want a terminal bell on every terminal.
 - Added a desktop notification fallback for Linux terminals using D-Bus (via notify-send or gdbus), enabling completion and prompt notifications in VTE-family terminals (such as GNOME Terminal, Ptyxis, Tilix), Alacritty, and xterm. This is automatically skipped for terminals with native notification support (like VS Code and Warp) and can be disabled using the PI_NO_DESKTOP_NOTIFY=1 environment variable.
 
 ### Fixed
@@ -454,9 +455,6 @@
 
 - Added tight layout support (`setTuiTight`/`getPaddingX`) to dynamically remove 1-character horizontal padding from Text, Markdown, Box, and TruncatedText components.
 
-### Added
-
-- Added `TerminalInfo.ringBell()`, which writes a raw `BEL` (`\x07`) regardless of the negotiated `notifyProtocol` (honoring `PI_NOTIFICATIONS` suppression). `sendNotification` collapses to a desktop notification on OSC 9/99 terminals; `ringBell` is the audible alert for callers that want a terminal bell on every terminal.
 ### Changed
 
 - Coalesced byte-adjacent SGR sequences in emitted lines into a single `CSI … m`. The component tree styles each span as `<set>text<reset>`, so adjacent spans emit runs of back-to-back SGR sequences (e.g. a `CSI 39 m` fg-reset immediately followed by the next span's `CSI 38;2;r;g;b m`); merging the run is behavior-preserving because SGR parameters apply left-to-right regardless of framing. On a real transcript this drops ~30-40% of all SGR sequences, cutting the per-frame byte volume and SGR-dispatch count a slow terminal engine (e.g. xterm.js/WebGL under a large viewport) must process. Each emitted sequence is capped at 16 parameter tokens so a long adjacent run is split across several valid CSIs instead of overflowing a terminal's parameter buffer (xterm.js caps at 32 and silently truncates, corrupting colors). A run is never extended past a parameter list that ends in an incomplete semicolon-form extended color (`38/48/58;2` missing a channel or `;5` missing the index), so a following code can't be absorbed as the missing component. Disable with `PI_NO_SGR_COALESCE=1`.

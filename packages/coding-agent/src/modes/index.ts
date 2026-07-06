@@ -1,3 +1,6 @@
+import { emergencyTerminalRestore } from "@oh-my-pi/pi-tui";
+import { postmortem } from "@oh-my-pi/pi-utils";
+
 /**
  * Interactive mode and embeddable RPC client exports for the coding agent.
  *
@@ -8,3 +11,7 @@
 export * from "./interactive-mode";
 export * from "./rpc/rpc-client";
 export * from "./rpc/rpc-types";
+
+postmortem.register("terminal-restore", () => {
+	emergencyTerminalRestore();
+});

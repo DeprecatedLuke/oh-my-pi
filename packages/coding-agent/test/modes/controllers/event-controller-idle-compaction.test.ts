@@ -123,11 +123,43 @@ describe("EventController idle compaction teardown", () => {
 		resetSettingsForTest();
 	});
 
+	function makeContext(
+		runIdleCompaction: () => void,
+		hasPendingBackgroundJobs: () => boolean = () => false,
+	): InteractiveModeContext {
+		const context = {
+			isInitialized: true,
+			loadingAnimation: undefined,
+			streamingComponent: undefined,
+			streamingMessage: undefined,
+			pendingTools: new Map<string, unknown>(),
+			flushPendingModelSwitch: async () => {},
+			ui: { requestRender: vi.fn() },
+			chatContainer: { removeChild: vi.fn() },
+			statusContainer: { clear: vi.fn() },
+			statusLine: { invalidate: vi.fn() },
+			updateEditorTopBorder: vi.fn(),
+			editor: { getText: () => "" },
+			sessionManager: { getSessionName: () => undefined },
+			session: {
+				isCompacting: false,
+				isStreaming: false,
+				runIdleCompaction,
+				hasPendingBackgroundJobs,
+				getAsyncJobSnapshot: () => null,
+				getContextUsage: () => ({ tokens: 210 }),
+				agent: { state: { messages: [createAssistantMessage()] } },
+			},
+			get viewSession() {
+				return (this as typeof context).session;
+			},
+			clearTransientSessionUi: () => {},
+		} as unknown as InteractiveModeContext;
+		return context;
+	}
 	it("cancels scheduled idle compaction when disposed", async () => {
 		const runIdleCompaction = vi.fn();
-		const context = createContext({ runIdleCompaction });
-
-		const controller = new EventController(context);
+		const controller = new EventController(makeContext(runIdleCompaction));
 		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
 		controller.dispose();
 		vi.advanceTimersByTime(60_000);
@@ -135,6 +167,27 @@ describe("EventController idle compaction teardown", () => {
 		expect(runIdleCompaction).not.toHaveBeenCalled();
 	});
 
+	it("fires idle compaction after the delay when idle with no background jobs", async () => {
+		// Positive control: with the gate clear, the same harness schedules and
+		// fires, so the gated test below proves the gate (not a dead scheduler).
+		const runIdleCompaction = vi.fn();
+		const controller = new EventController(makeContext(runIdleCompaction, () => false));
+		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
+		vi.advanceTimersByTime(60_000);
+
+		expect(runIdleCompaction).toHaveBeenCalledTimes(1);
+		controller.dispose();
+	});
+
+	it("does not schedule idle compaction while background jobs are running", async () => {
+		const runIdleCompaction = vi.fn();
+		const controller = new EventController(makeContext(runIdleCompaction, () => true));
+		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
+		vi.advanceTimersByTime(60_000);
+
+		expect(runIdleCompaction).not.toHaveBeenCalled();
+		controller.dispose();
+	});
 	it("emits an LLM-generated recap after the default four-minute delay", async () => {
 		resetSettingsForTest();
 		await Settings.init({

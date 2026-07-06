@@ -1132,6 +1132,35 @@ describe("archive helpers", () => {
 		expect(snapcompact.getPreservedArchive({ [snapcompact.PRESERVE_KEY]: valid })).toEqual(valid);
 	});
 
+	it("getPreservedArchive drops frames whose base64 was corrupted by secret obfuscation", () => {
+		// Regression: an older egress-obfuscation bug spliced a `#…#` secret
+		// placeholder into a kept frame's base64 (frames in preserveData had no
+		// `type` for the scrubber's skip to key on). The bytes are unrecoverable
+		// and trip a provider 400 on `image.source.base64` on every replay, so a
+		// poisoned archive must heal by dropping the bad frame, not ship it.
+		const good = { data: "ZmFrZQ==", mimeType: "image/png", cols: 64, rows: 40, chars: 10 };
+		const corrupt = {
+			data: "ZmF#BUSMASTER_TTI9:M#rQ==",
+			mimeType: "image/png",
+			cols: 64,
+			rows: 40,
+			chars: 10,
+		};
+		const archive: snapcompact.Archive = {
+			frames: [good, corrupt],
+			totalChars: 20,
+			truncatedChars: 0,
+		};
+		const healed = snapcompact.getPreservedArchive({ [snapcompact.PRESERVE_KEY]: archive });
+		expect(healed?.frames).toEqual([good]);
+		// And every emitted image block is well-formed standard base64.
+		const valid = /^[A-Za-z0-9+/]+={0,2}$/;
+		for (const img of snapcompact.images(healed!)) {
+			expect(img.data.length % 4).toBe(0);
+			expect(valid.test(img.data)).toBe(true);
+		}
+	});
+
 	it("getPreservedArchive round-trips text-only and text-tail archives", () => {
 		const textOnly: snapcompact.Archive = {
 			frames: [],
@@ -1141,7 +1170,6 @@ describe("archive helpers", () => {
 			textHead: "older history newer history",
 		};
 		expect(snapcompact.getPreservedArchive({ [snapcompact.PRESERVE_KEY]: textOnly })).toEqual(textOnly);
-
 		const archive: snapcompact.Archive = {
 			frames: [{ data: "ZmFrZQ==", mimeType: "image/png", cols: 64, rows: 40, chars: 10 }],
 			totalChars: 10,

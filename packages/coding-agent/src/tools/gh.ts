@@ -3317,7 +3317,7 @@ async function checkoutPullRequest(
 				remote.name,
 				`refs/heads/${headRefName}`,
 				`refs/remotes/${remote.name}/${headRefName}`,
-				{ signal },
+				signal,
 			);
 
 			if (!existingWorktree) {

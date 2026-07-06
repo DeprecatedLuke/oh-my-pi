@@ -79,24 +79,32 @@ describe("SecretObfuscator regex behavior", () => {
 		expect(deobfuscateToolArguments(obfuscator, obfuscated)).toEqual(original);
 	});
 
-	it("obfuscates conversation messages but leaves the system prompt untouched", () => {
+	it("obfuscates nested provider request payloads", () => {
 		const secret = "SUPER_SECRET_TOKEN_12345";
 		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
-		const context: Context = {
+		const payload = {
 			systemPrompt: [`workspace contains ${secret}`],
-			messages: [{ role: "user", content: `use ${secret}`, timestamp: 1 }],
+			messages: [],
+			tools: [
+				{
+					name: "handoff",
+					description: `preserve ${secret}`,
+					parameters: {
+						type: "object",
+						properties: { note: { type: "string", description: `write ${secret}` } },
+					},
+				},
+			],
 		};
 
-		const obfuscated = obfuscateProviderContext(obfuscator, context);
+		const obfuscated = obfuscateProviderContext(obfuscator, payload);
+		const serialized = JSON.stringify(obfuscated);
 
-		// Conversation messages are redacted (and round-trip back to the secret)...
-		expect(JSON.stringify(obfuscated.messages)).not.toContain(secret);
-		expect(obfuscator.deobfuscate(JSON.stringify(obfuscated.messages))).toContain(secret);
-		// ...but the author-controlled system prompt passes through by reference.
-		expect(obfuscated.systemPrompt).toBe(context.systemPrompt);
+		expect(serialized).not.toContain(secret);
+		expect(obfuscator.deobfuscateObject(obfuscated).tools?.[0]?.description).toEqual(payload.tools[0]?.description);
 	});
 
-	it("leaves tool schemas untouched in provider context (no clone, no redaction)", () => {
+	it("redacts arktype tool schemas without cloning the live schema instance", () => {
 		const secret = "SUPER_SECRET_TOKEN_12345";
 		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
 		const parameters = type({
@@ -115,8 +123,10 @@ describe("SecretObfuscator regex behavior", () => {
 
 		const obfuscated = obfuscateProviderContext(obfuscator, context);
 
-		expect(obfuscated.tools).toBe(context.tools);
-		expect(obfuscated.tools?.[0]?.parameters).toBe(parameters);
+		expect(obfuscator.obfuscateObject(parameters)).toBe(parameters);
+		expect(context.tools?.[0]?.parameters).toBe(parameters);
+		expect(obfuscated.tools?.[0]?.parameters).not.toBe(parameters);
+		expect(JSON.stringify(obfuscated)).not.toContain(secret);
 	});
 
 	it("redacts user-facing messages and assistant replay content", () => {
@@ -215,9 +225,197 @@ describe("SecretObfuscator regex behavior", () => {
 		expect(obfuscator.obfuscate("the response despite whitespace")).toBe("the response despite whitespace");
 	});
 
-	it("ignores regex matches shorter than 8 characters", () => {
-		const obfuscator = new SecretObfuscator([{ type: "regex", content: "esp" }]);
-		expect(obfuscator.obfuscate("the response despite whitespace")).toBe("the response despite whitespace");
+	it("masks short regex matches — deliberate patterns have no length floor (fix-refusal triggers)", () => {
+		// Regex entries are author-/judge-specified and targeted (fix-refusal proposes
+		// short trigger terms like /Alpha/). Unlike plain literals (pervasive substring
+		// match, guarded above), a short regex match MUST mask, or fix-refusal can never
+		// resolve a short trigger. Env false-matches are filtered at collectEnvSecrets.
+		const obfuscator = new SecretObfuscator([{ type: "regex", content: "Alpha" }]);
+		const masked = obfuscator.obfuscate("Tell me about Alpha here.");
+		expect(masked).not.toContain("Alpha");
+		expect(masked).toMatch(/#[A-Z0-9]{4}(?::[ULCM])?#/);
+		expect(obfuscator.deobfuscate(masked)).toBe("Tell me about Alpha here.");
+	});
+});
+
+describe("SecretObfuscator image payloads", () => {
+	it("never rewrites base64 image data when a secret coincidentally matches inside it", () => {
+		const secret = "S3cretToken";
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+		// A real PNG's base64 can contain the secret value as a byte run by
+		// pure coincidence. Substring-replacing it would splice a placeholder
+		// into the image and corrupt it (provider 400 on image.source).
+		const imageData = `iVBORw0KGgo${secret}AAANSUhEUgAA${secret}QmCC`;
+		const messages: Message[] = [
+			{
+				role: "user",
+				content: [
+					{ type: "text", text: `here is ${secret}` },
+					{ type: "image", data: imageData, mimeType: "image/png" },
+				],
+				timestamp: 1,
+			},
+		];
+
+		const result = obfuscateMessages(obfuscator, messages);
+		const content = result[0]?.content;
+		if (!Array.isArray(content)) throw new Error("expected array content");
+		const [textBlock, imageBlock] = content;
+
+		// Sibling text is still redacted...
+		expect(textBlock?.type).toBe("text");
+		if (textBlock?.type === "text") expect(textBlock.text).not.toContain(secret);
+		// ...but the binary image payload is preserved byte-for-byte.
+		expect(imageBlock?.type).toBe("image");
+		if (imageBlock?.type === "image") expect(imageBlock.data).toBe(imageData);
+	});
+
+	it("preserves wire-shape base64 image source data while redacting sibling fields", () => {
+		const secret = "S3cretToken";
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+		const data = `AAAA${secret}BBBB`;
+		const wire = {
+			type: "image",
+			source: { type: "base64", media_type: "image/png", data },
+			caption: `describes ${secret}`,
+		};
+
+		const out = obfuscator.obfuscateObject(wire);
+
+		expect(out.source.data).toBe(data);
+		expect(out.caption).not.toContain(secret);
+	});
+
+	it("never rewrites snapcompact frame data carried in compaction preserveData", () => {
+		// Regression: snapcompact frames live under a compaction entry's
+		// `preserveData["snapcompact"].frames[]` as `{ data, mimeType, cols, ... }`
+		// with NO `type` field, and the whole preserveData is deep-obfuscated
+		// before each compaction. Keying the skip on `type` alone let a secret
+		// match inside the base64 splice a placeholder into a kept frame, which
+		// then shipped on the next request and tripped a provider 400 on
+		// `messages[n].content[m].image.source.base64`.
+		const secret = "BusMaster";
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret, friendlyName: "busmaster" }]);
+		const frameData = `iVBORw0KGgoAAAANSUhE${secret}UgAAB4wZkbA5Px44`;
+		const preserveData = {
+			snapcompact: {
+				frames: [{ data: frameData, mimeType: "image/png", chars: 100, cols: 322, rows: 161 }],
+				totalChars: 100,
+				truncatedChars: 0,
+			},
+			note: `archived ${secret} run`,
+		};
+
+		const out = obfuscator.obfuscateObject(preserveData);
+
+		// Frame binary preserved byte-for-byte...
+		expect(out.snapcompact.frames[0]?.data).toBe(frameData);
+		// ...while a sibling string field is still redacted.
+		expect(out.note).not.toContain(secret);
+	});
+});
+
+describe("SecretObfuscator redacted thinking blocks", () => {
+	it("never rewrites a redacted-thinking block's opaque data, but still redacts co-resident content", () => {
+		// Anthropic `redacted_thinking` / OpenAI encrypted reasoning hand back an
+		// opaque `data` blob that must round-trip verbatim. A configured secret can
+		// coincidentally match a substring of the ciphertext; splicing a placeholder
+		// into it corrupts the payload, so the provider rejects the turn on replay.
+		const secret = "S3cretToken";
+		const obf = new SecretObfuscator([{ type: "plain", content: secret }]);
+		const data = `Eq3Ck${secret}rW9xPq${secret}Lm0z`;
+
+		// The opaque reasoning payload is preserved byte-for-byte...
+		const thinking = obf.obfuscateObject({ type: "redactedThinking", data });
+		expect(thinking.data).toBe(data);
+
+		// ...while a co-resident text block in the same assistant turn is still redacted.
+		const text = obf.obfuscateObject({ type: "text", text: `leaked ${secret}` });
+		expect(text.text).not.toContain(secret);
+	});
+});
+
+describe("SecretObfuscator case hints", () => {
+	it("uses a shared base token with capitalization hints for case variants", () => {
+		const obfuscator = new SecretObfuscator([
+			{ type: "plain", content: "password" },
+			{ type: "plain", content: "PASSWORD" },
+			{ type: "plain", content: "Password" },
+			{ type: "plain", content: "PassWord" },
+		]);
+		const original = "password PASSWORD Password PassWord";
+		const obfuscated = obfuscator.obfuscate(original);
+		const tokens = obfuscated.match(/#[A-Z0-9]{4}:[ULCM]#/g);
+		if (!tokens) throw new Error("Expected capitalization-hinted placeholders");
+
+		expect(tokens).toHaveLength(4);
+		expect(new Set(tokens.map(token => token.slice(1, 5))).size).toBe(1);
+		expect(tokens[0]?.endsWith(":L#")).toBe(true);
+		expect(tokens[1]?.endsWith(":U#")).toBe(true);
+		expect(tokens[2]?.endsWith(":C#")).toBe(true);
+		expect(tokens[3]?.endsWith(":M#")).toBe(true);
+		expect(obfuscator.deobfuscate(obfuscated)).toBe(original);
+	});
+
+	it("falls back to a distinct random base when a capitalization hint would collide", () => {
+		const obfuscator = new SecretObfuscator([
+			{ type: "plain", content: "SeCretpw" },
+			{ type: "plain", content: "SecRetpw" },
+		]);
+		const original = "SeCretpw SecRetpw";
+		const obfuscated = obfuscator.obfuscate(original);
+		const tokens = obfuscated.match(/#[A-Z0-9]{4}:M#/g);
+		if (!tokens) throw new Error("Expected mixed-case placeholders");
+
+		expect(tokens).toHaveLength(2);
+		expect(new Set(tokens).size).toBe(2);
+		expect(obfuscator.deobfuscate(obfuscated)).toBe(original);
+	});
+});
+
+describe("SecretObfuscator friendlyName placeholders", () => {
+	it("prefixes a plain secret's placeholder with a sanitized uppercase friendlyName", () => {
+		const obf = new SecretObfuscator([{ type: "plain", content: "hunter22", friendlyName: "GitHub Token" }]);
+		const input = "login with hunter22 now";
+		const masked = obf.obfuscate(input);
+		const token = masked.match(/#GITHUBTOKEN_[A-Z0-9]{4}(?::[ULCM])?#/)?.[0];
+		if (!token) throw new Error("Expected a friendlyName-prefixed placeholder");
+		expect(masked).not.toContain("hunter22");
+		expect(obf.deobfuscate(masked)).toBe(input);
+	});
+
+	it("shares one casing hash across case variants under a friendlyName prefix", () => {
+		const obf = new SecretObfuscator([
+			{ type: "plain", content: "password", friendlyName: "pw" },
+			{ type: "plain", content: "PASSWORD", friendlyName: "pw" },
+		]);
+		const input = "password PASSWORD";
+		const masked = obf.obfuscate(input);
+		const tokens = masked.match(/#PW_[A-Z0-9]{4}:[ULCM]#/g);
+		if (!tokens) throw new Error("Expected friendlyName-prefixed hinted placeholders");
+		expect(tokens).toHaveLength(2);
+		const bases = tokens.map(token => /#PW_([A-Z0-9]{4})/.exec(token)?.[1]);
+		expect(new Set(bases).size).toBe(1);
+		expect(tokens[0]?.endsWith(":L#")).toBe(true);
+		expect(tokens[1]?.endsWith(":U#")).toBe(true);
+		expect(obf.deobfuscate(masked)).toBe(input);
+	});
+
+	it("applies the friendlyName to regex-discovered matches", () => {
+		const obf = new SecretObfuscator([{ type: "regex", content: "tok_[a-z0-9]+", friendlyName: "API Key" }]);
+		const input = "use tok_abc123 please";
+		const masked = obf.obfuscate(input);
+		expect(masked).toMatch(/#APIKEY_[A-Z0-9]{4}(?::[ULCM])?#/);
+		expect(masked).not.toContain("tok_abc123");
+		expect(obf.deobfuscate(masked)).toBe(input);
+	});
+
+	it("leaves the placeholder unprefixed when no friendlyName is set", () => {
+		const obf = new SecretObfuscator([{ type: "plain", content: "hunter22" }]);
+		const masked = obf.obfuscate("login with hunter22 now");
+		expect(masked).toMatch(/#[A-Z0-9]{4}(?::[ULCM])?#/);
+		expect(masked).not.toMatch(/#[A-Z0-9]+_[A-Z0-9]{4}/);
+		expect(obf.deobfuscate(masked)).toBe("login with hunter22 now");
 	});
 });
 
@@ -3563,186 +3761,5 @@ describe("deobfuscateAgentMessages (display restore)", () => {
 		expect(text.type === "text" && text.text).toBe(`archived ${secret}`);
 		// ...while the snapcompact image bytes pass through untouched.
 		expect(image.type === "image" && image.data).toBe(imageData);
-	});
-});
-
-describe("SecretObfuscator image payloads", () => {
-	it("never rewrites base64 image data when a secret coincidentally matches inside it", () => {
-		const secret = "S3cretToken";
-		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
-		// A real PNG's base64 can contain the secret value as a byte run by
-		// pure coincidence. Substring-replacing it would splice a placeholder
-		// into the image and corrupt it (provider 400 on image.source).
-		const imageData = `iVBORw0KGgo${secret}AAANSUhEUgAA${secret}QmCC`;
-		const messages: Message[] = [
-			{
-				role: "user",
-				content: [
-					{ type: "text", text: `here is ${secret}` },
-					{ type: "image", data: imageData, mimeType: "image/png" },
-				],
-				timestamp: 1,
-			},
-		];
-
-		const result = obfuscateMessages(obfuscator, messages);
-		const content = result[0]?.content;
-		if (!Array.isArray(content)) throw new Error("expected array content");
-		const [textBlock, imageBlock] = content;
-
-		// Sibling text is still redacted...
-		expect(textBlock?.type).toBe("text");
-		if (textBlock?.type === "text") expect(textBlock.text).not.toContain(secret);
-		// ...but the binary image payload is preserved byte-for-byte.
-		expect(imageBlock?.type).toBe("image");
-		if (imageBlock?.type === "image") expect(imageBlock.data).toBe(imageData);
-	});
-
-	it("preserves wire-shape base64 image source data while redacting sibling fields", () => {
-		const secret = "S3cretToken";
-		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
-		const data = `AAAA${secret}BBBB`;
-		const wire = {
-			type: "image",
-			source: { type: "base64", media_type: "image/png", data },
-			caption: `describes ${secret}`,
-		};
-
-		const out = obfuscator.obfuscateObject(wire);
-
-		expect(out.source.data).toBe(data);
-		expect(out.caption).not.toContain(secret);
-	});
-
-	it("never rewrites snapcompact frame data carried in compaction preserveData", () => {
-		// Regression: snapcompact frames live under a compaction entry's
-		// `preserveData["snapcompact"].frames[]` as `{ data, mimeType, cols, ... }`
-		// with NO `type` field, and the whole preserveData is deep-obfuscated
-		// before each compaction. Keying the skip on `type` alone let a secret
-		// match inside the base64 splice a placeholder into a kept frame, which
-		// then shipped on the next request and tripped a provider 400 on
-		// `messages[n].content[m].image.source.base64`.
-		const secret = "BusMaster";
-		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret, friendlyName: "busmaster" }]);
-		const frameData = `iVBORw0KGgoAAAANSUhE${secret}UgAAB4wZkbA5Px44`;
-		const preserveData = {
-			snapcompact: {
-				frames: [{ data: frameData, mimeType: "image/png", chars: 100, cols: 322, rows: 161 }],
-				totalChars: 100,
-				truncatedChars: 0,
-			},
-			note: `archived ${secret} run`,
-		};
-
-		const out = obfuscator.obfuscateObject(preserveData);
-
-		// Frame binary preserved byte-for-byte...
-		expect(out.snapcompact.frames[0]?.data).toBe(frameData);
-		// ...while a sibling string field is still redacted.
-		expect(out.note).not.toContain(secret);
-	});
-});
-
-describe("SecretObfuscator redacted thinking blocks", () => {
-	it("never rewrites a redacted-thinking block's opaque data, but still redacts co-resident content", () => {
-		// Anthropic `redacted_thinking` / OpenAI encrypted reasoning hand back an
-		// opaque `data` blob that must round-trip verbatim. A configured secret can
-		// coincidentally match a substring of the ciphertext; splicing a placeholder
-		// into it corrupts the payload, so the provider rejects the turn on replay.
-		const secret = "S3cretToken";
-		const obf = new SecretObfuscator([{ type: "plain", content: secret }]);
-		const data = `Eq3Ck${secret}rW9xPq${secret}Lm0z`;
-
-		// The opaque reasoning payload is preserved byte-for-byte...
-		const thinking = obf.obfuscateObject({ type: "redactedThinking", data });
-		expect(thinking.data).toBe(data);
-
-		// ...while a co-resident text block in the same assistant turn is still redacted.
-		const text = obf.obfuscateObject({ type: "text", text: `leaked ${secret}` });
-		expect(text.text).not.toContain(secret);
-	});
-});
-
-describe("SecretObfuscator case hints", () => {
-	it("uses a shared base token with capitalization hints for case variants", () => {
-		const obfuscator = new SecretObfuscator([
-			{ type: "plain", content: "secret" },
-			{ type: "plain", content: "SECRET" },
-			{ type: "plain", content: "Secret" },
-			{ type: "plain", content: "SeCret" },
-		]);
-		const original = "secret SECRET Secret SeCret";
-		const obfuscated = obfuscator.obfuscate(original);
-		const tokens = obfuscated.match(/#[A-Z0-9]{4}:[ULCM]#/g);
-		if (!tokens) throw new Error("Expected capitalization-hinted placeholders");
-
-		expect(tokens).toHaveLength(4);
-		expect(new Set(tokens.map(token => token.slice(1, 5))).size).toBe(1);
-		expect(tokens[0]?.endsWith(":L#")).toBe(true);
-		expect(tokens[1]?.endsWith(":U#")).toBe(true);
-		expect(tokens[2]?.endsWith(":C#")).toBe(true);
-		expect(tokens[3]?.endsWith(":M#")).toBe(true);
-		expect(obfuscator.deobfuscate(obfuscated)).toBe(original);
-	});
-
-	it("falls back to a distinct random base when a capitalization hint would collide", () => {
-		const obfuscator = new SecretObfuscator([
-			{ type: "plain", content: "SeCret" },
-			{ type: "plain", content: "SecRet" },
-		]);
-		const original = "SeCret SecRet";
-		const obfuscated = obfuscator.obfuscate(original);
-		const tokens = obfuscated.match(/#[A-Z0-9]{4}:M#/g);
-		if (!tokens) throw new Error("Expected mixed-case placeholders");
-
-		expect(tokens).toHaveLength(2);
-		expect(new Set(tokens).size).toBe(2);
-		expect(obfuscator.deobfuscate(obfuscated)).toBe(original);
-	});
-});
-
-describe("SecretObfuscator friendlyName placeholders", () => {
-	it("prefixes a plain secret's placeholder with a sanitized uppercase friendlyName", () => {
-		const obf = new SecretObfuscator([{ type: "plain", content: "hunter2", friendlyName: "GitHub Token" }]);
-		const input = "login with hunter2 now";
-		const masked = obf.obfuscate(input);
-		const token = masked.match(/#GITHUBTOKEN_[A-Z0-9]{4}(?::[ULCM])?#/)?.[0];
-		if (!token) throw new Error("Expected a friendlyName-prefixed placeholder");
-		expect(masked).not.toContain("hunter2");
-		expect(obf.deobfuscate(masked)).toBe(input);
-	});
-
-	it("shares one casing hash across case variants under a friendlyName prefix", () => {
-		const obf = new SecretObfuscator([
-			{ type: "plain", content: "secret", friendlyName: "pw" },
-			{ type: "plain", content: "SECRET", friendlyName: "pw" },
-		]);
-		const input = "secret SECRET";
-		const masked = obf.obfuscate(input);
-		const tokens = masked.match(/#PW_[A-Z0-9]{4}:[ULCM]#/g);
-		if (!tokens) throw new Error("Expected friendlyName-prefixed hinted placeholders");
-		expect(tokens).toHaveLength(2);
-		const bases = tokens.map(token => /#PW_([A-Z0-9]{4})/.exec(token)?.[1]);
-		expect(new Set(bases).size).toBe(1);
-		expect(tokens[0]?.endsWith(":L#")).toBe(true);
-		expect(tokens[1]?.endsWith(":U#")).toBe(true);
-		expect(obf.deobfuscate(masked)).toBe(input);
-	});
-
-	it("applies the friendlyName to regex-discovered matches", () => {
-		const obf = new SecretObfuscator([{ type: "regex", content: "tok_[a-z0-9]+", friendlyName: "API Key" }]);
-		const input = "use tok_abc123 please";
-		const masked = obf.obfuscate(input);
-		expect(masked).toMatch(/#APIKEY_[A-Z0-9]{4}(?::[ULCM])?#/);
-		expect(masked).not.toContain("tok_abc123");
-		expect(obf.deobfuscate(masked)).toBe(input);
-	});
-
-	it("leaves the placeholder unprefixed when no friendlyName is set", () => {
-		const obf = new SecretObfuscator([{ type: "plain", content: "hunter2" }]);
-		const masked = obf.obfuscate("login with hunter2 now");
-		expect(masked).toMatch(/#[A-Z0-9]{4}(?::[ULCM])?#/);
-		expect(masked).not.toMatch(/#[A-Z0-9]+_[A-Z0-9]{4}/);
-		expect(obf.deobfuscate(masked)).toBe("login with hunter2 now");
 	});
 });

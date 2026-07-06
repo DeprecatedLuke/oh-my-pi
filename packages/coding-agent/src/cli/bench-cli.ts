@@ -33,12 +33,7 @@ import cachePrefixChunk from "../prompts/bench/cache-prefix-chunk.md" with { typ
 import cacheSuffixTemplate from "../prompts/bench/cache-suffix.md" with { type: "text" };
 import benchPrompt from "../prompts/bench.md" with { type: "text" };
 import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
-import {
-	concreteThinkingLevel,
-	resolveThinkingLevelForModel,
-	shouldDisableReasoning,
-	toReasoningEffort,
-} from "../thinking";
+import { resolveThinkingLevelForModel, shouldDisableReasoning, toReasoningEffort } from "../thinking";
 
 const DEFAULT_RUNS = 10;
 const DEFAULT_PAR = 4;
@@ -733,7 +728,7 @@ function resolveBenchModels(
 		resolved.push({
 			selector,
 			model,
-			thinking: resolveThinkingLevelForModel(model, concreteThinkingLevel(result.thinkingLevel)),
+			thinking: resolveThinkingLevelForModel(model, result.thinkingLevel),
 		});
 	}
 	if (errors.length > 0) {

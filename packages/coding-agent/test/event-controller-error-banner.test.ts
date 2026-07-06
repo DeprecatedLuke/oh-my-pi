@@ -71,7 +71,9 @@ function createFixture(streamingMessage?: AssistantMessage) {
 		addChild: vi.fn(),
 	};
 
-	const session = { isStreaming: false };
+	// getAsyncJobSnapshot: the agent_start handler refreshes the Background Jobs
+	// panel; with no async manager the snapshot is null and the panel stays clear.
+	const session = { isStreaming: false, isTtsrAbortPending: false, retryAttempt: 0, getAsyncJobSnapshot: () => null };
 	const viewSession = { isStreaming: false, isTtsrAbortPending: false, retryAttempt: 0 };
 	let hasDisplayableThinkingContent = false;
 	const noteDisplayableThinkingContent = vi.fn((message: AssistantMessage) => {

@@ -177,10 +177,8 @@ describe("hashline body contracts", () => {
 		expect(applyEdits(FILE, result.edits).text).toBe('a\n1: "one",\n2: "two",\nd\ne');
 	});
 
-	it("rejects `-` body rows with Markdown bullet escape guidance", () => {
-		expect(() => parsePatch("SWAP 2.=2:\n-old\n+new")).toThrow(
-			/Markdown bullets or other literal `-` lines.*`\+- item`/,
-		);
+	it("rejects `-` body rows with a teaching error", () => {
+		expect(() => parsePatch("SWAP 2.=2:\n-old\n+new")).toThrow(/`-` rows are not valid/);
 	});
 	it("auto-pipes a fully bare Markdown bullet body with a warning", () => {
 		const result = parsePatch("SWAP 2.=2:\n- item\n  - nested");
@@ -202,10 +200,8 @@ describe("hashline body contracts", () => {
 		expect(() => parsePatch("SWAP 2.=2:\n- x\n+new()")).toThrow(/`-` rows are not valid/);
 	});
 
-	it("allows literal Markdown bullets and plus-prefixed text when prefixed with `+`", () => {
-		expect(applyPatch(FILE, "SWAP 2.=2:\n+- item\n+  - nested\n++plus")).toBe(
-			"a\n- item\n  - nested\n+plus\nc\nd\ne",
-		);
+	it("allows literal text that begins with `-` or `+` when prefixed with `+`", () => {
+		expect(applyPatch(FILE, "SWAP 2.=2:\n+-literal\n++plus")).toBe("a\n-literal\n+plus\nc\nd\ne");
 	});
 
 	it("treats empty replace as delete and still rejects empty insert", () => {

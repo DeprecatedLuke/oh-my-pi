@@ -1624,9 +1624,9 @@ export class Settings {
 			delete raw["power.preventDisplaySleep"];
 		}
 
-		// Migration for renamed settings grep.* and glob.* from search.* and find.*:
-		// 1. Nested settings: find -> glob, search -> grep (per-property merge to avoid clobbering)
-		const ensureRawObject = (key: "glob" | "grep"): Record<string, unknown> => {
+		// Migration for renamed settings: upstream used glob.*/grep.*, fork uses find.*/search.*
+		// (per-property merge to avoid clobbering)
+		const ensureRawObject = (key: "find" | "search"): Record<string, unknown> => {
 			const current = raw[key];
 			if (isRecord(current)) {
 				return current;
@@ -1636,66 +1636,66 @@ export class Settings {
 			return created;
 		};
 
-		if ("find" in raw) {
-			const findObj = raw.find;
-			if (isRecord(findObj)) {
-				const globObj = ensureRawObject("glob");
-				const findKeys: Array<"enabled"> = ["enabled"];
-				for (const key of findKeys) {
-					if (key in findObj && !(key in globObj)) {
-						globObj[key] = findObj[key];
+		if ("glob" in raw) {
+			const globObj = raw.glob;
+			if (isRecord(globObj)) {
+				const findObj = ensureRawObject("find");
+				const globKeys: Array<"enabled"> = ["enabled"];
+				for (const key of globKeys) {
+					if (key in globObj && !(key in findObj)) {
+						findObj[key] = globObj[key];
 					}
 				}
 			}
-			delete raw.find;
+			delete raw.glob;
 		}
 
-		if ("search" in raw) {
-			const searchObj = raw.search;
-			if (isRecord(searchObj)) {
-				const grepObj = ensureRawObject("grep");
-				const searchKeys: Array<"enabled" | "contextBefore" | "contextAfter"> = [
+		if ("grep" in raw) {
+			const grepObj = raw.grep;
+			if (isRecord(grepObj)) {
+				const searchObj = ensureRawObject("search");
+				const grepKeys: Array<"enabled" | "contextBefore" | "contextAfter"> = [
 					"enabled",
 					"contextBefore",
 					"contextAfter",
 				];
-				for (const key of searchKeys) {
-					if (key in searchObj && !(key in grepObj)) {
-						grepObj[key] = searchObj[key];
+				for (const key of grepKeys) {
+					if (key in grepObj && !(key in searchObj)) {
+						searchObj[key] = grepObj[key];
 					}
 				}
 			}
-			delete raw.search;
+			delete raw.grep;
 		}
 
 		// 2. Flat settings keys: map them to the proper nested target so get/set resolves them correctly
-		if ("find.enabled" in raw) {
-			const globObj = ensureRawObject("glob");
-			if (!("enabled" in globObj)) {
-				globObj.enabled = raw["find.enabled"];
+		if ("glob.enabled" in raw) {
+			const findObj = ensureRawObject("find");
+			if (!("enabled" in findObj)) {
+				findObj.enabled = raw["glob.enabled"];
 			}
-			delete raw["find.enabled"];
+			delete raw["glob.enabled"];
 		}
-		if ("search.enabled" in raw) {
-			const grepObj = ensureRawObject("grep");
-			if (!("enabled" in grepObj)) {
-				grepObj.enabled = raw["search.enabled"];
+		if ("grep.enabled" in raw) {
+			const searchObj = ensureRawObject("search");
+			if (!("enabled" in searchObj)) {
+				searchObj.enabled = raw["grep.enabled"];
 			}
-			delete raw["search.enabled"];
+			delete raw["grep.enabled"];
 		}
-		if ("search.contextBefore" in raw) {
-			const grepObj = ensureRawObject("grep");
-			if (!("contextBefore" in grepObj)) {
-				grepObj.contextBefore = raw["search.contextBefore"];
+		if ("grep.contextBefore" in raw) {
+			const searchObj = ensureRawObject("search");
+			if (!("contextBefore" in searchObj)) {
+				searchObj.contextBefore = raw["grep.contextBefore"];
 			}
-			delete raw["search.contextBefore"];
+			delete raw["grep.contextBefore"];
 		}
-		if ("search.contextAfter" in raw) {
-			const grepObj = ensureRawObject("grep");
-			if (!("contextAfter" in grepObj)) {
-				grepObj.contextAfter = raw["search.contextAfter"];
+		if ("grep.contextAfter" in raw) {
+			const searchObj = ensureRawObject("search");
+			if (!("contextAfter" in searchObj)) {
+				searchObj.contextAfter = raw["grep.contextAfter"];
 			}
-			delete raw["search.contextAfter"];
+			delete raw["grep.contextAfter"];
 		}
 
 		// Also clean up any empty nested objects we might have created or left behind

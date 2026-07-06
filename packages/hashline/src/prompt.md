@@ -19,7 +19,7 @@ Single line: `SWAP N.=N:` / `DEL N`. The range is the ORIGINAL lines you touch; 
 </ops>
 
 <body-rows>
-Body rows appear only under a `:` header. Every body row is `+TEXT` — add a literal line `TEXT`, verbatim (leading whitespace kept); `+` alone adds a blank line. No other row kind. NEVER write `-old` or a bare/context line. To keep a line, leave it out of every range. Literal lines starting with `-`/`+` still need the body prefix: Markdown `- item` → `+- item`, `+ item` → `++ item`.
+Body rows appear only under a `:` header. Every body row is `+TEXT` — add a literal line `TEXT`, verbatim (leading whitespace kept); `+` alone adds a blank line. No other row kind. NEVER write `-old` or a bare/context line. To keep a line, leave it out of every range. To insert a literal line starting with `-` or `+`, prefix it: `+-x`, `++x`.
 </body-rows>
 
 <rules>
@@ -52,63 +52,15 @@ Original (the exact shape `read` returns):
 4:greet("world")
 ```
 
-Insert a guard after line 1:
+Insert a guard after line 1; replace line 2 with two lines; delete line 3:
 ```
 [greet.py#A1B2]
 INS.POST 1:
 +    if not name: name = "stranger"
-```
-
-Replace line 2 with two lines:
-```
-[greet.py#A1B2]
 SWAP 2.=2:
 +    greeting = "Hi"
 +    msg = f"{greeting}, {name}"
-```
-
-Delete line 3:
-```
-[greet.py#A1B2]
 DEL 3
-```
-
-Delete the whole file:
-```
-[greet.py#A1B2]
-REM
-```
-
-Rename or move the file:
-```
-[greet.py#A1B2]
-MV greet_v2.py
-```
-
-Move after editing:
-```
-[greet.py#A1B2]
-SWAP 1.=3:
-+def greet(name):
-+    print(f"Hi, {name}")
-MV lib/greet.py
-```
-
-Add a header and trailer:
-```
-[greet.py#A1B2]
-INS.HEAD:
-+# generated header
-INS.TAIL:
-+greet("everyone")
-```
-
-Insert Markdown bullets — the leading `+` is the body-row marker; the file receives `- task`:
-```
-[PLAN.md#A1B2]
-INS.POST 2:
-+- task
-+  - nested task
 ```
 
 Replace the whole `greet` function block — `SWAP.BLK 1:` resolves lines 1–3 (the `def` header through `print(msg)`); line 4 is a separate statement and stays:
@@ -119,7 +71,7 @@ SWAP.BLK 1:
 +    print(f"Hello, {name}")
 ```
 
-A decorator/doc-comment is a SEPARATE block — `SWAP.BLK` on the `def`/`fn` line keeps it. Point N at the decorator to take both; here line 1 is `@cache`, so anchoring on the `def` (line 2) would orphan `@cache`:
+A decorator/doc-comment is a SEPARATE block — `SWAP.BLK` on the `def`/`fn` line keeps it. Point N at the decorator to take both:
 ```
 [svc.py#C3D4]
 SWAP.BLK 1:
@@ -127,46 +79,30 @@ SWAP.BLK 1:
 +def load(key):
 +    return store[key]
 ```
+
+File ops: `REM` deletes the whole file; `MV dest` renames/moves (edits above `MV` land on the source first, then the final content is written at `dest`). `INS.HEAD:`/`INS.TAIL:` insert at start/end of file.
 </example>
 
 <anti-patterns>
-# WRONG — empty `SWAP` to delete. RIGHT: DEL 4
+# WRONG — bare range without a verb. RIGHT: `SWAP 4.=4:` — every range needs `SWAP`, `DEL`, or `INS.*`.
+# WRONG — empty SWAP to delete. RIGHT: DEL 4
 SWAP 4.=4:
 
 # WRONG — range describes post-edit size. RIGHT: SWAP 1.=1: (body length is irrelevant)
 SWAP 1.=2:
 +def greet(name):
 
-# WRONG — `-` rows / bare context lines do not exist. The range deletes; the body is only the new content.
-SWAP 3.=3:
-    msg = "Hello, " + name
--   print(msg)
-+   return msg
-# RIGHT
+# WRONG — `-old`/bare context rows in body. RIGHT: only `+TEXT` rows; the range deletes old content.
 SWAP 3.=3:
 +   return msg
 
-# WRONG — a pure insertion done as a widened `SWAP`: you want to add one line after 2,
-# but you replace 2.=4, retype the keepers, and drop one (here line 4, `greet("world")`).
-SWAP 2.=4:
-+    msg = "Hello, " + name
-+    extra = compute(name)
-+    print(msg)
-# RIGHT — touch nothing you keep; the new line is the whole body.
-INS.POST 2:
-+    extra = compute(name)
-
-# WRONG — `INS.BLK.POST N:` anchored on a closing delimiter / last visible line. RIGHT: plain `INS.POST M:`
-INS.BLK.POST 3:
-+after()
-# RIGHT
-INS.POST 3:
-+after()
+# WRONG — pure insertion as widened SWAP (retyping keepers, risking drops). RIGHT: INS.POST for additions.
+# WRONG — INS.BLK.POST on a closing delimiter. RIGHT: plain INS.POST M: on the last line.
 </anti-patterns>
 
 <critical>
 If you remember nothing else:
 1. RE-GROUND AFTER EVERY EDIT. Every apply mints a fresh `#TAG` and renumbers — take the next edit's numbers from the edit response or a fresh `read`. Stale tag or surprise? STOP, re-`read`.
 2. RANGES ARE TIGHT. Cover only lines that change; a stale wide range shreds everything it spans. Whole construct → `SWAP.BLK N`.
-3. THE BODY IS THE FINAL CONTENT. Every body row starts with `+`; Markdown bullets use `+- item`, not `- item`.
+3. THE BODY IS THE FINAL CONTENT. Only `+TEXT` rows; never `-old`/context lines. The range does the deleting.
 </critical>

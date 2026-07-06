@@ -54,6 +54,7 @@ export async function initializeExtensions(session: AgentSession, options: Initi
 		// ExtensionActions
 		{
 			sendMessage: (message, sendOptions) => {
+				if (typeof message === "string") return;
 				const sendTask = session.sendCustomMessage(message, sendOptions);
 				if (sendOptions?.triggerTurn) {
 					if (trackAgentInvokingMessage) {

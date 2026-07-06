@@ -3,7 +3,26 @@ import type { CommitAgentState, GitOverviewSnapshot } from "../../../commit/agen
 import { extractScopeCandidates } from "../../../commit/analysis/scope";
 import type { CustomTool } from "../../../extensibility/custom-tools/types";
 import * as git from "../../../utils/git";
-import { EXCLUDED_LOCK_FILES } from "../lock-files";
+
+const EXCLUDED_LOCK_FILES = new Set([
+	"Cargo.lock",
+	"package-lock.json",
+	"yarn.lock",
+	"pnpm-lock.yaml",
+	"bun.lock",
+	"bun.lockb",
+	"go.sum",
+	"poetry.lock",
+	"Pipfile.lock",
+	"uv.lock",
+	"composer.lock",
+	"Gemfile.lock",
+	"flake.lock",
+	"pubspec.lock",
+	"Podfile.lock",
+	"mix.lock",
+	"gradle.lockfile",
+]);
 
 function isExcludedFile(path: string): boolean {
 	const basename = path.split("/").pop() ?? path;

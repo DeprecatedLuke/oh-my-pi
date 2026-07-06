@@ -24,7 +24,7 @@ export const Flag = {
 	SilentAbort: 0x0200_0000,
 	UserInterrupt: 0x0400_0000,
 	Abort: 0x0800_0000,
-	/** Strict-tool rejection (400): grammar too large, schema too complex, or structured outputs unsupported by the model/endpoint. */
+	/** Anthropic strict-tool grammar too large / schema too complex to compile (400). */
 	Grammar: 0x1000_0000,
 	/** Anthropic model/account does not support fast mode / the `speed` parameter. */
 	FastModeUnsupported: 0x2000_0000,
@@ -112,17 +112,12 @@ export const LLAMA_CPP_TOOL_CALL_PARSE_PATTERN =
 // on a backend that has the model.
 const COPILOT_MODEL_NOT_SUPPORTED_PATTERN = /model_not_supported/i;
 // Anthropic strict-tool grammar too large / schema too complex (400 invalid_request_error).
-// Feature-gated deployments (Azure Foundry, Baseten, …) reject `strict: true`
-// tools outright when the hosted model lacks structured outputs, e.g.
-// "structured_outputs not supported" — without an invalid_request_error wrapper.
 const GRAMMAR_TOO_LARGE_PATTERN = /compiled grammar/i;
 const GRAMMAR_TOO_LARGE_DETAIL_PATTERN = /too large/i;
 const SCHEMA_TOO_COMPLEX_PATTERN = /schema/i;
 const SCHEMA_TOO_COMPLEX_DETAIL_PATTERN = /too complex/i;
 const SCHEMA_COMPILE_PATTERN = /compil/i;
 const INVALID_REQUEST_PATTERN = /invalid_request_error/i;
-const STRUCTURED_OUTPUTS_PATTERN = /structured[_ -]?outputs?/i;
-const FEATURE_NOT_SUPPORTED_PATTERN = /not (?:supported|available|enabled)|unsupported|does(?: not|n'?t) support/i;
 // Anthropic fast-mode unsupported: 400 rejecting `speed`, or 429 rate_limit_error
 // because the account lacks the extra-usage entitlement fast mode requires.
 const FAST_MODE_SPEED_PARAM_PATTERN = /\bspeed\b/i;
@@ -136,9 +131,8 @@ const OAUTH_TRANSIENT_FAILURE_PATTERN =
 	/timeout|network|fetch failed|ECONN(?:REFUSED|RESET)|ETIMEDOUT|EAI_AGAIN|socket hang up|\b(?:408|425|429|5\d{2})\b|rate.?limit|too many requests|temporar|unavailable|forbidden|permission_denied|cloudflare|captcha/i;
 const OAUTH_HTTP_AUTH_PATTERN = /\b401\b/;
 
-function matchesStrictToolsRejection(message: string, errorStatus: number | undefined): boolean {
+function matchesGrammarTooLarge(message: string, errorStatus: number | undefined): boolean {
 	if (errorStatus !== 400) return false;
-	if (STRUCTURED_OUTPUTS_PATTERN.test(message) && FEATURE_NOT_SUPPORTED_PATTERN.test(message)) return true;
 	if (!INVALID_REQUEST_PATTERN.test(message)) return false;
 	const grammarTooLarge = GRAMMAR_TOO_LARGE_PATTERN.test(message) && GRAMMAR_TOO_LARGE_DETAIL_PATTERN.test(message);
 	const schemaTooComplex =
@@ -334,7 +328,7 @@ function classifyText(errorMessage: string | undefined, errorStatus: number | un
 
 		// Copilot per-client routing flap is transient.
 		if (statusClean === 400 && COPILOT_MODEL_NOT_SUPPORTED_PATTERN.test(cleanMessage)) kinds |= Flag.Transient;
-		if (matchesStrictToolsRejection(cleanMessage, statusClean)) kinds |= Flag.Grammar;
+		if (matchesGrammarTooLarge(cleanMessage, statusClean)) kinds |= Flag.Grammar;
 		if (matchesFastModeUnsupported(cleanMessage, statusClean)) kinds |= Flag.FastModeUnsupported;
 	}
 	if (kinds !== 0) return create(kinds);
@@ -430,8 +424,7 @@ export function isUsageLimit(error: unknown, api?: Api): boolean {
 }
 
 /**
- * Strict-tool rejection: grammar too large, schema too complex, or structured
- * outputs unsupported by the model/endpoint.
+ * Anthropic strict-tool grammar too large / schema too complex to compile.
  * Accessor for {@link Flag.Grammar}.
  */
 export function isGrammarError(error: unknown): boolean {

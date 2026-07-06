@@ -448,20 +448,6 @@
 
 - Fixed discriminated-union tool schemas (e.g. the coding-agent `patch` and `issues` tools, authored with `z.discriminatedUnion`) 400ing on Anthropic with `input_schema does not support oneOf, allOf, or anyOf at the top level`, and on OpenAI strict structured outputs which likewise reject a root-level `anyOf`. A shared `flattenTopLevelObjectUnion` helper now merges a top-level object union into a single object (union of branch properties, intersection of `required`); the discriminator literals survive as a nested `anyOf` of `const`s, which both providers accept below the top level. Applied in the Anthropic native tool-schema builder and in `adaptSchemaForStrict` (covering the `openai-responses`, `openai-completions`, and `openai-codex-responses` strict paths).
 - Fixed Anthropic 400 `messages.N.content.M: Invalid \`signature\` in \`thinking\` block` rejections when a signed reasoning chain is replayed across a key/endpoint boundary the signature was bound to (session handoff, a proxy whose upstream key differs from the signing key, an official↔compatible swap) or after the thinking text drifted. The byte-for-byte rule keeps the latest turn's signature, so there is no pre-flight strip for this case; the provider now classifies the rejection (`isAnthropicInvalidThinkingSignatureError`) and retries once with every replayed `thinking` block demoted to plain text (reasoning survives as visible text, no empty/foreign signature is re-sent). The decision is remembered on the provider session so subsequent turns skip the doomed signed attempt.
-### Added
-
-### Fixed
-
-- Fixed `openai-codex-responses` fresh plan execution requests that contained only system/developer guidance by mirroring the final instruction as user input so Codex accepts the first turn. ([#4714](https://github.com/can1357/oh-my-pi/issues/4714))
-- Fixed Codex WebSocket compact/resume delta diagnostics to record request shape and raw-vs-displayed usage buckets, so persistent server-reported uncached suffixes without `orchestration_*` fields are visible in debug stats. ([#4707](https://github.com/can1357/oh-my-pi/issues/4707))
-
-## [16.3.10] - 2026-07-06
-
-### Fixed
-
-- Fixed Ollama/Ollama Cloud EOS-only completions to retry empty stops with a single output token before the agent loop can halt silently. ([#4659](https://github.com/can1357/oh-my-pi/issues/4659))
-- Fixed Claude Sonnet 5 failing every request on feature-gated gateways (Azure Foundry, OpenAI-compatible relays) that reject strict tools with "structured_outputs not supported" — the rejection is now classified as a strict-tool rejection, so the request retries without strict tools and the session remembers the downgrade.
-
 ## [16.3.7] - 2026-07-05
 
 ### Fixed

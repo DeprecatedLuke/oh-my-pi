@@ -16,7 +16,6 @@ import type {
 } from "../types";
 import { normalizeSystemPrompts } from "../utils";
 import { clearStreamingPartialJson, kStreamingPartialJson } from "../utils/block-symbols";
-import { withEmptyCompletionRetry } from "../utils/empty-completion-retry";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import type { CapturedHttpErrorResponse, RawHttpRequestDump } from "../utils/http-inspector";
 import {
@@ -422,10 +421,10 @@ function hasVisibleAssistantContent(output: AssistantMessage): boolean {
 
 const OLLAMA_RETRY_DELAYS_MS = [2_000, 5_000, 10_000];
 
-const streamOllamaOnce = (
+export const streamOllama: StreamFunction<"ollama-chat"> = (
 	model: Model<"ollama-chat">,
 	context: Context,
-	options: OllamaChatOptions = {},
+	options: OllamaChatOptions,
 ): AssistantMessageEventStream => {
 	const stream = new AssistantMessageEventStream();
 	void (async () => {
@@ -744,7 +743,3 @@ const streamOllamaOnce = (
 	})();
 	return stream;
 };
-
-/** Retry EOS-only Ollama completions before the agent loop sees an empty stop. */
-export const streamOllama: StreamFunction<"ollama-chat"> = (model, context, options) =>
-	withEmptyCompletionRetry(model, context, options, streamOllamaOnce);
