@@ -47,7 +47,10 @@ export interface AgentSessionDisposeOptions {
 /** Listener notified when command metadata changes. */
 export type CommandMetadataChangedListener = () => void | Promise<void>;
 /** Public summary of an asynchronous job. */
-export type AsyncJobSnapshotItem = Pick<AsyncJob, "id" | "type" | "status" | "label" | "startTime">;
+export type AsyncJobSnapshotItem = Pick<
+	AsyncJob,
+	"id" | "type" | "status" | "label" | "startTime" | "agentType"
+>;
 
 /** Snapshot of running, recent, and pending-delivery asynchronous jobs. */
 export interface AsyncJobSnapshot {

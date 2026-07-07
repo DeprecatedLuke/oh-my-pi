@@ -33,6 +33,7 @@ type JobParams = typeof jobSchema.infer;
 interface JobSnapshot {
 	id: string;
 	type: "bash" | "task";
+	agentType?: string;
 	status: "running" | "completed" | "failed" | "cancelled";
 	label: string;
 	durationMs: number;
@@ -160,6 +161,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		jobs: {
 			id: string;
 			type: "bash" | "task";
+			agentType?: string;
 			status: string;
 			label: string;
 			startTime: number;
@@ -174,6 +176,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 			return {
 				id: latest.id,
 				type: latest.type,
+				agentType: latest.agentType,
 				status: latest.status as JobSnapshot["status"],
 				label: latest.label,
 				durationMs: Math.max(0, now - latest.startTime),
@@ -188,6 +191,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		jobs: {
 			id: string;
 			type: "bash" | "task";
+			agentType?: string;
 			status: string;
 			label: string;
 			startTime: number;
@@ -420,7 +424,11 @@ export const jobToolRenderer = {
 								uiTheme,
 								job.status === "running" ? options.spinnerFrame : undefined,
 							);
-							const typeBadge = formatBadge(job.type, statusToColor(job.status), uiTheme);
+							const typeBadge = formatBadge(
+								job.type === "task" && job.agentType && job.agentType !== "task" ? job.agentType : job.type,
+								statusToColor(job.status),
+								uiTheme,
+							);
 							// Task jobs label themselves with their agent id, which is also
 							// the job id — drop the id column instead of stuttering it twice.
 							const idPart = job.label.trim() === job.id ? "" : ` ${uiTheme.fg("muted", job.id)}`;

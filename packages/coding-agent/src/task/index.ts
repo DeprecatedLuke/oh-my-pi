@@ -1229,6 +1229,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				queued: true,
 				ownerId: this.session.getAgentId?.() ?? undefined,
 				batchId,
+				agentType: spawnParams.agent,
 				onProgress: text => {
 					onUpdate?.({ content: [{ type: "text", text }], details: buildDetails() });
 				},

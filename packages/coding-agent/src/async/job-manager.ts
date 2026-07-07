@@ -47,7 +47,7 @@ export interface AsyncJob {
 	/** Latest tool-render details reported by the running job. */
 	latestDetails?: Record<string, unknown>;
 	/**
-	 * Registry id of the agent that registered the job (e.g. "Main",
+	 * Registry id of the agent that owns this job (e.g. "Main",
 	 * "AuthLoader"). Used by scoped cancel/list APIs so a subagent's teardown
 	 * does not cancel its parent's jobs. Undefined for callers that don't
 	 * supply an id (e.g. legacy tests, SDK consumers without an agent context).
@@ -80,6 +80,13 @@ export interface AsyncJob {
 	 * hold.
 	 */
 	lastActivityAt: number;
+	/**
+	 * For `type: "task"` jobs: the subagent type (e.g. "research", "explore",
+	 * "task") selected via the `agent` parameter. Used to render a more
+	 * informative tag in the background-jobs panel (e.g. `[research]` instead
+	 * of the generic `[task]`). Undefined for bash jobs and legacy callers.
+	 */
+	agentType?: string;
 }
 
 /**
@@ -156,6 +163,8 @@ export interface AsyncJobRegisterOptions {
 	queued?: boolean;
 	/** Shared id for all jobs spawned by one fan-out call; see AsyncJob.batchId. */
 	batchId?: string;
+	/** Subagent type for task jobs (e.g. "research", "explore"); see AsyncJob.agentType. */
+	agentType?: string;
 }
 
 /**
@@ -273,6 +282,7 @@ export class AsyncJobManager {
 			agentId: options?.agentId,
 			queued: options?.queued === true,
 			batchId: options?.batchId,
+			agentType: options?.agentType,
 			lastActivityAt: startTime,
 		};
 
