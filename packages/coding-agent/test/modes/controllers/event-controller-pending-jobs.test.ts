@@ -109,6 +109,23 @@ describe("renderBackgroundJobsLines", () => {
 		expect(row).toContain("…");
 		expect(row).toContain("- 1m23s");
 	});
+
+	it("shows [research] instead of [task] when the job has agentType set", () => {
+		const out = Bun.stripANSI(
+			renderBackgroundJobsLines([taskRow({ agentType: "research" })], NO_SETTLED, 120).join("\n"),
+		);
+		expect(out).toContain("[research] SomeTask: summarized current action - 1m23s");
+		expect(out).not.toContain("[task]");
+	});
+
+	it("keeps [task] for default worker jobs (agentType absent or 'task')", () => {
+		const noAgentType = Bun.stripANSI(renderBackgroundJobsLines([taskRow()], NO_SETTLED, 120).join("\n"));
+		expect(noAgentType).toContain("[task] SomeTask:");
+		const defaultWorker = Bun.stripANSI(
+			renderBackgroundJobsLines([taskRow({ agentType: "task" })], NO_SETTLED, 120).join("\n"),
+		);
+		expect(defaultWorker).toContain("[task] SomeTask:");
+	});
 });
 
 describe("EventController background-jobs panel", () => {

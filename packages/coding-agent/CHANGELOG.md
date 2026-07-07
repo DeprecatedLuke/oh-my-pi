@@ -1292,11 +1292,12 @@
 
 ### Changed
 
-- Status line token throughput segment now uses a dedicated tachometer icon (`icon.throughput`) instead of reusing the output arrow; cache read/write segments use a single database icon instead of stacking input/output arrows alongside it.
-- Per-turn transcript usage row now uses `theme.icon.cache` (database icon) instead of a hardcoded `cache:` label, and shows TTFT (time to first token) and token throughput (`tok/s`) when duration data is available.
+- Background jobs panel and `/jobs` list now show the subagent's agent type in the tag (e.g. `[research]`, `[explore]`) instead of the generic `[task]` when an `agent` parameter was passed.
+- System prompt delegation section now explicitly documents the `agent` parameter on the `task` tool and instructs the model to end its turn when waiting for async subagent results rather than spinning.
 
 ### Fixed
 
+- Fixed the `task` tool prompt rendering contradictory blocking and non-blocking guidance in sync mode: the "spawning is non-blocking" and "end your turn" bullets were outside the `{{#if asyncEnabled}}` guard and rendered alongside "Execution blocks your turn."
 - Hashline no-op diagnostic now shows the matching line content and line number, so the model can identify which body row was byte-identical without a separate `read`.
 ## [16.3.8] - 2026-07-05
 
