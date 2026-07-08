@@ -1630,6 +1630,7 @@ export class AgentSession {
 		const running = manager.getRunningJobs(ownerFilter).map(job => ({
 			id: job.id,
 			type: job.type,
+			agentType: job.agentType,
 			status: job.status,
 			label: job.label,
 			startTime: job.startTime,
@@ -1637,6 +1638,7 @@ export class AgentSession {
 		const recent = manager.getRecentJobs(options?.recentLimit ?? 5, ownerFilter).map(job => ({
 			id: job.id,
 			type: job.type,
+			agentType: job.agentType,
 			status: job.status,
 			label: job.label,
 			startTime: job.startTime,
