@@ -81,9 +81,9 @@ export interface AsyncJob {
 	 */
 	lastActivityAt: number;
 	/**
-	 * For `type: "task"` jobs: the subagent type (e.g. "research", "explore",
+	 * For `type: "task"` jobs: the subagent type (e.g. "solver", "explore",
 	 * "task") selected via the `agent` parameter. Used to render a more
-	 * informative tag in the background-jobs panel (e.g. `[research]` instead
+	 * informative tag in the background-jobs panel (e.g. `[solver]` instead
 	 * of the generic `[task]`). Undefined for bash jobs and legacy callers.
 	 */
 	agentType?: string;
@@ -163,7 +163,7 @@ export interface AsyncJobRegisterOptions {
 	queued?: boolean;
 	/** Shared id for all jobs spawned by one fan-out call; see AsyncJob.batchId. */
 	batchId?: string;
-	/** Subagent type for task jobs (e.g. "research", "explore"); see AsyncJob.agentType. */
+	/** Subagent type for task jobs (e.g. "solver", "explore"); see AsyncJob.agentType. */
 	agentType?: string;
 }
 

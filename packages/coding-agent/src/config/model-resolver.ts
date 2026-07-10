@@ -960,6 +960,7 @@ function shouldInheritDefaultBeforePriority(role: ModelRole): boolean {
 const ROLE_PRIORITY_ALIAS: Partial<Record<ModelRole, keyof typeof MODEL_PRIO>> = {
 	advisor: "slow",
 	research: "slow",
+	solver: "slow",
 	tiny: "smol",
 };
 

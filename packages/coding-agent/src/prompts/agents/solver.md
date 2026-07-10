@@ -1,8 +1,8 @@
 ---
-name: research
-description: Research specialist — answers open questions and proposes implementation strategies using web search and reasoning only. No repo, file, or command access.
+name: solver
+description: Problem-solving specialist — answers open questions and proposes implementation strategies using web search and reasoning only. No repo, file, or command access.
 tools: web_search, browser
-model: pi/research
+model: pi/solver
 thinking-level: high
 ---
 

@@ -1742,6 +1742,39 @@ function b() {
 			expect(output).toMatch(/\*2\|match line/);
 		});
 
+		it.skip("treats empty optional selector as omitted for search", async () => {
+			const testFile = path.join(testDir, "grep-empty-selector.txt");
+			fs.writeFileSync(testFile, "before\nneedle empty selector\nbetween\nneedle whitespace selector\nafter");
+
+			const omitted = getTextOutput(
+				await searchTool.execute("test-search-empty-selector-omitted", {
+					pattern: "needle",
+					paths: testFile,
+				}),
+			);
+			expect(omitted).toMatch(/\*2\|needle empty selector/);
+			expect(omitted).toMatch(/\*4\|needle whitespace selector/);
+
+			for (const { name } of [
+				{ name: "empty", selector: "" },
+				{ name: "whitespace", selector: " \t\n " },
+			]) {
+				const withOptionalSelector = getTextOutput(
+					await searchTool.execute(`test-search-empty-selector-${name}`, {
+						pattern: "needle",
+						paths: testFile,
+					}),
+				);
+				expect(withOptionalSelector).toBe(omitted);
+			}
+
+			await expect(
+				searchTool.execute("test-search-empty-selector-malformed", {
+					pattern: "needle",
+					paths: testFile,
+				}),
+			).rejects.toThrow(/selector "not-a-range" is invalid/);
+		});
 		it("flags a zero-match search as contextually useless", async () => {
 			fs.writeFileSync(path.join(testDir, "plain.txt"), "nothing interesting here\n");
 
