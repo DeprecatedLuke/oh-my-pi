@@ -1176,6 +1176,9 @@
 - Fixed subagent yield tool calls being discarded when a soft request budget aborts the assistant turn before the yield event completes.
 - Fixed --tools filtering in interactive sessions incorrectly disabling deferred MCP tools from configured servers.
 - Fixed kept-alive task subagents entering infinite provider-call loops after an IRC wake and terminal yield.
+### Removed
+
+- Removed the fork-only `canWriteKnowledge` capability gate. `knowledge://` URLs and `.omp/knowledge` filesystem paths are now writable by any agent in any session — no capability flag, no `shouldGrantKnowledgeWrite` identity check, no `ToolContextStore.setKnowledgeWritable` threading. The `knowledge` agent remains the designated knowledge maintainer by convention (prompt-level), not by enforcement.
 
 ## [16.3.15] - 2026-07-09
 

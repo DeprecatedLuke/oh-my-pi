@@ -372,8 +372,7 @@ function createProductionExporter(modelOverride: string | undefined): SessionKno
 			new EditTool(toolSession),
 		];
 		// No live parent here (separate process): cache inheritance is best-effort
-		// and secrets are identity (saved session messages are stored raw). The
-		// loop's getToolContext defaults to `canWriteKnowledge: true`.
+		// and secrets are identity (saved session messages are stored raw).
 		return await runSessionKnowledgeAgent({
 			cwd: job.session.cwd,
 			sourceTitle: job.sourceTitle,

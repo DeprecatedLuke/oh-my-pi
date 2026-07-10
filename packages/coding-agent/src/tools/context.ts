@@ -15,7 +15,6 @@ declare module "@oh-my-pi/pi-agent-core" {
 		xdevApproved?: boolean;
 		/** Set only after an interactive prompt approves provider computer safety checks. */
 		providerSafetyApproved?: boolean;
-		canWriteKnowledge?: boolean;
 	}
 }
 
@@ -23,7 +22,6 @@ export class ToolContextStore {
 	#uiContext: ExtensionUIContext | undefined;
 	#hasUI = false;
 	#toolNames: string[] = [];
-	#canWriteKnowledge = false;
 
 	constructor(private readonly getBaseContext: () => CustomToolContext) {}
 
@@ -34,7 +32,6 @@ export class ToolContextStore {
 			hasUI: this.#hasUI,
 			toolNames: this.#toolNames,
 			toolCall,
-			canWriteKnowledge: this.#canWriteKnowledge,
 		};
 	}
 
@@ -45,9 +42,5 @@ export class ToolContextStore {
 
 	setToolNames(names: string[]): void {
 		this.#toolNames = names;
-	}
-
-	setKnowledgeWritable(v: boolean): void {
-		this.#canWriteKnowledge = v;
 	}
 }

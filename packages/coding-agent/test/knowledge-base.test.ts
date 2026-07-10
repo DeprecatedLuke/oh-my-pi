@@ -5,13 +5,11 @@ import * as path from "node:path";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import type { Message } from "@oh-my-pi/pi-ai/types";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import type { CustomToolContext } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
 import { runSessionKnowledgeAgent } from "@oh-my-pi/pi-coding-agent/session/knowledge-base";
 import { loadKnowledgeSummaries } from "@oh-my-pi/pi-coding-agent/session/knowledge-index";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { ToolContextStore } from "@oh-my-pi/pi-coding-agent/tools/context";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 
@@ -106,7 +104,7 @@ describe("runSessionKnowledgeAgent", () => {
 			},
 		});
 
-		// The loop wrote the file (canWriteKnowledge was forced on for the pass).
+		// The loop wrote the file.
 		const written = path.join(repo, ".omp", "knowledge", "workflows", "smoke-tests.md");
 		expect(await Bun.file(written).text()).toContain("ci:test:smoke after worker changes");
 
@@ -239,22 +237,5 @@ describe("knowledge index description upgrades", () => {
 		const loaded = await Bun.file(knowledgePath).text();
 		const { frontmatter } = parseFrontmatter(loaded, { source: knowledgePath });
 		expect(frontmatter.description).toBe(description);
-	});
-});
-
-describe("ToolContextStore knowledge-write gate", () => {
-	it("keeps .omp/knowledge writes gated off until explicitly enabled", () => {
-		// The compact subagent depends on this flag: the write/edit tools refuse
-		// `.omp/knowledge` writes unless the store reports canWriteKnowledge true.
-		// `createAgentSession` flips it on only when ExecutorOptions.canWriteKnowledge
-		// is set, which only the internal knowledge-compact spawn does.
-		const store = new ToolContextStore(() => ({}) as CustomToolContext);
-		expect(store.getContext().canWriteKnowledge).toBe(false);
-
-		store.setKnowledgeWritable(true);
-		expect(store.getContext().canWriteKnowledge).toBe(true);
-
-		store.setKnowledgeWritable(false);
-		expect(store.getContext().canWriteKnowledge).toBe(false);
 	});
 });

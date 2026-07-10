@@ -294,7 +294,6 @@ function resolveBulkDirectives(raw: string, stripped: string): Map<number, strin
 	}
 	return rawResult ?? parseBulkDirectives(stripped);
 }
-
 const writeSchema = type({
 	path: type("string").describe("file path"),
 	content: type("string").describe("file content"),

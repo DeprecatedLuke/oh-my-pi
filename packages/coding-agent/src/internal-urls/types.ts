@@ -145,13 +145,6 @@ export interface WriteContext {
 	xd?: {
 		write(name: string | null, content: string): Promise<void>;
 	};
-	/**
-	 * Opt-in capability allowing `knowledge://` writes. `knowledge://` is
-	 * read-only in the main interactive session; only the headless knowledge
-	 * pass (`/knowledge compact`) sets this to `true`. Defaults to falsy, which
-	 * keeps project knowledge read-only.
-	 */
-	allowKnowledgeWrite?: boolean;
 }
 
 export interface WriteResult {

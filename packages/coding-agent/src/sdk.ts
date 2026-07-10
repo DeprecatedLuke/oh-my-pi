@@ -479,14 +479,6 @@ export interface CreateAgentSessionOptions {
 	toolNames?: string[];
 	/** Limit the session to explicitly supplied tool names, without discovered extras. */
 	restrictToolNames?: boolean;
-	/**
-	 * Allow this session's write/edit tools to modify files under `.omp/knowledge`.
-	 * Default off. Set ONLY by the internal knowledge-compact spawn (via
-	 * `ExecutorOptions.canWriteKnowledge`) — deliberately NOT a field on
-	 * `AgentDefinition`, so user agent files can never grant themselves
-	 * knowledge-write access.
-	 */
-	canWriteKnowledge?: boolean;
 
 	/** Output schema for structured completion (subagents). */
 	outputSchema?: unknown;
@@ -2549,7 +2541,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			autoApprove: options.autoApprove ?? false,
 		});
 		const toolContextStore = new ToolContextStore(getSessionContext);
-		if (options.canWriteKnowledge) toolContextStore.setKnowledgeWritable(true);
 
 		const registeredTools = restrictToolNames ? [] : extensionRunner.getAllRegisteredTools();
 		const sdkCustomTools = restrictToolNames

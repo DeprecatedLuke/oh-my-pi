@@ -69,7 +69,7 @@ describe("KnowledgeProtocolHandler", () => {
 			const result = await handler.write(
 				parseInternalUrl("knowledge://runtime/background-jobs.md"),
 				"# Background Jobs\n\n- Completion deliveries wait for pending async work.\n",
-				{ cwd: dir, allowKnowledgeWrite: true },
+				{ cwd: dir },
 			);
 
 			expect(result?.text).toContain("Wrote knowledge://runtime/background-jobs.md");

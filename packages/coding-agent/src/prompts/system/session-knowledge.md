@@ -22,7 +22,7 @@ Purpose: durable, reusable facts learned this session that should help future se
 - Keep files concise and maintainable, like AGENTS.md but agent-maintained.
 - Every file MUST start with YAML frontmatter containing `description: <tags>`. The description is shown in the prompt-time Knowledge index and MUST be tag-based: dense comma-separated retrieval tags or short trigger phrases, not a sentence. Favor subsystem names, commands, file names, failure names, user-preference labels, URLs/hostnames, config keys, and workflow names future agents may search for.
 - Paths MUST be exactly `<category>/<topic>.md` under `.omp/knowledge`.
-- Touch nothing outside the knowledge base. `knowledge://` is writable only during this pass; other files are off-limits.
+- Touch nothing outside the knowledge base.
 </rules>
 
 <example>

@@ -379,6 +379,7 @@ function extractApprovalPath(args: unknown): string {
 	return typeof targetPath === "string" && targetPath.length > 0 ? targetPath : "(unknown)";
 }
 
+
 export class EditTool implements AgentTool<TInput> {
 	readonly approval = (args: unknown) => {
 		const targetPath = extractApprovalPath(args);
@@ -494,9 +495,11 @@ export class EditTool implements AgentTool<TInput> {
 		onUpdate?: AgentToolUpdateCallback<EditToolDetails, TInput>,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult<EditToolDetails, TInput>> {
+
 		const modeDefinition = this.#getModeDefinition();
 		return modeDefinition.execute(this, params, signal, getLspBatchRequest(context?.toolCall), onUpdate);
 	}
+
 
 	#getModeDefinition(): EditModeDefinition {
 		return {

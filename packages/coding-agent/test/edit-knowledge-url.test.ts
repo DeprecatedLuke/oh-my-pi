@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { computeFileHash } from "@oh-my-pi/hashline";
-import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EditTool } from "@oh-my-pi/pi-coding-agent/edit";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
@@ -28,10 +27,6 @@ function resultText(result: { content: { type: string; text?: string }[] }): str
 		.filter((b): b is { type: "text"; text: string } => b.type === "text" && typeof b.text === "string")
 		.map(b => b.text)
 		.join("\n");
-}
-
-function ctx(canWriteKnowledge?: boolean): AgentToolContext {
-	return { canWriteKnowledge } as unknown as AgentToolContext;
 }
 
 const KNOWLEDGE_FILE = "testing/edit-url.md";
@@ -79,12 +74,12 @@ describe("edit tool knowledge:// support", () => {
 		return `[${relPath}#${tag}]\nSWAP 7.=7:\n+- Edited durable fact.`;
 	}
 
-	it("rewrites a knowledge file through the handler when canWriteKnowledge is set", async () => {
+	it("rewrites a knowledge file through the knowledge:// URL handler", async () => {
 		const tool = new EditTool(createSession(tmpDir));
 		expect(tool.mode).toBe("hashline");
 		const input = await buildEditInput();
 
-		const result = await tool.execute("call-1", { input }, undefined, undefined, ctx(true));
+		const result = await tool.execute("call-1", { input });
 
 		// The tool echoes a fresh [knowledge://...#TAG] header (tag computed from resolved content).
 		expect(resultText(result)).toContain(`[knowledge://${KNOWLEDGE_FILE}#`);
@@ -94,18 +89,6 @@ describe("edit tool knowledge:// support", () => {
 		expect(onDisk).not.toContain("- Original durable fact.");
 	});
 
-	it("refuses the edit (handler read-only error → ToolError) when canWriteKnowledge is unset", async () => {
-		const tool = new EditTool(createSession(tmpDir));
-		const input = await buildEditInput();
-
-		await expect(tool.execute("call-2", { input }, undefined, undefined, ctx(false))).rejects.toThrow(/read-only/i);
-
-		// The file is untouched.
-		const onDisk = await Bun.file(knowledgeAbsPath(tmpDir)).text();
-		expect(onDisk).toContain("- Original durable fact.");
-		expect(onDisk).not.toContain("- Edited durable fact.");
-	});
-
 	it("leaves normal filesystem hashline edits on the filesystem path", async () => {
 		const filePath = path.join(tmpDir, "plain.md");
 		await Bun.write(filePath, "# Plain\n\n- keep me\n");
@@ -113,9 +96,7 @@ describe("edit tool knowledge:// support", () => {
 		const tag = computeFileHash(await Bun.file(filePath).text());
 		const input = `[${filePath}#${tag}]\nSWAP 3.=3:\n+- changed me`;
 
-		// No canWriteKnowledge in context: a plain path must NOT be gated by the
-		// internal-URL branch and must still write to disk.
-		const result = await tool.execute("call-3", { input }, undefined, undefined, ctx());
+		const result = await tool.execute("call-3", { input });
 
 		// The filesystem hashline renderer relativizes the header to the cwd, so a
 		// plain path comes back as [plain.md#TAG] — proof the normal path ran (the
@@ -126,22 +107,11 @@ describe("edit tool knowledge:// support", () => {
 		expect(onDisk).not.toContain("- keep me");
 	});
 
-	it("refuses a filesystem-path edit under .omp/knowledge when canWriteKnowledge is unset", async () => {
+	it("edits a knowledge file via its filesystem path under .omp/knowledge", async () => {
 		const tool = new EditTool(createSession(tmpDir));
 		const input = await buildFsEditInput();
 
-		await expect(tool.execute("call-4", { input }, undefined, undefined, ctx(false))).rejects.toThrow(/read-only/i);
-
-		const onDisk = await Bun.file(knowledgeAbsPath(tmpDir)).text();
-		expect(onDisk).toContain("- Original durable fact.");
-		expect(onDisk).not.toContain("- Edited durable fact.");
-	});
-
-	it("allows a filesystem-path edit under .omp/knowledge when canWriteKnowledge is set", async () => {
-		const tool = new EditTool(createSession(tmpDir));
-		const input = await buildFsEditInput();
-
-		const result = await tool.execute("call-5", { input }, undefined, undefined, ctx(true));
+		const result = await tool.execute("call-5", { input });
 
 		expect(resultText(result)).toContain(".omp/knowledge/");
 		const onDisk = await Bun.file(knowledgeAbsPath(tmpDir)).text();

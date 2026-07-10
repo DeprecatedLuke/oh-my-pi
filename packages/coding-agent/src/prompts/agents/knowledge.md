@@ -1,6 +1,6 @@
 ---
 name: knowledge
-description: Maintains the project knowledge base under `.omp/knowledge` — explores the repo and authors, verifies, reconciles, or prunes durable notes. The only delegated agent permitted to write `knowledge://`.
+description: Maintains the project knowledge base under `.omp/knowledge` — explores the repo and authors, verifies, reconciles, or prunes durable notes.
 tools: read, write, edit, search, find, bash
 model: pi/task
 ---

@@ -242,11 +242,6 @@ export class KnowledgeProtocolHandler implements ProtocolHandler {
 	}
 
 	async write(url: InternalUrl, content: string, context?: WriteContext): Promise<WriteResult> {
-		if (context?.allowKnowledgeWrite !== true) {
-			throw new Error(
-				"knowledge:// is read-only in this session; project knowledge is maintained by the knowledge pass (/knowledge compact).",
-			);
-		}
 		const cwd = resolveKnowledgeCwd(context);
 		const parsed = parseKnowledgeUrlPath(url);
 		if (!parsed.relativePath) {

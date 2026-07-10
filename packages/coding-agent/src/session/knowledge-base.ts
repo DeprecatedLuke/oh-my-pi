@@ -1,4 +1,4 @@
-import { Agent, type AgentOptions, type AgentToolContext, type ToolCallContext } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentOptions } from "@oh-my-pi/pi-agent-core";
 import type { Message } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import { commitKnowledgeFiles } from "./commit-knowledge";
@@ -16,9 +16,7 @@ import { commitKnowledgeFiles } from "./commit-knowledge";
  * thinking/temperature config.
  *
  * `agent.getToolContext` is the BASE per-call tool context (e.g. the session's
- * `ToolContextStore.getContext`). The loop wraps it non-mutatingly to force
- * `canWriteKnowledge: true`, so the shared tool instances may write
- * `.omp/knowledge` for the duration of this pass only.
+ * `ToolContextStore.getContext`).
  */
 export interface RunSessionKnowledgeAgentConfig {
 	/** Working directory whose `.omp/knowledge` subtree is updated and committed. */
@@ -36,7 +34,7 @@ export interface RunSessionKnowledgeAgentConfig {
 	 * the caller.
 	 */
 	commit?: boolean;
-	/** Agent options cloned from the parent session. Its `getToolContext` is the base context the loop layers `canWriteKnowledge` onto. */
+	/** Agent options cloned from the parent session. */
 	agent: AgentOptions;
 	/** Static request metadata forwarded to the provider (e.g. Anthropic session attribution). */
 	metadata?: Record<string, unknown>;
@@ -66,14 +64,8 @@ export async function runSessionKnowledgeAgent(
 
 	const seededMessages = config.agent.initialState?.messages ?? [];
 
-	const baseGetToolContext = config.agent.getToolContext;
 	const agent = new Agent({
 		...config.agent,
-		// Force write capability for the SAME tool instances during this pass
-		// only, non-mutatingly per call so the parent session's shared tool
-		// context is never flipped writable underneath it.
-		getToolContext: (toolCall?: ToolCallContext): AgentToolContext =>
-			({ ...baseGetToolContext?.(toolCall), canWriteKnowledge: true }) as AgentToolContext,
 	});
 	// Static metadata already resolved for this provider by the caller; setting
 	// it clears any inherited resolver, which is correct for a one-shot pass.
