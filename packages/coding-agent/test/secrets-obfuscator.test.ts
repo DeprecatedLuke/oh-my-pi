@@ -410,6 +410,14 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		expect(obf.deobfuscate(masked)).toBe(input);
 	});
 
+	it("does not re-obfuscate a regex match inside an existing friendly-name placeholder", () => {
+		const obf = new SecretObfuscator([{ type: "regex", content: "alloc", flags: "i", friendlyName: "AllocRegion" }]);
+		const once = obf.obfuscate("allocator");
+		expect(once).toMatch(/#ALLOCREGION_[A-Z0-9]{4}:L#ator/);
+		expect(obf.obfuscate(once)).toBe(once);
+		expect(obf.deobfuscate(once)).toBe("allocator");
+	});
+
 	it("leaves the placeholder unprefixed when no friendlyName is set", () => {
 		const obf = new SecretObfuscator([{ type: "plain", content: "hunter22" }]);
 		const masked = obf.obfuscate("login with hunter22 now");

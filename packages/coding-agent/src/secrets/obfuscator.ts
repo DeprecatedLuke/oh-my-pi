@@ -539,6 +539,45 @@ interface ReplaceRegexScan {
 	segments: RegexScanSegment[];
 }
 
+/**
+ * Applies a transformation to text around already-obfuscated placeholders.
+ * A placeholder is a protocol token, not source text: re-obfuscating a
+ * provider context must preserve it byte-for-byte.
+ */
+function transformUnmaskedSegments(text: string, transform: (segment: string) => string): string {
+	if (!text.includes("#")) return transform(text);
+
+	PLACEHOLDER_RE.lastIndex = 0;
+	let cursor = 0;
+	let result = "";
+	for (;;) {
+		const match = PLACEHOLDER_RE.exec(text);
+		if (match === null) break;
+		result += transform(text.slice(cursor, match.index));
+		result += match[0];
+		cursor = match.index + match[0].length;
+	}
+	return cursor === 0 ? transform(text) : result + transform(text.slice(cursor));
+}
+
+function collectUnmaskedRegexMatches(text: string, regex: RegExp): Set<string> {
+	const matches = new Set<string>();
+	transformUnmaskedSegments(text, segment => {
+		regex.lastIndex = 0;
+		for (;;) {
+			const match = regex.exec(segment);
+			if (match === null) break;
+			if (match[0].length === 0) {
+				regex.lastIndex++;
+				continue;
+			}
+			matches.add(match[0]);
+		}
+		return segment;
+	});
+	return matches;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // SecretObfuscator
 // ═══════════════════════════════════════════════════════════════════════════
@@ -708,7 +747,7 @@ export class SecretObfuscator {
 		}
 		({ text: result, origin } = this.#stripUnsafeFriendlyPrefixes(result, origin));
 
-		// 2. Process obfuscate-mode plain secrets
+		// 2. Process obfuscate-mode plain secrets.
 		for (const [secret, index] of [...this.#plainMappings].sort((a, b) => b[0].length - a[0].length)) {
 			const mapping = this.#obfuscateMappings.get(index)!;
 			({ text: result, origin } = this.#replaceOutsidePlaceholdersTracked(
@@ -720,7 +759,7 @@ export class SecretObfuscator {
 			));
 		}
 
-		// 3. Process regex entries — discover new matches
+		// 3. Process regex entries, discovering matches only outside protocol tokens.
 		for (const entry of this.#regexEntries) {
 			entry.regex.lastIndex = 0;
 			const matches = this.#collectRegexMatches(result, entry.regex, entry.mode, origin, entry.replacement);
