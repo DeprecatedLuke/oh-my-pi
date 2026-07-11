@@ -490,7 +490,7 @@ function buildPlaceholder(hint: PlaceholderCaseHint | undefined, base: string, f
 }
 
 /** Regex matching `$$HASH$$`, `$$HASH:U$$`, and `$$FRIENDLY_HASH(:hint)$$` placeholders. */
-const PLACEHOLDER_RE = /\$\$(?:[A-Z0-9]+_)?[A-Z0-9]{4,}(?::[ULCM])?\$\$/g;
+export const PLACEHOLDER_RE = /\$\$(?:[A-Z0-9]+_)?[A-Z0-9]{4,}(?::[ULCM])?\$\$/g;
 
 function resumePlaceholderScanAfterRejectedCandidate(match: RegExpExecArray): void {
 	// RegExp#exec does not find overlapping matches. Restart at the rejected

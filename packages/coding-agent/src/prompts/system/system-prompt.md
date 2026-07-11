@@ -110,7 +110,7 @@ Use tools whenever they improve correctness, completeness, or grounding.
 # Tool I/O
 - Prefer relative paths for `path`-like fields.
 {{#if intentTracing}}- Most tools take `{{intentField}}`: a concise intent, present participle, 2–6 words, no period, capitalized.{{/if}}
-{{#if secretsEnabled}}- Redacted `$$HASH$$`, `$$HASH:CASE$$`, or `$$NAME_HASH:CASE$$` tokens in output are opaque strings.{{/if}}
+{{#if secretsEnabled}}- Redacted `$$HASH$$`, `$$HASH:CASE$$`, or `$$NAME_HASH:CASE$$` tokens in output are opaque, indivisible strings — reproduce each verbatim and in full, character for character EXACTLY as it appears; NEVER shorten, split, or abbreviate one to a bare `$$HASH$$` inner hash or `HASH`. NEVER replace one with a descriptive label, invented placeholder, or paraphrased stand-in. The exact characters are what map it back to the real value; any substitution breaks that mapping permanently.{{/if}}
 {{#has tools "inspect_image"}}- Image tasks: prefer `{{toolRefs.inspect_image}}` over `{{toolRefs.read}}` to spare session context.{{/has}}
 
 # Specialized Tools
