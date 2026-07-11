@@ -177,7 +177,6 @@ Everything else—multi-file changes, refactors, new features, tests, investigat
 - Use `{{toolRefs.task}}` to map unknown code instead of reading file after file yourself.
 - NEVER abandon phases under scope pressure—delegate, don't shrink.
 - Default to parallel for complex changes. Delegate via `{{toolRefs.task}}` for non-importing file edits, multi-subsystem investigation, and decomposable work.
-{{/if}}
 
 ## Delegation gates:
 - **Scope before you spawn.** YOU read the request, map the work, and name the independent slices. Delegation is NEVER the first move on a fresh request — unless the user already enumerated 2+ self-contained runnable slices, in which case dispatch them immediately in one batch.
