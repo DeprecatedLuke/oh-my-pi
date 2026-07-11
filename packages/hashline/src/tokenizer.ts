@@ -433,6 +433,8 @@ function tryParseHunkHeader(line: string): ParsedHunkHeader | null {
 	return { target: scan.target };
 }
 
+const SECRET_PLACEHOLDER_AT = /#(?:[A-Z0-9]+_)?[A-Z0-9]{4}(?::[ULCM])?#/y;
+
 function tryParseHeader(line: string): { path: string; fileHash?: string } | null {
 	if (!line.startsWith(HL_FILE_PREFIX)) return null;
 	const end = trimEndIndex(line);
@@ -461,15 +463,19 @@ function tryParseHeader(line: string): { path: string; fileHash?: string } | nul
 		}
 	}
 
-	// The hashline header grammar uses `#` as the path/tag separator and
-	// does not allow `#` inside filenames. Anything `#` left in the path
-	// body — short tags (`#1A2`), non-hex tags (`#1A2G`), over-long tags
-	// (`#1A2B5`), stale-tag copy-paste (`#1A2B copied from read`), or
-	// line-suffixed tags (`#1A2B:42`) — means the header is malformed.
-	// Surface the focused diagnostic instead of silently mis-routing the
-	// edit or reporting a missing tag downstream.
+	// Provider-facing secret placeholders contain `#` and can appear in paths
+	// before the execution boundary restores their original text. Preserve a
+	// complete placeholder as filename content; every other `#` remains a
+	// malformed header so an anchor cannot silently mis-route an edit.
 	for (let i = FILE_PREFIX_LENGTH; i < pathEnd; i++) {
-		if (line.charCodeAt(i) === CHAR_HASH) return null;
+		if (line.charCodeAt(i) !== CHAR_HASH) continue;
+		SECRET_PLACEHOLDER_AT.lastIndex = i;
+		const placeholder = SECRET_PLACEHOLDER_AT.exec(line);
+		if (placeholder !== null && placeholder.index === i && i + placeholder[0].length <= pathEnd) {
+			i += placeholder[0].length - 1;
+			continue;
+		}
+		return null;
 	}
 
 	if (pathEnd === FILE_PREFIX_LENGTH) return null;

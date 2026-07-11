@@ -368,7 +368,7 @@ function extractApprovalPath(args: unknown): string {
 	const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
 	const input = typeof record.input === "string" ? record.input : undefined;
 	if (input) {
-		const hashlineMatch = /^\[([^#\r\n]+)(?:#[0-9a-fA-F]{4})?\]/m.exec(input);
+		const hashlineMatch = /^\[((?:[^#\r\n]|#(?:[A-Z0-9]+_)?[A-Z0-9]{4}(?::[ULCM])?#)+)(?:#[0-9a-fA-F]{4})?\]/m.exec(input);
 		if (hashlineMatch?.[1]) return hashlineMatch[1];
 
 		const applyPatchMatch = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/m.exec(input);

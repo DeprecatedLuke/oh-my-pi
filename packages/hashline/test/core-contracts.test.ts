@@ -150,6 +150,15 @@ describe("hashline input splitter", () => {
 		});
 	});
 
+	it("preserves complete secret placeholders in a bracket-header path", () => {
+		const input = [`[libs/embedded-allocator/src/arena.rs#1A2B]`, "DEL 1"].join("\n");
+		expect(splitHashlineInput(input)).toEqual({
+			path: "libs/embedded-allocator/src/arena.rs",
+			fileHash: "1A2B",
+			diff: "DEL 1",
+		});
+	});
+
 	it("normalizes leading blanks, cwd-relative paths, and explicit fallback paths", () => {
 		expect(splitHashlineInput(`\n[foo.ts]\nINS.HEAD:\n${repl("x")}`)).toEqual({
 			path: "foo.ts",
