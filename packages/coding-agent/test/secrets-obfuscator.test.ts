@@ -410,12 +410,13 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		expect(obf.deobfuscate(masked)).toBe(input);
 	});
 
-	it("does not re-obfuscate a regex match inside an existing friendly-name placeholder", () => {
+	it("preserves a hashline filename placeholder across repeated provider-context masking", () => {
 		const obf = new SecretObfuscator([{ type: "regex", content: "alloc", flags: "i", friendlyName: "AllocRegion" }]);
-		const once = obf.obfuscate("allocator");
-		expect(once).toMatch(/#ALLOCREGION_[A-Z0-9]{4}:L#ator/);
+		const input = "[libs/embedded-allocator/src/allocator.rs#ED09]";
+		const once = obf.obfuscate(input);
+		expect(once).toMatch(/#ALLOCREGION_[A-Z0-9]{4}:L#/);
 		expect(obf.obfuscate(once)).toBe(once);
-		expect(obf.deobfuscate(once)).toBe("allocator");
+		expect(obf.deobfuscate(once)).toBe(input);
 	});
 
 	it("leaves the placeholder unprefixed when no friendlyName is set", () => {
