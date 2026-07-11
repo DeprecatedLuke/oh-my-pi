@@ -21,6 +21,7 @@ import { createUsageRowBlock } from "../../modes/components/usage-row";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import idleRecapPrompt from "../../prompts/system/recap-user.md" with { type: "text" };
+import { deobfuscateToolArguments } from "../../secrets/obfuscator";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { isSilentAbort, readQueueChipText, resolveAbortLabel } from "../../session/messages";
 import { type ApprovalMode, resolveApproval } from "../../tools/approval";
@@ -747,22 +748,26 @@ export class EventController {
 			}
 			for (const content of this.ctx.streamingMessage.content) {
 				if (content.type !== "toolCall") continue;
+				const obfuscator = this.ctx.viewSession.obfuscator;
+				const displayArgs = obfuscator
+					? deobfuscateToolArguments(obfuscator, content.arguments)
+					: content.arguments;
 				if (content.name === "read") {
-					if (!readArgsHaveTarget(content.arguments)) {
+					if (!readArgsHaveTarget(displayArgs)) {
 						// Args still streaming — defer until path is parseable so we can route to the
 						// read group (files + xd:// devices) vs ToolExecutionComponent (other internal URLs).
 						// Creating either component now would lock the read into the wrong shape.
 						continue;
 					}
-					if (readArgsCollapseIntoGroup(content.arguments)) {
+					if (readArgsCollapseIntoGroup(displayArgs)) {
 						if (!this.ctx.pendingTools.has(content.id)) this.#resolveDisplaceablePoll(content.name);
-						this.#trackReadToolCall(content.id, content.arguments);
+						this.#trackReadToolCall(content.id, displayArgs);
 						const component = this.ctx.pendingTools.get(content.id);
 						if (component) {
-							component.updateArgs(content.arguments, content.id);
+							component.updateArgs(displayArgs, content.id);
 						} else {
 							const group = this.#getReadGroup();
-							group.updateArgs(content.arguments, content.id);
+							group.updateArgs(displayArgs, content.id);
 							this.ctx.pendingTools.set(content.id, group);
 							this.#toolTimelineComponents.set(content.id, group);
 						}
@@ -785,11 +790,12 @@ export class EventController {
 					renderArgs = this.#toolArgsReveal.setTarget(content.id, partialJson, {
 						rawInput,
 						exposeRawPartialJson: exposesRawPartialJson(content.name, rawInput, tool),
+						fullArgs: displayArgs,
 						streamingStringKeys: streamingStringKeysForTool(content.name, rawInput),
 					});
 				} else {
 					this.#toolArgsReveal.finish(content.id);
-					renderArgs = content.arguments;
+					renderArgs = displayArgs;
 				}
 				// `message_update` is cumulative — every update re-lists all blocks
 				// of the streaming message — so creation must also be guarded by the

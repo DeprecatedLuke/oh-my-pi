@@ -13,6 +13,7 @@ import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/componen
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { STREAMING_REVEAL_FRAME_MS } from "@oh-my-pi/pi-coding-agent/modes/controllers/streaming-reveal";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 
@@ -40,7 +41,7 @@ function makeStreamingMessage(content: AssistantMessage["content"]): AssistantMe
 	};
 }
 
-function createFixture(streamingMessage: AssistantMessage) {
+function createFixture(streamingMessage: AssistantMessage, obfuscator?: SecretObfuscator) {
 	const pendingTools = new Map<string, ToolExecutionComponent>();
 	const ctx = {
 		isInitialized: true,
@@ -57,7 +58,7 @@ function createFixture(streamingMessage: AssistantMessage) {
 		chatContainer: { addChild: vi.fn() },
 		toolOutputExpanded: false,
 		session: { getToolByName: () => undefined },
-		viewSession: { getToolByName: () => undefined },
+		viewSession: { getToolByName: () => undefined, obfuscator },
 		sessionManager: { getCwd: () => process.cwd() },
 	} as unknown as InteractiveModeContext;
 
@@ -152,6 +153,33 @@ describe("EventController paces streamed tool args", () => {
 		const calls = updateArgsSpy.mock.calls.length;
 		vi.advanceTimersByTime(STREAMING_REVEAL_FRAME_MS * 5);
 		expect(updateArgsSpy.mock.calls.length).toBe(calls);
+	});
+
+	it("reveals deobfuscated final edit input after a redacted streaming preview", async () => {
+		await Settings.init({ inMemory: true, cwd: process.cwd() });
+		const updateArgsSpy = vi.spyOn(ToolExecutionComponent.prototype, "updateArgs");
+		const obfuscator = new SecretObfuscator([
+			{ type: "plain", content: "allocator", friendlyName: "allocRegion" },
+		]);
+		const sourcePath = "libs/embedded-allocator/src/allocator.rs";
+		const input = `[${sourcePath}#ABCD]\nDEL 1`;
+		const maskedInput = obfuscator.obfuscate(input);
+		const partialJson = JSON.stringify({ input: maskedInput }).slice(0, -1);
+		const streaming = makeStreamingMessage([
+			{ type: "toolCall", id: "tc-secret-edit", name: "edit", arguments: {}, [kStreamingPartialJson]: partialJson },
+		]);
+		const { controller } = createFixture(streaming, obfuscator);
+
+		await dispatch(controller, streaming);
+		await dispatch(
+			controller,
+			makeStreamingMessage([
+				{ type: "toolCall", id: "tc-secret-edit", name: "edit", arguments: { input: maskedInput } },
+			]),
+		);
+
+		const finalArgs = updateArgsSpy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+		expect(finalArgs.input).toBe(input);
 	});
 
 	it("streams the full target through unpaced when smoothing is disabled", async () => {
