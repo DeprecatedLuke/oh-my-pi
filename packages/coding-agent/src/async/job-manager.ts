@@ -8,10 +8,10 @@ const DEFAULT_MAX_RUNNING_JOBS = 15;
 // Brief pause taken at the start of every dispatch when batching is enabled,
 // to catch completions that race in within the same tick.
 const BATCH_BURST_SETTLE_MS = 500;
-// Poll interval while waiting for sibling jobs to finish during the extended
-// batching window. Tradeoff: short = responsive when last sibling lands;
+// Check interval while waiting for sibling jobs to finish during the extended
+// batching window. Tradeoff: short = responsive when the last sibling lands;
 // long = cheaper. 250ms is below human perception.
-const BATCH_SETTLE_POLL_MS = 250;
+const BATCH_SETTLE_CHECK_MS = 250;
 
 /**
  * Adaptive ("smart") `hub` poll-wait ladder (ms). A tight poll loop climbs
