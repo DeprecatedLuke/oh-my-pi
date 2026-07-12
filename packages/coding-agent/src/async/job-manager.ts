@@ -834,7 +834,7 @@ export class AsyncJobManager {
 			// cap, and a batch member silent for the whole window is treated
 			// as hung so its finished siblings still get dispatched.
 			if (now >= settleDeadline && !this.#hasLiveBatchSibling(running, now)) break;
-			await Bun.sleep(Math.min(BATCH_SETTLE_POLL_MS, deadline - now));
+			await Bun.sleep(Math.min(BATCH_SETTLE_CHECK_MS, deadline - now));
 		}
 		if (deadline !== Number.POSITIVE_INFINITY && Date.now() >= deadline && this.getRunningJobs(filter).length > 0) {
 			return false;

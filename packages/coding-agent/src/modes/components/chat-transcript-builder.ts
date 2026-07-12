@@ -87,7 +87,6 @@ export class ChatTranscriptBuilder {
 	#pendingUsageTtft: number | undefined;
 	#pendingUsageTimestamp: number | undefined;
 	#lastAssistantUsage: Usage | undefined;
-	#waitingPoll: ToolExecutionComponent | null = null;
 	#todoSnapshot: ToolExecutionComponent | null = null;
 	#expandables: Array<{ setExpanded(expanded: boolean): void }> = [];
 	#expanded = false;
@@ -136,7 +135,6 @@ export class ChatTranscriptBuilder {
 		this.#pendingUsageTtft = undefined;
 		this.#pendingUsageTimestamp = undefined;
 		this.#lastAssistantUsage = undefined;
-		this.#waitingPoll = null;
 		this.#todoSnapshot = null;
 		this.#expandables = [];
 		this.container.dispose();
@@ -162,7 +160,6 @@ export class ChatTranscriptBuilder {
 		}
 		previous.seal();
 	}
-
 	#resolveTodoSnapshot(nextToolName?: string): void {
 		const previous = this.#todoSnapshot;
 		if (!previous) return;
@@ -227,8 +224,7 @@ export class ChatTranscriptBuilder {
 				break;
 			case "user":
 			case "developer": {
-				// A user prompt closes the poll-displacement window, same as the live path.
-				if (message.role === "user") this.#resolveWaitingPoll();
+				// A user prompt closes the todo displacement window, same as the live path.
 				if (message.role === "user") this.#resolveTodoSnapshot();
 				const textContent = message.role === "user" ? userMessageText(message) : "";
 				if (textContent) {
@@ -341,7 +337,6 @@ export class ChatTranscriptBuilder {
 
 		for (const content of message.content) {
 			if (content.type !== "toolCall") continue;
-			this.#resolveWaitingPoll(content.name);
 
 			const afterToolSegment = timeline.afterToolCalls.get(content.id);
 			if (content.name === "read" && readArgsCollapseIntoGroup(content.arguments)) {

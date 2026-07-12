@@ -49,22 +49,10 @@ interface CancelOutcome {
 	message: string;
 }
 
+
 export interface JobToolDetails {
 	jobs: JobSnapshot[];
 	cancelled?: { id: string; status: CancelStatus }[];
-}
-
-/**
- * A `job` snapshot where every job is still running and nothing was cancelled
- * — pure "still waiting" noise once a newer `job` call exists. The TUI keeps
- * such a block un-finalized (displaceable) so a follow-up `job` call replaces
- * it instead of stacking another waiting frame in the transcript.
- */
-export function isWaitingPollDetails(details: unknown): boolean {
-	const d = details as JobToolDetails | undefined;
-	if (!d || !Array.isArray(d.jobs) || d.jobs.length === 0) return false;
-	if (d.cancelled?.length) return false;
-	return d.jobs.every(job => job?.status === "running");
 }
 
 export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
@@ -75,7 +63,6 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 	readonly description: string;
 	readonly parameters = jobSchema;
 	readonly strict = true;
-	readonly interruptible = true;
 	readonly loadMode = "discoverable";
 	constructor(private readonly session: ToolSession) {
 		this.description = prompt.render(jobDescription);
@@ -157,6 +144,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		return out;
 	}
 
+
 	#snapshotJobs(
 		jobs: {
 			id: string;
@@ -200,7 +188,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		}[],
 		cancelOutcomes: CancelOutcome[],
 	): AgentToolResult<JobToolDetails> {
-		// Deduplicate by id (cancelled jobs may also appear in the watched set).
+		// Deduplicate by id (a cancelled job may also be present in the snapshot).
 		const seen = new Set<string>();
 		const uniqueJobs = jobs.filter(j => {
 			if (seen.has(j.id)) return false;
@@ -251,10 +239,6 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		return {
 			content: [{ type: "text", text: lines.join("\n").trimEnd() }],
 			details,
-			// A poll where everything is still running carries no new information
-			// once a later poll exists — same predicate the TUI uses to displace
-			// stale waiting frames.
-			...(isWaitingPollDetails(details) ? { useless: true } : {}),
 		};
 	}
 }
@@ -348,6 +332,7 @@ export const jobToolRenderer = {
 	): Component {
 		const jobs = result.details?.jobs ?? [];
 
+
 		if (jobs.length === 0) {
 			const fallback = result.content?.find(c => c.type === "text")?.text || "No jobs to process";
 			const header = renderStatusLine({ icon: "warning", title: describeTarget(args) || "Job" }, uiTheme);
@@ -358,7 +343,7 @@ export const jobToolRenderer = {
 		for (const job of jobs) counts[job.status]++;
 
 		// The title already carries the running count, so meta lists only the
-		// settled categories — "waiting on 19 of 19 · 19 running" read awkward.
+		// settled categories.
 		const meta: string[] = [];
 		if (counts.completed > 0) meta.push(uiTheme.fg("success", `${counts.completed} done`));
 		if (counts.failed > 0) meta.push(uiTheme.fg("error", `${counts.failed} failed`));
@@ -372,7 +357,6 @@ export const jobToolRenderer = {
 					? `waiting on ${jobs.length} ${jobsNoun}`
 					: `waiting on ${counts.running} of ${jobs.length} ${jobsNoun}`
 				: `${jobs.length} ${jobsNoun} settled`;
-
 		const header = renderStatusLine(
 			{
 				icon: headerIcon,
@@ -401,10 +385,10 @@ export const jobToolRenderer = {
 			render(width: number): readonly string[] {
 				const expanded = options.expanded;
 				const spinnerFrame = options.spinnerFrame ?? 0;
-				// Running-job labels shimmer while the poll block is live; the band
-				// phase is Date.now()-sampled at render time, so serving cached bytes
-				// would pin it to the ~12.5fps spinner-glyph cadence instead of the
-				// 30fps redraw. Bypass the cache while any row animates, and key on
+				// Running-job labels shimmer while the live result is displayed; the
+				// band phase is Date.now()-sampled at render time, so serving cached
+				// bytes would pin it to the ~12.5fps spinner-glyph cadence instead of
+				// the 30fps redraw. Bypass the cache while any row animates, and key on
 				// the animation state so a sealed block never hits stale shimmered
 				// bytes (spinnerFrame falls back to 0 on both sides of the seal).
 				const shimmerActive = counts.running > 0 && options.spinnerFrame !== undefined && shimmerEnabled();
@@ -442,7 +426,7 @@ export const jobToolRenderer = {
 								visibleLabelLines[visibleLabelLines.length - 1] = `${last} …`;
 							}
 							const durationText = uiTheme.fg("dim", formatDuration(job.durationMs));
-							// Running rows in a live block shimmer their label; once the block
+							// Running rows in a live result shimmer their label; once the result
 							// stops animating (sealed, or a settled snapshot — spinnerFrame
 							// cleared) they render static so scrollback never keeps a mid-sweep
 							// shimmer band.

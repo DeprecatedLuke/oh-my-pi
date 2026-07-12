@@ -112,7 +112,7 @@ describe("job renderer task-result preview", () => {
 		expect(header!.match(/SpawnProbe/g)).toHaveLength(1);
 	});
 
-	describe("collapse and filter when turned into a result", () => {
+	describe("list and cancel snapshots", () => {
 		const jobsData = [
 			{
 				id: "Job1",
@@ -212,10 +212,10 @@ describe("job renderer task-result preview", () => {
 			expect(output).toContain("Job1 running");
 			expect(output).toContain("Job2 completed");
 			expect(output).toContain("Job3 running");
-			expect(output).toContain("waiting on 2 of 3 jobs");
+			expect(output).toContain("2 running of 3 jobs");
 		});
 
-		it("does not collapse running jobs when isPartial is false and cancel-only is true", () => {
+		it("cancel snapshots include running and completed jobs", () => {
 			const result = {
 				content: [{ type: "text" as const, text: "" }],
 				details: { op: "cancel" as const, jobs: jobsData },
@@ -230,7 +230,7 @@ describe("job renderer task-result preview", () => {
 			expect(output).toContain("Job1 running");
 			expect(output).toContain("Job2 completed");
 			expect(output).toContain("Job3 running");
-			expect(output).toContain("waiting on 2 of 3 jobs");
+			expect(output).toContain("2 running of 3 jobs");
 		});
 
 		it("renders agent rows for running agents outside job control", () => {

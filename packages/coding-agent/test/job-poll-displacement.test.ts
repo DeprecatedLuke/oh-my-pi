@@ -43,7 +43,6 @@ function pollResult(statuses: JobStatus[], extra: { cancelled?: boolean; isError
 		},
 	};
 }
-
 function todoResult(items = ["investigate", "fix"]) {
 	return {
 		content: [{ type: "text" as const, text: "" }],
@@ -59,6 +58,7 @@ function todoResult(items = ["investigate", "fix"]) {
 			],
 			storage: "memory" as const,
 		},
+		isError: false,
 	};
 }
 
@@ -121,7 +121,6 @@ describe("hub waiting-poll block lifecycle", () => {
 		expect(errored.isDisplaceableBlock()).toBe(false);
 		expect(errored.isTranscriptBlockFinalized()).toBe(true);
 	});
-
 	it("keeps successful todo snapshots live for replacement", () => {
 		const component = trackComponent(
 			created,
@@ -142,12 +141,12 @@ describe("hub waiting-poll block lifecycle", () => {
 			created,
 			new ToolExecutionComponent("bash", { command: "ls" }, {}, undefined, uiStub),
 		);
-		component.updateResult(pollResult(["running"]), false);
+		component.updateResult({ content: [{ type: "text", text: "done" }] }, false);
 		expect(component.isDisplaceableBlock()).toBe(false);
 	});
 });
 
-describe("EventController displaces consecutive waiting polls", () => {
+describe("EventController displaces consecutive todo snapshots", () => {
 	const created: ToolExecutionComponent[] = [];
 
 	beforeEach(async () => {
@@ -202,7 +201,6 @@ describe("EventController displaces consecutive waiting polls", () => {
 		});
 		return component;
 	}
-
 	async function runTodo(controller: EventController, children: Component[], toolCallId: string, items?: string[]) {
 		await controller.handleEvent({
 			type: "tool_execution_start",
@@ -256,7 +254,6 @@ describe("EventController displaces consecutive waiting polls", () => {
 		expect(poll.isTranscriptBlockFinalized()).toBe(true);
 		expect(poll.isDisplaceableBlock()).toBe(false);
 	});
-
 	it("removes the previous todo snapshot when a later todo update lands in the same turn", async () => {
 		const { controller, children } = createFixture();
 
@@ -462,6 +459,7 @@ describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () 
 			toolName: "todo",
 			content: [{ type: "text", text: "" }],
 			details: todoResult(["plan", "read"]).details,
+			isError: false,
 			timestamp: Date.now(),
 		} as unknown as AgentMessage;
 		const secondResult = {
@@ -470,6 +468,7 @@ describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () 
 			toolName: "todo",
 			content: [{ type: "text", text: "" }],
 			details: todoResult(["fix", "test"]).details,
+			isError: false,
 			timestamp: Date.now(),
 		} as unknown as AgentMessage;
 
@@ -538,6 +537,7 @@ describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () 
 			toolName: "todo",
 			content: [{ type: "text", text: "" }],
 			details: todoResult(["plan", "read"]).details,
+			isError: false,
 			timestamp: Date.now(),
 		} as unknown as AgentMessage;
 

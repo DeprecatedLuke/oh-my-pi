@@ -602,8 +602,7 @@ export class UiHelpers {
 					}
 				}
 			} else {
-				// A user prompt closes the displacement window, same as the live path.
-				if (message.role === "user") resolveWaitingPoll();
+				// A user prompt closes the todo displacement window, same as the live path.
 				if (message.role === "user") resolveTodoSnapshot();
 				// All other messages use standard rendering
 				this.ctx.addMessageToChat(message, options);
@@ -615,9 +614,6 @@ export class UiHelpers {
 		// rebuilt group freezes (even with a never-persisted result) and commits to
 		// native scrollback like every other historical block.
 		readGroup?.seal();
-		// A trailing waiting poll is final history on rebuild; seal it so it
-		// freezes (and its spinner timer stops) like every other block.
-		resolveWaitingPoll();
 		// A trailing todo snapshot is live state, not history: when the rebuild
 		// runs mid-turn (settings overlay close, focus attach during streaming),
 		// hand it back to the controller so a follow-up `todo` update keeps

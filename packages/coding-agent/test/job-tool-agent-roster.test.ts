@@ -1,5 +1,5 @@
 /**
- * The `job` tool's snapshot contract: `list` and empty-poll results must never
+ * The `job` tool's snapshot contract: `list` and bare invocations must never
  * come back as empty text, and they must surface running subagents that have
  * no backing job (irc-woken/revived agents, spawns owned by another agent) so
  * the tool's picture matches the UI's running-agent count. Regression for the
@@ -31,7 +31,7 @@ function createToolSession(options: {
 		cwd: process.cwd(),
 		hasUI: false,
 		settings: {
-			get: (key: string) => (key === "async.pollWaitDuration" ? "5s" : undefined),
+			get: () => undefined,
 		},
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,
@@ -129,8 +129,8 @@ describe("hub wait with no matching jobs", () => {
 
 		const result = await tool.execute("call", { op: "wait" });
 
-		expect(resultText(result)).toBe("No running background jobs to wait for.");
-		expect(result.useless).toBe(true);
+		expect(resultText(result)).toBe("No background jobs.");
+		expect(result.details?.jobs).toEqual([]);
 	});
 
 	test("bare wait reports running agents outside job control", async () => {
@@ -141,7 +141,7 @@ describe("hub wait with no matching jobs", () => {
 		const result = await tool.execute("call", { op: "wait" });
 
 		const text = resultText(result);
-		expect(text).toContain("No running background jobs to wait for.");
+		expect(text).toContain("Running Agents (1)");
 		expect(text).toContain("Worker");
 		expect((result.details as CoordinationDetails)?.agents?.map(agent => agent.id)).toEqual(["Worker"]);
 		expect(result.useless).toBeUndefined();
