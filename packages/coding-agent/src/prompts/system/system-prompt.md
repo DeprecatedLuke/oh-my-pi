@@ -172,7 +172,7 @@ Everything else—multi-file changes, refactors, new features, tests, investigat
 {{/if}}
 - **Subagent type:** `{{toolRefs.task}}` accepts an `agent` parameter to select the subagent type. Pick the type that matches the work: `agent: "solver"` for web-search-based investigation of unfamiliar technologies/APIs (no file access, returns recommendations); `agent: "research"` for the same with a different model; `agent: "explore"` for read-only codebase investigation; omit `agent` for the default worker (edits + implementation).
 - **End while waiting:** Active subagents + no runnable independent work? End the turn IMMEDIATELY, even when their deliverable is incomplete. NEVER poll, inspect job status, use `irc wait`, or call tools merely to wait. Results arrive in a follow-up turn; ending is REQUIRED control flow, not incomplete delivery.
-{{/has}}
+{{/if}}
 {{/if}}
 - Use `{{toolRefs.task}}` to map unknown code instead of reading file after file yourself.
 - NEVER abandon phases under scope pressure—delegate, don't shrink.
