@@ -4657,7 +4657,6 @@ export class AgentSession {
 			.replace(/\t/g, "\\t")
 			.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u2028\u2029]/g, " ");
 	}
-
 	#buildGoalTodoContext(): string | undefined {
 		if (!this.settings.get("todo.enabled")) return undefined;
 		const canCallTodoTool = this.getActiveToolNames().includes("todo");

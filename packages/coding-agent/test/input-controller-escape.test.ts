@@ -451,7 +451,7 @@ describe("InputController escape behavior", () => {
 	it("dismisses an active /btw panel before aborting loop mode", () => {
 		const { ctx, editor, spies } = createContext();
 		ctx.loopModeEnabled = true;
-		mutableSessionState(ctx).isStreaming = true;
+		Object.assign(ctx.session, { isStreaming: true });
 		spies.hasActiveBtw.mockReturnValue(true);
 		const controller = new InputController(ctx);
 
@@ -465,7 +465,7 @@ describe("InputController escape behavior", () => {
 
 	it("dismisses an active /btw panel before aborting maintenance", () => {
 		const { ctx, editor, spies } = createContext();
-		abortViewSession(ctx).isGeneratingHandoff = true;
+		Object.assign(ctx.viewSession, { isGeneratingHandoff: true });
 		spies.hasActiveBtw.mockReturnValue(true);
 		const controller = new InputController(ctx);
 

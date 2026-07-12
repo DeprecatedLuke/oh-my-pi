@@ -434,8 +434,11 @@ describe("title generator", () => {
 		);
 
 		expect(title).toBe("Investigate the resolver");
-		expect((completeSimpleMock.mock.calls[0]?.[1] as { tools?: unknown }).tools).toBeUndefined();
-		expect((completeSimpleMock.mock.calls[0]?.[2] as { toolChoice?: unknown }).toolChoice).toBeUndefined();
+		expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+		const call = completeSimpleMock.mock.calls[0];
+		if (!call) throw new Error("Expected completeSimple call");
+		expect(call[1].tools).toBeUndefined();
+		expect(call[2]?.toolChoice).toBeUndefined();
 	});
 
 	it("accepts a plain sentence when the model omits the <title> markers", async () => {
