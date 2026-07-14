@@ -1856,6 +1856,7 @@ export const SETTINGS_SCHEMA = {
 				"Let standalone ultrasolve inherit maximum thinking and request a self-contained solver escalation",
 		},
 	},
+
 	"magicKeywords.orchestrate": {
 		type: "boolean",
 		default: true,

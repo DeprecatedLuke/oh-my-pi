@@ -147,6 +147,7 @@ import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionStat
 import { containsOrchestrate, ORCHESTRATE_NOTICE } from "../modes/orchestrate";
 import { theme } from "../modes/theme/theme";
 import { parseTurnBudget } from "../modes/turn-budget";
+import { containsUltrasolve, ULTRASOLVE_NOTICE } from "../modes/ultrasolve";
 import { containsUltrathink, ULTRATHINK_NOTICE } from "../modes/ultrathink";
 import { computeNonMessageTokens } from "../modes/utils/context-usage";
 import { containsWorkflow, renderWorkflowNotice } from "../modes/workflow";
@@ -369,6 +370,7 @@ const noOpUIContext: ExtensionUIContext = {
 // ============================================================================
 // AgentSession Class
 // ============================================================================
+
 
 type MessageEndPersistenceSlot = {
 	readonly promise: Promise<void>;
@@ -4704,7 +4706,7 @@ export class AgentSession {
 		return this.#providerBoundary.normalizeAgentMessageImages(message);
 	}
 
-	#magicKeywordEnabled(keyword: "orchestrate" | "ultrathink" | "workflow"): boolean {
+	#magicKeywordEnabled(keyword: "orchestrate" | "ultrasolve" | "ultrathink" | "workflow"): boolean {
 		return this.settings.get("magicKeywords.enabled") && this.settings.get(`magicKeywords.${keyword}`);
 	}
 
@@ -4713,7 +4715,18 @@ export class AgentSession {
 		const turnBudget = parseTurnBudget(text);
 		this.sessionManager.beginTurnBudget(turnBudget?.total ?? null, turnBudget?.hard ?? false);
 		const keywordNotices: CustomMessage[] = [];
-		if (this.#magicKeywordEnabled("ultrathink") && containsUltrathink(text)) {
+		const ultrasolveActive = this.#magicKeywordEnabled("ultrasolve") && containsUltrasolve(text);
+		const ultrathinkActive = this.#magicKeywordEnabled("ultrathink") && containsUltrathink(text);
+		if (ultrasolveActive) {
+			keywordNotices.push({
+				role: "custom",
+				customType: "ultrasolve-notice",
+				content: ULTRASOLVE_NOTICE,
+				display: false,
+				attribution: "user",
+				timestamp,
+			});
+		} else if (ultrathinkActive) {
 			keywordNotices.push({
 				role: "custom",
 				customType: "ultrathink-notice",

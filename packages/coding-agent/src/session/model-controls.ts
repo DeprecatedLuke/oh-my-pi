@@ -22,6 +22,7 @@ import {
 } from "../config/model-resolver";
 import { getKnownRoleIds } from "../config/model-roles";
 import type { Settings } from "../config/settings";
+import { containsUltrasolve } from "../modes/ultrasolve";
 import { containsUltrathink } from "../modes/ultrathink";
 import {
 	AUTO_THINKING,
@@ -594,7 +595,10 @@ export class ModelControls {
 		if (getSupportedEfforts(model).length === 0) return;
 
 		let resolved: Effort | undefined;
-		if (this.#host.magicKeywordEnabled("ultrathink") && containsUltrathink(promptText)) {
+		if (
+			(this.#host.magicKeywordEnabled("ultrathink") && containsUltrathink(promptText)) ||
+			(this.#host.magicKeywordEnabled("ultrasolve") && containsUltrasolve(promptText))
+		) {
 			// The user explicitly asked for maximum thinking; bypass the classifier
 			// (and its xhigh auto ceiling) and jump straight to the highest
 			// supported level for this model.
