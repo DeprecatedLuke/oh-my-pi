@@ -203,7 +203,6 @@ describe("InteractiveMode loop auto-submit", () => {
 		mode.disableLoopMode();
 		expect(setLoopModeStatus).toHaveBeenLastCalledWith(undefined);
 	});
-
 	it("resubmits the latest prompt after an automatic refusal fix", async () => {
 		session.settings.set("secrets.autoFixRefusal", true);
 		session.settings.setModelRole("uncensored", "anthropic/claude-sonnet-4-5");
@@ -278,7 +277,6 @@ describe("InteractiveMode loop auto-submit", () => {
 			}),
 		]);
 	});
-
 	it("does not resubmit after a non-refusal agent end", async () => {
 		session.settings.set("secrets.autoFixRefusal", true);
 		session.settings.setModelRole("uncensored", "anthropic/claude-sonnet-4-5");
