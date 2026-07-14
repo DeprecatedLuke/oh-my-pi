@@ -57,10 +57,10 @@ describe("OPTIONAL_VALUE_FLAGS table is honored by args.ts parseArgs", () => {
 });
 
 describe("--tools legacy aliases", () => {
-	it("maps search and find to grep and glob", () => {
+	it("normalizes legacy grep and glob aliases to canonical search and find", () => {
 		const result = parseArgs(["--tools", "search,find,grep"]);
 
-		expect(result.tools).toEqual(["grep", "glob"]);
+		expect(result.tools).toEqual(["search", "find"]);
 	});
 
 	it("rejects unknown tool names instead of silently narrowing the toolset", () => {
