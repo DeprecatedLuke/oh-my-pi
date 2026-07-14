@@ -2330,6 +2330,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	async #maybeAutoFixRefusal(event: AgentSessionEvent): Promise<void> {
 		if (event.type !== "agent_end") return;
+		if (!this.isInitialized) return;
 		if (!this.settings.get("secrets.autoFixRefusal")) return;
 		if (this.#autoFixRefusalInFlight) return;
 		if (this.#isAutoSubmitBlocked()) {
