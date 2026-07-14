@@ -19,6 +19,7 @@ function createCtx(usage: Partial<SegmentContext["usageStats"]>): SegmentContext
 		compactThinkingLevel: false,
 		options: {},
 		planMode: null,
+		prewalk: null,
 		loopMode: null,
 		goalMode: null,
 		collab: null,

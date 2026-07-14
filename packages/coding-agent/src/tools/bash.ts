@@ -441,6 +441,7 @@ function formatExitCodeNotice(exitCode: number): string {
 	return `Command exited with code ${exitCode}`;
 }
 
+
 function formatBackgroundNotice(jobId: string): string {
 	return `Backgrounded as job ${jobId}; result will be delivered automatically.`;
 }

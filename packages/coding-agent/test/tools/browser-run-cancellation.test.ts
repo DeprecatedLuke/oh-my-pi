@@ -145,7 +145,6 @@ describe("browser run cancellation", () => {
 
 		await expect(pending).rejects.toBeInstanceOf(ToolAbortError);
 	});
-
 	it("aborts run-scoped wait() before a stale continuation can mutate the tab", async () => {
 		const runtime = new JsRuntime({ initialCwd: process.cwd(), sessionId: "browser-run-cancellation-test" });
 		const timeoutSignal = AbortSignal.timeout(20);

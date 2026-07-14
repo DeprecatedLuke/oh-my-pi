@@ -556,7 +556,6 @@ describe("InteractiveMode plan review rendering", () => {
 		// #hidePlanReview() with the replacement paint to avoid stale-buffer flicker.
 		expect(overlayHandle.hide).not.toHaveBeenCalled();
 	});
-
 	it("Refine with no annotations silently aborts approval and returns to the editor", async () => {
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {

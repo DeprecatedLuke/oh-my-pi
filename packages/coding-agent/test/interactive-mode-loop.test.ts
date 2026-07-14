@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
@@ -9,12 +10,27 @@ import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import * as fixRefusalHelpers from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/fix-refusal";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 async function flushMicrotasks(): Promise<void> {
 	await Promise.resolve();
 	await Promise.resolve();
 	await Promise.resolve();
+}
+
+function classifierRefusal(text: string): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [],
+		api: "anthropic-messages",
+		provider: "anthropic",
+		model: "test",
+		usage: {},
+		stopReason: "error",
+		stopDetails: { type: "refusal" },
+		errorMessage: text,
+	} as unknown as AssistantMessage;
 }
 
 describe("InteractiveMode loop auto-submit", () => {
@@ -186,5 +202,110 @@ describe("InteractiveMode loop auto-submit", () => {
 
 		mode.disableLoopMode();
 		expect(setLoopModeStatus).toHaveBeenLastCalledWith(undefined);
+	});
+
+	it("resubmits the latest prompt after an automatic refusal fix", async () => {
+		session.settings.set("secrets.autoFixRefusal", true);
+		session.settings.setModelRole("uncensored", "anthropic/claude-sonnet-4-5");
+		const fixSpy = vi.spyOn(fixRefusalHelpers, "executeFixRefusal").mockResolvedValue({
+			resolved: true,
+			saved: 1,
+			patternsActive: 1,
+		});
+		const submissions: SubmittedUserInput[] = [];
+		mode.onInputCallback = input => submissions.push(input);
+		await mode.init();
+
+		session.agent.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "original request" }],
+			timestamp: Date.now(),
+		});
+		const refusal = classifierRefusal("Refusal (cyber): blocked");
+		session.agent.appendMessage(refusal);
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [refusal] });
+		await session.waitForIdle();
+		await flushMicrotasks();
+
+		expect(fixSpy).toHaveBeenCalledTimes(1);
+		expect(submissions).toEqual([
+			expect.objectContaining({
+				text: "original request",
+				customType: "auto-fix-refusal",
+			}),
+		]);
+	});
+
+	it("defers refusal fixing until a blocked agent_end settles", async () => {
+		session.settings.set("secrets.autoFixRefusal", true);
+		session.settings.setModelRole("uncensored", "anthropic/claude-sonnet-4-5");
+		const fixSpy = vi.spyOn(fixRefusalHelpers, "executeFixRefusal").mockResolvedValue({
+			resolved: true,
+			saved: 1,
+			patternsActive: 1,
+		});
+		const submissions: SubmittedUserInput[] = [];
+		mode.onInputCallback = input => submissions.push(input);
+		let blocked = true;
+		Object.defineProperty(session, "hasPostPromptWork", {
+			configurable: true,
+			get: () => blocked,
+		});
+		await mode.init();
+
+		session.agent.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "deferred request" }],
+			timestamp: Date.now(),
+		});
+		const refusal = classifierRefusal("Refusal (cyber): blocked");
+		session.agent.appendMessage(refusal);
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [refusal] });
+		await flushMicrotasks();
+
+		expect(fixSpy).not.toHaveBeenCalled();
+		expect(submissions).toEqual([]);
+
+		blocked = false;
+		await session.waitForIdle();
+		await flushMicrotasks();
+
+		expect(fixSpy).toHaveBeenCalledTimes(1);
+		expect(submissions).toEqual([
+			expect.objectContaining({
+				text: "deferred request",
+				customType: "auto-fix-refusal",
+			}),
+		]);
+	});
+
+	it("does not resubmit after a non-refusal agent end", async () => {
+		session.settings.set("secrets.autoFixRefusal", true);
+		session.settings.setModelRole("uncensored", "anthropic/claude-sonnet-4-5");
+		const fixSpy = vi.spyOn(fixRefusalHelpers, "executeFixRefusal");
+		const submissions: SubmittedUserInput[] = [];
+		mode.onInputCallback = input => submissions.push(input);
+		await mode.init();
+
+		session.agent.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "ordinary request" }],
+			timestamp: Date.now(),
+		});
+		const answer = {
+			role: "assistant",
+			content: [{ type: "text", text: "helpful answer" }],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "test",
+			usage: {},
+			stopReason: "stop",
+		} as unknown as AssistantMessage;
+		session.agent.appendMessage(answer);
+		session.agent.emitExternalEvent({ type: "agent_end", messages: [answer] });
+		await flushMicrotasks();
+
+		expect(fixSpy).not.toHaveBeenCalled();
+		expect(submissions).toEqual([]);
 	});
 });

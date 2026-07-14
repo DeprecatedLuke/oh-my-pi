@@ -196,4 +196,5 @@ describe("AgentSession magic keyword settings", () => {
 		expect(userIdx).toBeGreaterThanOrEqual(0);
 		expect(noticeIdx).toBeLessThan(userIdx);
 	});
+
 });

@@ -521,6 +521,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	locallySubmittedUserSignatures: Set<string> = new Set();
 	#pendingSubmittedInput: SubmittedUserInput | undefined;
 	#pendingSubmissionDispose: (() => void) | undefined;
+	#autoFixRefusalRounds = 0;
+	#autoFixRefusalInFlight = false;
+	#autoFixRefusalIdleWait = false;
+	#fixRefusalAbort?: AbortController;
 	#optimisticUserMessageComponents: Component[] = [];
 	lastSigintTime = 0;
 	lastEscapeTime = 0;
@@ -2317,6 +2321,111 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#scheduleGoalContinuation();
 	}
 
+	/**
+	 * When `secrets.autoFixRefusal` is on and a turn ends on a refusal, run the
+	 * /fix-refusal flow and, if it saved new masks, re-send the original prompt.
+	 * Capped at {@link AUTO_FIX_REFUSAL_MAX_ROUNDS} per user prompt; reset on a new
+	 * user submission. A re-entrancy flag + the auto-submit gate prevent overlap,
+	 * and re-submission uses a customType so it does not reset the round counter.
+	 */
+	async #maybeAutoFixRefusal(event: AgentSessionEvent): Promise<void> {
+		if (event.type !== "agent_end") return;
+		if (!this.settings.get("secrets.autoFixRefusal")) return;
+		if (this.#autoFixRefusalInFlight) return;
+		if (this.#isAutoSubmitBlocked()) {
+			// `agent_end` is emitted before AgentSession finishes its tracked
+			// post-prompt maintenance and prompt unwind. Wait from outside that
+			// handler instead of dropping the refusal or deadlocking on
+			// `session.waitForIdle()` while the current handler is still tracked.
+			if (!this.#autoFixRefusalIdleWait && (this.session.isStreaming || this.session.hasPostPromptWork)) {
+				this.#autoFixRefusalIdleWait = true;
+				void this.session.waitForIdle().then(
+					() => {
+						this.#autoFixRefusalIdleWait = false;
+						void this.#maybeAutoFixRefusal(event);
+					},
+					() => {
+						this.#autoFixRefusalIdleWait = false;
+					},
+				);
+			}
+			return;
+		}
+		if (!this.onInputCallback) return;
+		if (this.#pendingSubmittedInput) return;
+		if (this.editor.getText().trim().length > 0) return;
+		if ((this.editor.pendingImages?.length ?? 0) > 0) return;
+		if (this.planModeEnabled || this.planModePaused) return;
+		if (!isRefusalMessage(this.session.getLastAssistantMessage())) return;
+		if (!resolveRefusalModelPattern(this.settings)) return; // no uncensored role configured
+		if (this.#autoFixRefusalRounds >= AUTO_FIX_REFUSAL_MAX_ROUNDS) {
+			this.showWarning("Auto fix-refusal: retry limit reached; leaving the refusal in place.");
+			return;
+		}
+		const promptText = latestUserPromptText(this.session.messages);
+		if (!promptText) return;
+
+		this.#autoFixRefusalInFlight = true;
+		const ui = createTuiFixRefusalUi(this);
+		const signal = this.beginFixRefusal();
+		try {
+			const outcome = await executeFixRefusal({
+				session: this.session,
+				settings: this.settings,
+				cwd: this.sessionManager.getCwd(),
+				signal,
+				ui,
+			});
+			if (outcome.resolved && outcome.patternsActive > 0 && this.onInputCallback) {
+				this.#autoFixRefusalRounds += 1;
+				this.onInputCallback(
+					this.startPendingSubmission({ text: promptText, customType: "auto-fix-refusal", display: true }),
+				);
+			}
+		} catch (err) {
+			ui.step(`Auto fix-refusal failed: ${err instanceof Error ? err.message : String(err)}`);
+		} finally {
+			ui.done();
+			this.#autoFixRefusalInFlight = false;
+			this.endFixRefusal();
+		}
+	}
+
+	/**
+	 * When a turn ends on a refusal, dump the session the same way `/dump` does
+	 * (transcript text + LLM request JSON sidecar) to
+	 * `~/.omp/agent/refusals/<timestamp>.txt` so the refusal is preserved for
+	 * later analysis. Fires on every refusal-ending `agent_end`, independent of
+	 * `secrets.autoFixRefusal`.
+	 */
+	async #saveRefusalDump(event: AgentSessionEvent): Promise<void> {
+		if (event.type !== "agent_end") return;
+		if (!isRefusalMessage(this.session.getLastAssistantMessage())) return;
+		try {
+			const formatted = this.session.formatSessionAsText();
+			if (!formatted) return;
+			// LLM request JSON sidecar — best-effort, same as /dump.
+			let sidecarPath: string | undefined;
+			try {
+				sidecarPath = await this.session.dumpLlmRequestToTmpDir();
+			} catch {
+				// Sidecar is best-effort; the transcript is still saved below.
+			}
+			const doc = sidecarPath
+				? `${formatted}\n\n---\nLLM request JSON: ${sidecarPath}\nThis file persists on disk and may contain raw context/secrets — treat accordingly.`
+				: formatted;
+			const refusalsDir = path.join(getAgentDir(), "refusals");
+			await fs.mkdir(refusalsDir, { recursive: true });
+			const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -1);
+			const filePath = path.join(refusalsDir, `${stamp}.txt`);
+			await Bun.write(filePath, `${doc}\n`);
+			const statusParts = [`Refusal saved to ${filePath}`];
+			if (sidecarPath) statusParts.push(`LLM request JSON: ${sidecarPath}`);
+			this.showStatus(statusParts.join("\n"));
+		} catch (err) {
+			logger.warn("Failed to save refusal dump", { error: err instanceof Error ? err.message : String(err) });
+		}
+	}
 	async #applyPlanModeModel(): Promise<void> {
 		const resolved = this.session.resolveRoleModelWithThinking("plan");
 		if (!resolved.model) return;
