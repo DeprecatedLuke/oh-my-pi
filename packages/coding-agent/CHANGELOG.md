@@ -218,6 +218,7 @@
 
 - Fixed secret placeholders in filenames colliding with hashline snapshot tags by using dollar-delimited placeholder tokens.
 - Fixed automatic `/fix-refusal` recovery being dropped when `agent_end` arrived before the session finished settling to idle.
+- Fixed auto-retry skipping empty provider abort errors reported as `Error: Request was aborted`, while preserving caller-abort and partial-content safeguards.
 
 ### Removed
 
