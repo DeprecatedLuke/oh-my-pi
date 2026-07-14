@@ -245,12 +245,14 @@ describe("InteractiveMode loop auto-submit", () => {
 		});
 		const submissions: SubmittedUserInput[] = [];
 		mode.onInputCallback = input => submissions.push(input);
+		await mode.init();
 		let blocked = true;
 		Object.defineProperty(session, "hasPostPromptWork", {
 			configurable: true,
 			get: () => blocked,
 		});
-		await mode.init();
+		const idle = Promise.withResolvers<void>();
+		const idleSpy = vi.spyOn(session, "waitForIdle").mockReturnValue(idle.promise);
 
 		session.agent.appendMessage({
 			role: "user",
@@ -262,20 +264,22 @@ describe("InteractiveMode loop auto-submit", () => {
 		session.agent.emitExternalEvent({ type: "agent_end", messages: [refusal] });
 		await flushMicrotasks();
 
+		expect(idleSpy).toHaveBeenCalledTimes(1);
 		expect(fixSpy).not.toHaveBeenCalled();
 		expect(submissions).toEqual([]);
 
 		blocked = false;
-		await session.waitForIdle();
+		idle.resolve();
 		await flushMicrotasks();
 
 		expect(fixSpy).toHaveBeenCalledTimes(1);
-		expect(submissions).toEqual([
+		expect(submissions).toHaveLength(1);
+		expect(submissions[0]).toEqual(
 			expect.objectContaining({
 				text: "deferred request",
 				customType: "auto-fix-refusal",
 			}),
-		]);
+		);
 	});
 	it("does not resubmit after a non-refusal agent end", async () => {
 		session.settings.set("secrets.autoFixRefusal", true);
