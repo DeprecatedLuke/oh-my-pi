@@ -3518,7 +3518,6 @@ export class AgentSession {
 		this.#cancelOwnAsyncJobs();
 		const manager = this.#ownedAsyncJobManager;
 		if (!manager) return;
-
 		try {
 			const drained = await manager.dispose({ timeoutMs: 3_000 });
 			const deliveryState = manager.getDeliveryState();

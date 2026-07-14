@@ -100,6 +100,26 @@ function shellBuiltinsDisabled(settings: Settings): boolean {
 }
 
 /**
+ * Shape a shell command line for an ACP-conformant `terminal/create` request.
+ *
+ * ACP's `command` field is documented as the executable and `args` as its argv
+ * tail, so a spec-conformant client `spawn(command, args)`s them directly. A
+ * raw `bash` tool line therefore has to be wrapped in an explicit shell
+ * invocation; otherwise the client tries to spawn the whole line as argv[0].
+ *
+ * The wrap reuses the same shell binary + args the local `bash-executor` would
+ * pick via `settings.getShellConfig()`, preserving bash tool semantics for
+ * shell operators, environment expansion, quoting, and login-shell setup.
+ */
+export function wrapShellLineForClientTerminal(
+	line: string,
+	shellConfig: { shell: string; args: string[]; prefix?: string | undefined },
+): { command: string; args: string[] } {
+	const finalLine = shellConfig.prefix ? `${shellConfig.prefix} ${line}` : line;
+	return { command: shellConfig.shell, args: [...shellConfig.args, finalLine] };
+}
+
+/**
  * Bash patterns flagged as safety critical for approval policy.
  *
  * Kept intentionally tight — the cost of a false negative is data loss or a compromised host,

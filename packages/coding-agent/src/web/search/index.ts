@@ -157,6 +157,13 @@ async function executeSearch(
 		antigravityEndpointMode = undefined;
 	}
 
+	let geminiModel: string | undefined;
+	try {
+		geminiModel = settings.get("providers.webSearchGeminiModel");
+	} catch {
+		geminiModel = undefined;
+	}
+
 	const failures: Array<{ provider: Pick<SearchProvider, "id" | "label">; error: unknown }> = [];
 	let availableProviderCount = 0;
 	let lastProvider: Pick<SearchProvider, "id" | "label"> | undefined;

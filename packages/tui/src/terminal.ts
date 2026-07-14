@@ -5,6 +5,7 @@ import {
 	isBunTestRuntime,
 	isTerminalHeadless,
 	logger,
+	postmortem,
 	restoreTerminalStderr,
 	suppressTerminalStderr,
 } from "@oh-my-pi/pi-utils";
@@ -155,6 +156,16 @@ let terminalEverStarted = false;
 // jumps to the viewport home, dropping the parent shell prompt on top of the
 // dead frame after exit.
 let altScreenActive = false;
+let terminalRestoreRegistered = false;
+
+function registerPostmortemTerminalRestore(): void {
+	if (terminalRestoreRegistered) return;
+	terminalRestoreRegistered = true;
+	postmortem.register("terminal-restore", () => {
+		emergencyTerminalRestore();
+	});
+}
+
 let terminalRestoreRegistered = false;
 
 function registerPostmortemTerminalRestore(): void {
