@@ -530,6 +530,7 @@ export class TranscriptContainer
 			if (!isBlockFinalized(this.children[i]!)) return true;
 		}
 		return false;
+
 	}
 }
 

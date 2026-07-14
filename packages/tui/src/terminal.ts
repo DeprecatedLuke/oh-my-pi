@@ -5,7 +5,6 @@ import {
 	isBunTestRuntime,
 	isTerminalHeadless,
 	logger,
-	postmortem,
 	restoreTerminalStderr,
 	suppressTerminalStderr,
 } from "@oh-my-pi/pi-utils";

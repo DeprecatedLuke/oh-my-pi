@@ -1211,7 +1211,8 @@ function renderAgentResult(
 ): string[] {
 	const lines: string[] = [];
 
-	const { warning: missingCompleteWarning, rest: outputWithoutWarning } = extractMissingYieldWarning(result.output);
+	const { warning: missingCompleteWarning, rest } = extractMissingYieldWarning(result.output);
+	const outputWithoutWarning = sanitizeRecentOutput(rest);
 	const aborted = result.aborted ?? false;
 	const mergeFailed = !aborted && result.exitCode === 0 && !!result.error;
 	const success = !aborted && result.exitCode === 0 && !result.error;

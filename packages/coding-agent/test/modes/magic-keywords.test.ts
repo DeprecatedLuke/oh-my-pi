@@ -24,6 +24,7 @@ describe("highlightMagicKeywords", () => {
 		}
 	});
 
+
 	it("paints punctuation-adjacent prose keywords without changing visible text", () => {
 		const input = 'first "ultrathink," then orchestrate. Finally workflowz!';
 		const decorated = highlightMagicKeywords(input);

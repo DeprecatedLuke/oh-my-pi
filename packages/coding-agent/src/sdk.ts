@@ -2465,7 +2465,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				model = refreshedModel;
 				thinkingLevel = pickInitialThinkingLevel(refreshedModel);
 				autoThinking = thinkingLevel === AUTO_THINKING;
-				effectiveThinkingLevel = concreteThinkingLevel(thinkingLevel);
+				effectiveThinkingLevel = thinkingLevel === AUTO_THINKING ? undefined : thinkingLevel;
 				effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
 					autoThinking
 						? resolveProvisionalAutoLevel(refreshedModel)

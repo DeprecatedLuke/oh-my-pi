@@ -1772,6 +1772,7 @@ export class AgentSession {
 		return preview;
 	}
 
+
 	// =========================================================================
 	// Event Subscription
 	// =========================================================================
@@ -6430,6 +6431,7 @@ export class AgentSession {
 		}
 		return undefined;
 	}
+
 
 	#enforceRewindBeforeYield(): boolean {
 		if (!this.#checkpointState || this.#pendingRewindReport) {
