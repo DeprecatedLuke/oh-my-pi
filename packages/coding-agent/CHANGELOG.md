@@ -217,6 +217,7 @@
 ### Fixed
 
 - Fixed secret placeholders in filenames colliding with hashline snapshot tags by using dollar-delimited placeholder tokens.
+- Fixed automatic `/fix-refusal` recovery being dropped when `agent_end` arrived before the session finished settling to idle.
 
 ### Removed
 
