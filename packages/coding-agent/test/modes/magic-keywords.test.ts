@@ -156,7 +156,7 @@ describe("hasMagicKeyword", () => {
 });
 
 describe("magic-keyword notices", () => {
-	it("restores the upstream ultrathink notice and exposes the ultrasolve notice contract", () => {
+	it("exposes the solver escalation notice contract", () => {
 		expect(ULTRATHINK_NOTICE).toBe(
 			"<system-notice>\nThis task involves multi-step reasoning. Think carefully through the problem before responding.\n</system-notice>",
 		);
