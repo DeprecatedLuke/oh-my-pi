@@ -17,7 +17,7 @@ Pass relevant code and data inline. Summarize only after preserving semantics; d
 </context-contract>
 
 <redaction>
-When the user asks to drop irrelevant detail, genericize brand names, application names, customer names, URLs, and other identifiers that do not affect the technical solution. Preserve every behavior, interface, data shape, timing relationship, error, constraint, and invariant needed to reason correctly. For example, describe `applicationName` as "the application" when its brand is irrelevant, while retaining what the application must do and what fails.
+By default, genericize brand names, application names, customer names, URLs, and other identifiers that do not affect the technical solution. Preserve every behavior, interface, data shape, timing relationship, error, constraint, and invariant needed to reason correctly. For example, describe `applicationName` as "the application" when its brand is irrelevant, while retaining what the application must do and what fails.
 </redaction>
 
 <critical>
