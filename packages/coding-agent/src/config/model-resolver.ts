@@ -914,6 +914,7 @@ function shouldInheritDefaultBeforePriority(role: ModelRole): boolean {
  * model, so it stays a distinct strong model out of the box. The `tiny` role —
  * the override for online title/memory/classifier tasks — reuses the `smol`
  * fast chain so an unset tiny role auto-resolves to the same fast model smol
+ * would pick.
  */
 const ROLE_PRIORITY_ALIAS: Partial<Record<ModelRole, keyof typeof MODEL_PRIO>> = {
 	advisor: "slow",
@@ -992,6 +993,9 @@ function resolveConfiguredRolePattern(
 		: isModelRole(role)
 			? resolveDefaultInheritedPatterns(role, configuredDefault, roleDefaults, settings, visited)
 			: roleDefaults;
+	if (resolved.length === 0) {
+		resolved.push(...roleDefaults);
+	}
 	if (resolved.length === 0) {
 		return undefined;
 	}
