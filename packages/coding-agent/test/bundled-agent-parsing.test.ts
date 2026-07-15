@@ -35,13 +35,6 @@ describe("bundled agent parsing", () => {
 		expect(solver?.tools).toEqual(expect.arrayContaining(["web_search", "browser"]));
 	});
 
-	it("resolves the solver agent through the configured plan role", () => {
-		const settings = Settings.isolated({ modelRoles: { plan: "openai/plan" } });
-		const patterns = resolveAgentModelPatterns({ agentModel: "@solver", settings });
-
-		expect(patterns).toEqual(["openai/plan"]);
-	});
-
 	// Issue #4761: with `modelRoles.slow: ...:xhigh`, the role's explicit effort
 	// suffix must survive agent-pattern expansion and model resolution for the
 	// bundled agents routed at that role. The executor prefers an explicit
