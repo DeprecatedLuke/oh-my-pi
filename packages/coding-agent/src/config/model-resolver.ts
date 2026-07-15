@@ -914,11 +914,16 @@ function shouldInheritDefaultBeforePriority(role: ModelRole): boolean {
  * model, so it stays a distinct strong model out of the box. The `tiny` role —
  * the override for online title/memory/classifier tasks — reuses the `smol`
  * fast chain so an unset tiny role auto-resolves to the same fast model smol
- * would pick.
+ * would pick. The `solver` role follows the configured `plan` role so solver
+ * agents use the planning model by default.
  */
 const ROLE_PRIORITY_ALIAS: Partial<Record<ModelRole, keyof typeof MODEL_PRIO>> = {
 	advisor: "slow",
 	tiny: "smol",
+};
+/** Fallback role for built-ins without an independent priority chain. */
+const ROLE_MODEL_FALLBACK: Partial<Record<ModelRole, ModelRole>> = {
+	solver: "plan",
 };
 
 /** Built-in priority patterns for a role, following {@link ROLE_PRIORITY_ALIAS}. */
@@ -988,14 +993,17 @@ function resolveConfiguredRolePattern(
 	const configured = settings?.getModelRole(role)?.trim();
 	const configuredDefault = settings?.getModelRole(DEFAULT_MODEL_ROLE)?.trim();
 	const roleDefaults = isModelRole(role) ? rolePriorityDefaults(role) : [];
+	const fallbackRole = !configured && isModelRole(role) ? ROLE_MODEL_FALLBACK[role] : undefined;
+	const fallbackPatterns =
+		fallbackRole && !visited.has(fallbackRole)
+			? resolveConfiguredRolePattern(formatModelRoleAlias(fallbackRole), settings, new Set(visited))
+			: undefined;
 	const resolved = configured
 		? normalizeModelPatternList(configured)
-		: isModelRole(role)
-			? resolveDefaultInheritedPatterns(role, configuredDefault, roleDefaults, settings, visited)
-			: roleDefaults;
-	if (resolved.length === 0) {
-		resolved.push(...roleDefaults);
-	}
+		: (fallbackPatterns ??
+			(isModelRole(role)
+				? resolveDefaultInheritedPatterns(role, configuredDefault, roleDefaults, settings, visited)
+				: roleDefaults));
 	if (resolved.length === 0) {
 		return undefined;
 	}

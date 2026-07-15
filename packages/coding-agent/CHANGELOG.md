@@ -10,6 +10,7 @@
 
 - Changed the default `astGrep.enabled` setting to `false`
 - Batched todo operations with real tool calls to prevent solo todo turns and extra round trips
+- Added the `magicKeywords.ultrasolve` setting and `ultrasolve` keyword: it inherits ultrathink's maximum-thinking behavior and guides a bounded `task` → `agent: "solver"` escalation with self-contained context that genericizes irrelevant identity details while preserving technical semantics.
 
 ### Fixed
 
