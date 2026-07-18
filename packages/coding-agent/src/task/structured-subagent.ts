@@ -12,14 +12,7 @@ import { resolveAgentModelPatterns } from "../config/model-resolver";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { registerArtifactsDir } from "../internal-urls/registry-helpers";
 import { MCPManager } from "../mcp/manager";
-import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
-import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
-import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
-import { MAIN_AGENT_ID } from "../registry/agent-registry";
 import type { TaskEffort } from "../thinking";
-import type { ToolSession } from "../tools";
-import { isIrcEnabled } from "../tools/hub";
-import { buildOutputValidator } from "../tools/output-schema-validator";
 import {
 	applyNativePatch,
 	createNativePatch,
@@ -30,8 +23,15 @@ import {
 	manifestAllIgnored,
 	type NativePatchManifest,
 } from "../patches";
-import * as git from "../utils/git";
+import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
+import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
+import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
+import { MAIN_AGENT_ID } from "../registry/agent-registry";
+import type { ToolSession } from "../tools";
+import { isIrcEnabled } from "../tools/hub";
+import { buildOutputValidator } from "../tools/output-schema-validator";
 import { generateCommitMessage } from "../utils/commit-message-generator";
+import * as git from "../utils/git";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
 import { type ExecutorOptions, runSubprocess } from "./executor";
 import {
@@ -53,12 +53,7 @@ import {
 	type StructuredSubagentOutput,
 	type TaskPatchSummary,
 } from "./types";
-import {
-	type NestedRepoPatch,
-	cleanupIsolation,
-	ensureIsolation,
-	parseIsolationMode,
-} from "./worktree";
+import { cleanupIsolation, ensureIsolation, type NestedRepoPatch, parseIsolationMode } from "./worktree";
 
 /** Validation behavior requested for an effective output schema. */
 export type StructuredSubagentSchemaMode = "permissive" | "strict";
@@ -513,7 +508,8 @@ async function runNativePatchSubprocess(
 	const discovered = await detectGitRepos(request.session.cwd);
 	const targets = buildNativePatchTargets(request.session.cwd, isolationContext.repoRoot, discovered?.repos ?? null);
 	const store = defaultPatchStore(request.session.cwd);
-	const description = request.assignment.trim() || trimToUndefined(request.identity?.label) || `changes from isolated task ${id}`;
+	const description =
+		request.assignment.trim() || trimToUndefined(request.identity?.label) || `changes from isolated task ${id}`;
 	const generateMessage = async (manifest: NativePatchManifest): Promise<string> => {
 		if (request.session.settings.get("task.isolation.commits") === "ai" && request.session.modelRegistry) {
 			const lines = [
@@ -597,20 +593,20 @@ async function runNativePatchSubprocess(
 							generateMessage,
 						});
 						const status: TaskPatchSummary["status"] =
-							applied.manifest.status === "conflicted"
-								? "conflicted"
-								: applied.applied
-									? "applied"
-									: "pending";
+							applied.manifest.status === "conflicted" ? "conflicted" : applied.applied ? "applied" : "pending";
 						const error =
 							status === "conflicted"
 								? applied.manifest.conflicts?.map(conflict => `${conflict.path}: ${conflict.reason}`).join("; ")
 								: undefined;
-						summaries.push(nativePatchSummary(applied.manifest, target, status, { error, commit: applied.commit }));
+						summaries.push(
+							nativePatchSummary(applied.manifest, target, status, { error, commit: applied.commit }),
+						);
 						if (error) failures.push(error);
 					} catch (error) {
 						const message = error instanceof Error ? error.message : String(error);
-						const status: TaskPatchSummary["status"] = message.includes("target repo is dirty") ? "pending" : "failed";
+						const status: TaskPatchSummary["status"] = message.includes("target repo is dirty")
+							? "pending"
+							: "failed";
 						summaries.push(nativePatchSummary(captured.manifest, target, status, { error: message }));
 						failures.push(message);
 					}
@@ -620,7 +616,11 @@ async function runNativePatchSubprocess(
 					if (recovery) recoveryCaptureStatus = "failed";
 				}
 			}
-			const error = recovery ? result.error : failures.length > 0 ? [result.error, ...failures].filter(Boolean).join("; ") : result.error;
+			const error = recovery
+				? result.error
+				: failures.length > 0
+					? [result.error, ...failures].filter(Boolean).join("; ")
+					: result.error;
 			return {
 				...result,
 				patches: summaries.length > 0 ? summaries : undefined,
@@ -826,16 +826,15 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 		requiresRecoveryArtifacts =
 			policy.isIsolated &&
 			(result.exitCode !== 0 || result.error !== undefined || result.aborted === true) &&
-			((result.patchPath !== undefined ||
+			(result.patchPath !== undefined ||
 				result.branchName !== undefined ||
 				(result.nestedPatches?.length ?? 0) > 0 ||
 				(result.patches?.length ?? 0) > 0 ||
-				result.recoveryCaptureStatus === "failed"));
+				result.recoveryCaptureStatus === "failed");
 
 		if (nativePatchMode) {
 			const patches = result.patches ?? [];
-			changesApplied =
-				patches.length === 0 ? null : patches.some(patch => patch.status === "applied") ? true : false;
+			changesApplied = patches.length === 0 ? null : !!patches.some(patch => patch.status === "applied");
 			mergeSummary = buildNativePatchMergeSummary(result);
 		}
 		if (

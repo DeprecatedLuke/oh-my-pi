@@ -102,14 +102,14 @@ export type {
 	CoordinationDetails,
 	HubDetails,
 	HubOp,
-	HubRenderArgs,
 	HubPeerInfo,
+	HubRenderArgs,
 	JobSnapshot,
 } from "./hub/types";
 export * from "./image-gen";
 export * from "./inspect-image";
-export { IrcTool, ircToolRenderer } from "./irc";
 export type { IrcDetails } from "./irc";
+export { IrcTool, ircToolRenderer } from "./irc";
 export * from "./issues";
 export * from "./job";
 export * from "./launch";

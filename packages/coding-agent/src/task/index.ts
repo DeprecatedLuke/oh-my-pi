@@ -38,6 +38,9 @@ import {
 	type SingleResult,
 	type TaskItem,
 	type TaskParams,
+	type TaskPatchConflict,
+	type TaskPatchStatus,
+	type TaskPatchSummary,
 	type TaskToolDetails,
 	type TaskToolSchemaInstance,
 } from "./types";
@@ -45,7 +48,21 @@ import {
 import "../tools/review";
 import type { AsyncJobManager } from "../async";
 import { hasResolvableTranscript } from "../internal-urls/registry-helpers";
+import {
+	applyNativePatch,
+	createNativePatch,
+	defaultPatchStore,
+	detectGitRepos,
+	dropNativePatch,
+	formatRepoLabel,
+	manifestAllIgnored,
+	type NativePatchManifest,
+	type PatchStore,
+	type PatchValidationResult,
+	validateNativePatch,
+} from "../patches";
 import { AgentRegistry } from "../registry/agent-registry";
+import * as git from "../utils/git";
 import { type DiscoveryResult, discoverAgents } from "./discovery";
 import { generateTaskName } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
@@ -53,6 +70,13 @@ import { mapWithConcurrencyLimitAllSettled, Semaphore } from "./parallel";
 import { renderResult, renderCall as renderTaskCall } from "./render";
 import { repairTaskParams } from "./repair-args";
 import { resolveEffectiveSubagentPolicy, runStructuredSubagent, StructuredSubagentError } from "./structured-subagent";
+import {
+	cleanupIsolation,
+	ensureIsolation,
+	type IsolationHandle,
+	parseIsolationMode,
+	type TaskIsolationMode,
+} from "./worktree";
 
 function renderSubagentUserPrompt(assignment: string): string {
 	return prompt.render(subagentUserPromptTemplate, {
@@ -99,6 +123,473 @@ function addUsageTotals(target: Usage, usage: Partial<Usage>): void {
 	target.cost.total += cost.total;
 }
 
+// ── patch-tool merge strategy: capture isolated edits as native patches ──────
+
+interface PatchTarget {
+	repoPath: string;
+	repoLabel: string;
+	relativePath: string;
+	git: boolean;
+}
+
+/** Resolves a non-empty commit message for a native patch about to be committed. */
+type NativePatchCommitMessageFn = (manifest: NativePatchManifest) => Promise<string>;
+
+function patchUri(patchId: string): string {
+	return `patch://${patchId}`;
+}
+
+/** One native-patch target per detected git repo (root + nested), or a single
+ * non-git target when the workspace is not a git repository. */
+function buildPatchTargets(cwd: string, sourceRoot: string, repos: readonly string[] | null): PatchTarget[] {
+	if (!repos || repos.length === 0) {
+		return [{ repoPath: sourceRoot, repoLabel: path.relative(cwd, sourceRoot) || ".", relativePath: "", git: false }];
+	}
+	const uniqueRepos = [...new Set(repos.map(repo => path.resolve(repo)))];
+	return uniqueRepos.map(repoPath => ({
+		repoPath,
+		repoLabel: formatRepoLabel(cwd, repoPath),
+		relativePath: path.relative(sourceRoot, repoPath),
+		git: true,
+	}));
+}
+
+function toTaskConflicts(validation?: PatchValidationResult): TaskPatchConflict[] | undefined {
+	if (!validation || validation.conflicts.length === 0) return undefined;
+	return validation.conflicts.map(conflict => ({
+		path: conflict.path,
+		reason: conflict.reason,
+		expectedHash: conflict.expectedHash,
+		actualHash: conflict.actualHash,
+	}));
+}
+
+function formatConflictDetails(patchId: string, conflicts: readonly TaskPatchConflict[] | undefined): string {
+	if (!conflicts || conflicts.length === 0) return `see ${patchUri(patchId)}, edit and reapply`;
+	const details = conflicts.map(conflict => `patch://${patchId}/${conflict.path}: ${conflict.reason}`).join("; ");
+	return `${details}; edit and reapply`;
+}
+
+function patchSummaryFromManifest(
+	manifest: NativePatchManifest,
+	target: PatchTarget,
+	status: TaskPatchStatus,
+	options: {
+		message?: string;
+		commit?: string;
+		error?: string;
+		conflicts?: TaskPatchConflict[];
+		recovery?: boolean;
+	} = {},
+): TaskPatchSummary {
+	return {
+		patchId: manifest.id,
+		status,
+		repoPath: target.repoPath,
+		repoLabel: target.repoLabel,
+		uri: patchUri(manifest.id),
+		message: options.message ?? manifest.message,
+		commit: options.commit,
+		error: options.error,
+		conflicts: options.conflicts,
+		recovery: options.recovery,
+	};
+}
+
+async function validatePatchForSummary(
+	store: PatchStore,
+	patchId: string,
+	target: PatchTarget,
+): Promise<PatchValidationResult | undefined> {
+	try {
+		return await validateNativePatch(store, patchId, {
+			cwd: target.repoPath,
+			targetRoot: target.repoPath,
+			...(target.git ? { repoRoot: target.repoPath, repoLabel: target.repoLabel } : {}),
+		});
+	} catch {
+		return undefined;
+	}
+}
+
+/** Diff `baselineRoot` against `changedRoot` for each target and persist the
+ * deltas to the native patch store. Empty deltas are dropped. */
+export async function createTaskNativePatches(options: {
+	store: PatchStore;
+	baselineRoot: string;
+	changedRoot: string;
+	targets: readonly PatchTarget[];
+	taskId: string;
+	description?: string;
+	/** Optional capture-scope filter (repo-root-relative POSIX paths). */
+	pathFilter?: (relativePath: string) => boolean;
+}): Promise<Array<{ manifest: NativePatchManifest; target: PatchTarget }>> {
+	const patches: Array<{ manifest: NativePatchManifest; target: PatchTarget }> = [];
+	for (const target of options.targets) {
+		const baselineRoot = target.relativePath
+			? path.join(options.baselineRoot, target.relativePath)
+			: options.baselineRoot;
+		const changedRoot = target.relativePath
+			? path.join(options.changedRoot, target.relativePath)
+			: options.changedRoot;
+		const created = await createNativePatch({
+			store: options.store,
+			baselineRoot,
+			changedRoot,
+			targetRoot: target.repoPath,
+			...(target.git ? { repoRoot: target.repoPath } : {}),
+			taskId: options.taskId,
+			description: options.description,
+			...(options.pathFilter ? { pathFilter: options.pathFilter } : {}),
+		});
+		if (created.empty || created.manifest.files.length === 0) {
+			await dropNativePatch(options.store, created.manifest.id);
+			continue;
+		}
+		patches.push({ manifest: created.manifest, target });
+	}
+	return patches;
+}
+
+/** Apply native patches to their targets. Dirty git repos are skipped (patch
+ * left pending for manual apply); conflicts and failures are surfaced per patch.
+ * `applyNativePatch` self-serializes per repo via the git repo lock. */
+export async function applyTaskNativePatches(
+	store: PatchStore,
+	patches: ReadonlyArray<{ manifest: NativePatchManifest; target: PatchTarget }>,
+	generateMessage: NativePatchCommitMessageFn,
+): Promise<TaskPatchSummary[]> {
+	const summaries: TaskPatchSummary[] = [];
+	for (const { manifest, target } of patches) {
+		if (target.git && (await git.status(target.repoPath)).trim().length > 0) {
+			// A patch whose targets are ALL gitignored (e.g. .omp/knowledge) applies
+			// straight to disk and is unaffected by unrelated tracked dirt — don't block
+			// it on the repo-dirty pre-gate.
+			if (!(await manifestAllIgnored(target.repoPath, target.repoPath, manifest.files))) {
+				const error = `failed to apply ${target.repoLabel}/${manifest.id}: target repo is dirty, git commit ${target.repoPath} and reapply`;
+				summaries.push(patchSummaryFromManifest(manifest, target, "pending", { error }));
+				continue;
+			}
+		}
+		try {
+			const result = await applyNativePatch(store, manifest.id, {
+				cwd: target.repoPath,
+				targetRoot: target.repoPath,
+				...(target.git ? { repoRoot: target.repoPath, repoLabel: target.repoLabel, generateMessage } : {}),
+			});
+			if (result.applied) {
+				summaries.push(
+					patchSummaryFromManifest(result.manifest, target, "applied", {
+						message: result.manifest.message,
+						commit: result.commit,
+					}),
+				);
+				continue;
+			}
+			const validation = await validatePatchForSummary(store, manifest.id, target);
+			const conflicts = toTaskConflicts(validation);
+			const status: TaskPatchStatus = conflicts && conflicts.length > 0 ? "conflicted" : "pending";
+			const message = validation?.message ?? "patch did not apply";
+			const error = `failed to apply ${target.repoLabel}/${manifest.id}: ${message}. ${formatConflictDetails(manifest.id, conflicts)}`;
+			summaries.push(
+				patchSummaryFromManifest(result.manifest, target, status, {
+					message: result.manifest.message,
+					error,
+					conflicts,
+				}),
+			);
+		} catch (err) {
+			const validation = await validatePatchForSummary(store, manifest.id, target);
+			const conflicts = toTaskConflicts(validation);
+			const status: TaskPatchStatus = conflicts && conflicts.length > 0 ? "conflicted" : "pending";
+			const message = err instanceof Error ? err.message : String(err);
+			const error = message.includes("target repo is dirty")
+				? message
+				: `failed to apply ${target.repoLabel}/${manifest.id}: ${message}. ${formatConflictDetails(manifest.id, conflicts)}`;
+			summaries.push(
+				patchSummaryFromManifest(validation?.manifest ?? manifest, target, status, { error, conflicts }),
+			);
+		}
+	}
+	return summaries;
+}
+
+/** Agent-facing merge summary grouping native patches by outcome, including
+ * recovery patches preserved from an aborted task. */
+function buildPatchMergeSummary(result: SingleResult): string {
+	const patches = result.patches ?? [];
+	let summary = "";
+	const applied = patches.filter(p => p.status === "applied" && !p.recovery);
+	if (applied.length > 0) {
+		const lines = applied.map(p => `${p.repoLabel}: ${p.patchId} (${p.message ?? "applied"})`);
+		summary += `\n\nautomatically applied:\n\n${lines.join("\n")}`;
+	}
+	const pending = patches.filter(p => p.status === "pending" && !p.recovery);
+	if (pending.length > 0) {
+		const lines = pending.map(p => `${p.repoLabel}: ${p.uri} — ${p.error ?? `${p.uri} is pending`}`);
+		summary += `\n\npending patches:\n\n${lines.join("\n")}\n\nUse the \`patch\` tool after cleaning the target repo; edit and reapply if needed.`;
+	}
+	const conflicted = patches.filter(p => p.status === "conflicted" && !p.recovery);
+	if (conflicted.length > 0) {
+		const lines = conflicted.map(
+			p => `${p.repoLabel}: ${p.uri} — ${p.error ?? formatConflictDetails(p.patchId, p.conflicts)}`,
+		);
+		summary += `\n\nconflicted patches:\n\n${lines.join("\n")}\n\nOpen the listed patch:// files, edit and reapply.`;
+	}
+	const failed = patches.filter(p => p.status === "failed" && !p.recovery);
+	if (failed.length > 0) {
+		const lines = failed.map(p => `${p.repoLabel}: ${p.uri} — ${p.error ?? `${p.uri} failed`}`);
+		summary += `\n\nfailed patches:\n\n${lines.join("\n")}\n\nInspect with the \`patch\` tool, edit and reapply.`;
+	}
+	const recovered = patches.filter(p => p.recovery);
+	const recoveryLabel = result.description ? `${result.id} — ${result.description}` : result.id;
+	if (recovered.length > 0) {
+		const lines = recovered.map(p => `- ${recoveryLabel}: ${p.repoLabel}: ${p.uri}`);
+		const plural = recovered.length === 1 ? "" : "es";
+		summary += `\n\n<system-notification>${recovered.length} recovery patch${plural} preserved aborted task edits in the durable native patch store.\n\nRecovery patches:\n${lines.join("\n")}\n\nUse the \`patch\` tool to inspect/apply, or edit patch:// files and reapply.</system-notification>`;
+	}
+	if (result.recoveryCaptureStatus === "empty") {
+		summary += `\n\n<system-notification>Aborted task ${recoveryLabel} had no recovery patch because recovery capture found no file changes in the isolated worktree. Restart from the original assignment instead of searching session artifact directories for a missing patch.</system-notification>`;
+	}
+	if (result.recoveryCaptureStatus === "failed") {
+		const detail = result.recoveryCaptureError ? ` Error: ${result.recoveryCaptureError}` : "";
+		summary += `\n\n<system-notification>Recovery capture failed for aborted task ${recoveryLabel}. The isolation worktree was torn down and no reliable native patch was written. Restart from the original assignment or inspect the logged recovery error if the work should have produced a delta.${detail}</system-notification>`;
+	}
+	const trimmed = summary.trimStart();
+	return trimmed.length > 0 ? trimmed : "No changes to apply.";
+}
+
+/** Outcome of an isolated knowledge-maintenance pass. `summary` is the
+ * agent-facing merge summary (auto-applied / pending / conflicted), suitable for
+ * delivery as a background-job completion message. */
+export interface IsolatedKnowledgePassResult {
+	exitCode: number;
+	aborted: boolean;
+	patches: TaskPatchSummary[];
+	summary: string;
+}
+
+/**
+ * Run a knowledge-maintenance subagent in an isolated worktree and capture its
+ * `.omp/knowledge` edits as a native patch — instead of writing+committing the
+ * real tree directly. The patch auto-applies when the target repo is clean and
+ * is left pending (for `patch apply`) when it is dirty or conflicts, exactly
+ * like an isolated `task` spawn.
+ *
+ * Forces isolation regardless of `task.isolation.*` (knowledge maintenance must
+ * always produce a reviewable patch). The capture is scoped to `.omp/knowledge`
+ * so a stray write/bash side-effect outside the subtree can never ride along
+ * into the auto-applied patch. `runInWorktree` MUST run the subagent with its
+ * cwd set to the provided worktree dir and resolve with its exit/abort status.
+ */
+export async function runIsolatedKnowledgePass(options: {
+	cwd: string;
+	taskId: string;
+	description: string;
+	generateMessage: NativePatchCommitMessageFn;
+	/**
+	 * Isolation backend hint (from `task.isolation.mode`). Knowledge maintenance
+	 * MUST isolate even when the global setting is `none`, so `none` (and an
+	 * omitted value) are forced to `rcopy` — the always-available, privilege-free
+	 * backend. `auto` stays `auto` (the resolver auto-picks the best backend,
+	 * same as a normal auto task); an explicit backend (e.g. `reflink`, `apfs`)
+	 * is honored.
+	 */
+	isolationMode?: TaskIsolationMode;
+	runInWorktree: (worktreeDir: string) => Promise<{ exitCode: number; aborted: boolean }>;
+}): Promise<IsolatedKnowledgePassResult> {
+	const mode = options.isolationMode;
+	const backend = parseIsolationMode(mode && mode !== "none" ? mode : "rcopy");
+	const discovered = await detectGitRepos(options.cwd);
+	const isolationRoot = path.resolve(discovered?.root ?? options.cwd);
+	const targets = buildPatchTargets(
+		options.cwd,
+		isolationRoot,
+		discovered ? (discovered.repos.length > 0 ? discovered.repos : [isolationRoot]) : null,
+	);
+	const store = defaultPatchStore(options.cwd);
+	// Knowledge lives at `<repo-root>/.omp/knowledge`; the worktree mirrors the
+	// repo root, so the subagent's cwd is the root and entry paths are
+	// root-relative. Scope capture to that subtree.
+	const knowledgePrefix = ".omp/knowledge";
+	const pathFilter = (relativePath: string): boolean =>
+		relativePath === knowledgePrefix || relativePath.startsWith(`${knowledgePrefix}/`);
+
+	const baseline = await ensureIsolation(isolationRoot, `knowledge-baseline-${Snowflake.next()}`, backend);
+	let task: IsolationHandle | undefined;
+	try {
+		task = await ensureIsolation(baseline.mergedDir, options.taskId, backend);
+		const run = await options.runInWorktree(task.mergedDir);
+		if (run.exitCode !== 0 || run.aborted) {
+			// Capture (do not apply) any edits so the work survives in the durable
+			// store for manual `patch` inspection; report the failure.
+			const captured = await createTaskNativePatches({
+				store,
+				baselineRoot: baseline.mergedDir,
+				changedRoot: task.mergedDir,
+				targets,
+				taskId: options.taskId,
+				description: options.description,
+				pathFilter,
+			});
+			const patches = captured.map(({ manifest, target }) =>
+				patchSummaryFromManifest(manifest, target, "pending", { recovery: true }),
+			);
+			const result: SingleResult = {
+				index: 0,
+				id: options.taskId,
+				agent: "knowledge",
+				agentSource: "bundled",
+				task: options.description,
+				exitCode: run.exitCode,
+				output: "",
+				stderr: "",
+				truncated: false,
+				durationMs: 0,
+				tokens: 0,
+				requests: 0,
+				aborted: run.aborted,
+				patches: patches.length > 0 ? patches : undefined,
+				recoveryCaptureStatus: patches.length > 0 ? "preserved" : "empty",
+			};
+			return { exitCode: run.exitCode, aborted: run.aborted, patches, summary: buildPatchMergeSummary(result) };
+		}
+		const captured = await createTaskNativePatches({
+			store,
+			baselineRoot: baseline.mergedDir,
+			changedRoot: task.mergedDir,
+			targets,
+			taskId: options.taskId,
+			description: options.description,
+			pathFilter,
+		});
+		const patches = captured.length > 0 ? await applyTaskNativePatches(store, captured, options.generateMessage) : [];
+		const result: SingleResult = {
+			index: 0,
+			id: options.taskId,
+			agent: "knowledge",
+			agentSource: "bundled",
+			task: options.description,
+			exitCode: 0,
+			output: "",
+			stderr: "",
+			truncated: false,
+			durationMs: 0,
+			tokens: 0,
+			requests: 0,
+			patches: patches.length > 0 ? patches : undefined,
+		};
+		return { exitCode: 0, aborted: false, patches, summary: buildPatchMergeSummary(result) };
+	} finally {
+		if (task) await cleanupIsolation(task);
+		await cleanupIsolation(baseline);
+	}
+}
+
+/**
+ * Run an IN-PROCESS knowledge distill (which writes the real `.omp/knowledge`
+ * via the parent session's shared tool instances) but capture its edits as a
+ * native patch instead of leaving them committed — the patch auto-applies to a
+ * clean repo or is left pending on a dirty/conflicting one, matching
+ * {@link runIsolatedKnowledgePass}.
+ *
+ * The isolated pass can't be used here: the distill needs the parent's live
+ * conversation history and shared tools, which are bound to the real cwd and
+ * cannot be redirected into a worktree. So instead: snapshot `.omp/knowledge`,
+ * run the distill (it writes the real tree, MUST NOT commit), snapshot the
+ * result, REVERT the real tree to the pre-distill snapshot, then capture the
+ * delta and apply-or-pend. The revert runs before apply (else it would delete
+ * what apply writes) with a `finally` safety-net for an early throw.
+ *
+ * `runDistill` MUST write `<cwd>/.omp/knowledge` and resolve when the pass ends;
+ * it MUST NOT commit (the patch flow owns the commit).
+ */
+export async function runInProcessKnowledgePatchPass(options: {
+	cwd: string;
+	taskId: string;
+	description: string;
+	generateMessage: NativePatchCommitMessageFn;
+	runDistill: () => Promise<void>;
+}): Promise<IsolatedKnowledgePassResult> {
+	const discovered = await detectGitRepos(options.cwd);
+	const repoRoot = path.resolve(discovered?.root ?? options.cwd);
+	const knowledgeAbs = path.join(path.resolve(options.cwd), ".omp", "knowledge");
+	const knowledgeRel = path.relative(repoRoot, knowledgeAbs).split(path.sep).join("/");
+	const store = defaultPatchStore(options.cwd);
+	const targets = buildPatchTargets(options.cwd, repoRoot, discovered ? [repoRoot] : null);
+	const pathFilter = (p: string): boolean => p === knowledgeRel || p.startsWith(`${knowledgeRel}/`);
+	const fileExists = (p: string): Promise<boolean> =>
+		fs
+			.access(p)
+			.then(() => true)
+			.catch(() => false);
+
+	const tmpRoot = path.join(os.tmpdir(), `omp-knowledge-snap-${Snowflake.next()}`);
+	const baselineKnowledge = path.join(tmpRoot, "baseline", knowledgeRel);
+	const changedKnowledge = path.join(tmpRoot, "changed", knowledgeRel);
+	const hadBaseline = await fileExists(knowledgeAbs);
+	const revertRealTree = async (): Promise<void> => {
+		await fs.rm(knowledgeAbs, { recursive: true, force: true });
+		if (hadBaseline) await fs.cp(baselineKnowledge, knowledgeAbs, { recursive: true });
+	};
+
+	let reverted = false;
+	try {
+		// Snapshot pre-distill state (empty dir when none, so capture sees adds).
+		await fs.mkdir(path.dirname(baselineKnowledge), { recursive: true });
+		if (hadBaseline) await fs.cp(knowledgeAbs, baselineKnowledge, { recursive: true });
+		else await fs.mkdir(baselineKnowledge, { recursive: true });
+
+		await options.runDistill();
+
+		// Snapshot post-distill state, then restore the real tree to baseline.
+		await fs.mkdir(path.dirname(changedKnowledge), { recursive: true });
+		if (await fileExists(knowledgeAbs)) await fs.cp(knowledgeAbs, changedKnowledge, { recursive: true });
+		else await fs.mkdir(changedKnowledge, { recursive: true });
+		await revertRealTree();
+		reverted = true;
+
+		const captured = await createTaskNativePatches({
+			store,
+			baselineRoot: path.join(tmpRoot, "baseline"),
+			changedRoot: path.join(tmpRoot, "changed"),
+			targets,
+			taskId: options.taskId,
+			description: options.description,
+			pathFilter,
+		});
+		const patches = captured.length > 0 ? await applyTaskNativePatches(store, captured, options.generateMessage) : [];
+		const result: SingleResult = {
+			index: 0,
+			id: options.taskId,
+			agent: "knowledge",
+			agentSource: "bundled",
+			task: options.description,
+			exitCode: 0,
+			output: "",
+			stderr: "",
+			truncated: false,
+			durationMs: 0,
+			tokens: 0,
+			requests: 0,
+			patches: patches.length > 0 ? patches : undefined,
+		};
+		return { exitCode: 0, aborted: false, patches, summary: buildPatchMergeSummary(result) };
+	} finally {
+		// Safety-net: if an early throw skipped the in-band revert, the real tree
+		// still carries the distill's uncommitted edits — restore it now.
+		if (!reverted) {
+			try {
+				await revertRealTree();
+			} catch (err) {
+				logger.warn("knowledge patch pass: failed to revert .omp/knowledge after error", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+		}
+		await fs.rm(tmpRoot, { recursive: true, force: true });
+	}
+}
 // Re-export types and utilities
 export { loadBundledAgents as BUNDLED_AGENTS } from "./agents";
 export { discoverCommands, expandCommand, getCommand } from "./commands";

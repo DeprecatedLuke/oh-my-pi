@@ -129,7 +129,7 @@ describe("hub wait with no matching jobs", () => {
 
 		const result = await tool.execute("call", { op: "wait" });
 
-		expect(resultText(result)).toBe("No background jobs.");
+		expect(resultText(result)).toBe("No running background jobs to wait for.");
 		expect((result.details as CoordinationDetails)?.jobs).toEqual([]);
 	});
 

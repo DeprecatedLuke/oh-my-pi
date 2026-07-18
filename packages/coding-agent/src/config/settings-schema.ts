@@ -4228,8 +4228,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			group: "Discovery & MCP",
 			label: "Tool Discovery",
-			description:
-				"Legacy tool-discovery mode retained for compatibility with existing settings and SDK callers.",
+			description: "Legacy tool-discovery mode retained for compatibility with existing settings and SDK callers.",
 		},
 	},
 	"tools.essentialOverride": {

@@ -21,10 +21,10 @@ import type {
 	AgentToolUpdateCallback,
 	CustomMessage,
 } from "@oh-my-pi/pi-agent-core";
-import { type } from "arktype";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
+import { type } from "arktype";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { parseXdUrl, XD_URL_PREFIX } from "../internal-urls/xd-protocol";
 import type { Theme } from "../modes/theme/theme";

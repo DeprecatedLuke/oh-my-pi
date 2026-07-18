@@ -63,6 +63,12 @@ const SEEN_LINE_REVEAL_CAP = 40;
  */
 const SEEN_LINE_REVEAL_MAX_COLUMNS = 512;
 
+/** Maximum number of unseen anchor lines to reveal inline in the guard error. */
+const SEEN_LINE_REVEAL_CAP = 40;
+
+/** Maximum characters revealed per anchor line in the guard error. */
+const SEEN_LINE_REVEAL_MAX_COLUMNS = 512;
+
 export interface PatcherOptions {
 	/** Storage backend used for all reads and writes. */
 	fs: Filesystem;
@@ -536,21 +542,11 @@ export class Patcher {
 	 * on the no-drift path, where anchor line numbers index the tagged content
 	 * 1:1.
 	 *
-	 * The rejection inlines the actual file content at the unseen anchor lines
-	 * (from `matchedSnapshot.text`, which by definition equals the live
-	 * normalized content) so the model can verify what it was about to touch.
-	 * When the reveal covers EVERY unseen anchor line in full width
-	 * (`truncated === false`) those lines also merge into the snapshot's
-	 * seen-line set, so a straight retry with the same `[path#tag]` header
-	 * succeeds without a follow-up range read — the content the model
-	 * received in the error IS proof it has now seen those lines. When the
-	 * anchor range exceeds {@link SEEN_LINE_REVEAL_CAP} lines OR any
-	 * revealed line exceeds {@link SEEN_LINE_REVEAL_MAX_COLUMNS} characters
-	 * (`truncated === true`), NO lines merge: the message keeps the
-	 * range-re-read guidance intact and the model cannot piecewise-reveal
-	 * its way past the guard across multiple retries
-	 * (over-cap retry → tail reveal → next retry applies), nor coax the tool
-	 * into dumping a minified megabyte-wide line into the error preview.
+	 * The rejection reveals the actual file content at unseen anchor lines so
+	 * the model can verify what it was about to touch. A complete, full-width
+	 * reveal is merged into the snapshot's seen-line set, allowing a straight
+	 * retry with the same tag. Capped or column-truncated reveals remain
+	 * rejected until the range is read in full.
 	 */
 	#assertSeenLines(section: PatchSection, expected: string, matchedSnapshot: Snapshot | null): void {
 		const seen = matchedSnapshot?.seenLines;
@@ -564,7 +560,7 @@ export class Patcher {
 		for (let i = 0; i < revealCount; i++) {
 			const line = unseen[i];
 			// Out-of-range anchors are caught by parse/apply with a better
-			// message; skip them here so they never join the revealed set.
+			// message; skip them so they never join the revealed set.
 			if (line < 1 || line > sourceLines.length) continue;
 			const source = sourceLines[line - 1] ?? "";
 			if (source.length > SEEN_LINE_REVEAL_MAX_COLUMNS) {
@@ -575,11 +571,8 @@ export class Patcher {
 			}
 		}
 		const truncated = unseen.length > revealed.length || columnTruncated;
-		// Only merge when the reveal covered every unseen anchor line in full
-		// width. A prefix-truncated reveal would let the model split a blind
-		// edit into <=cap-line retries and land it without ever running the
-		// required range re-read; a column-clipped reveal would leave part of
-		// each line unseen while the model receives an "ok to retry" signal.
+		// Never merge a partial or column-truncated reveal: the model must have
+		// seen every character on every anchored line before a retry can land.
 		if (!truncated) {
 			for (const { line } of revealed) seen.add(line);
 		}
@@ -612,10 +605,7 @@ export class Patcher {
 	}): ApplyResult {
 		const { section, canonicalPath, exists, normalized, edits } = args;
 		const expected = exists ? section.fileHash : undefined;
-		// The 4-hex tag is content-derived: when the live text hashes to it,
-		// trust the match and apply directly. `storedSnapshotForTag` feeds the
-		// drift paths below (block resolution, anchor remapping); on a 16-bit
-		// tag collision it resolves to the most-recently recorded text.
+
 		const storedSnapshotForTag = expected === undefined ? null : this.snapshots.byHash(canonicalPath, expected);
 		const liveMatches = expected !== undefined && computeFileHash(normalized) === expected;
 		const matchedSnapshot = liveMatches ? this.snapshots.byContent(canonicalPath, normalized) : null;

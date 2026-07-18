@@ -332,10 +332,6 @@ describe("read → edit seen-line guard", () => {
 	});
 
 	it("marks column-clipped read lines as seen (clipped-line check removed)", async () => {
-		// A 4KB single line — the read tool's column cap (default 512 chars)
-		// clips this into `<prefix>…` in the numbered output. The clipped-line
-		// exclusion was removed, so the displayed line counts as seen and a
-		// follow-up edit anchored there applies even with the guard enabled.
 		const file = path.join(tmpDir, "wide.txt");
 		const wide = "a".repeat(4096);
 		const content = `head\n${wide}\nfoot\n`;
@@ -344,7 +340,6 @@ describe("read → edit seen-line guard", () => {
 
 		const read = await new ReadTool(session).execute("r1", { path: `${file}:2` });
 		const tag = tagFromOutput(resultText(read));
-
 		const seen = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(file), tag)?.seenLines;
 		expect(seen?.has(2)).toBe(true);
 
@@ -352,7 +347,6 @@ describe("read → edit seen-line guard", () => {
 		expect(await Bun.file(file).text()).toBe("head\nREPLACED\nfoot\n");
 	});
 });
-
 describe("search → edit seen-line guard", () => {
 	let tmpDir: string;
 

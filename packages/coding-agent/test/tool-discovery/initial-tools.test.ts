@@ -106,12 +106,12 @@ describe("computeEssentialBuiltinNames", () => {
 
 	it("respects tools.essentialOverride when provided", () => {
 		const settings = Settings.isolated({ "tools.essentialOverride": ["read", "glob"] });
-		expect(computeEssentialBuiltinNames(settings).sort()).toEqual(["glob", "read"]);
+		expect(computeEssentialBuiltinNames(settings).sort()).toEqual(["find", "read"]);
 	});
 
 	it("maps legacy essential override tool names", () => {
 		const settings = Settings.isolated({ "tools.essentialOverride": ["read", "find", "search", "glob"] });
-		expect(computeEssentialBuiltinNames(settings).sort()).toEqual(["glob", "grep", "read"]);
+		expect(computeEssentialBuiltinNames(settings).sort()).toEqual(["find", "read", "search"]);
 	});
 
 	it("filters override entries that are not known built-in tools", () => {

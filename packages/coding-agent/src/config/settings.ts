@@ -1816,7 +1816,6 @@ export class Settings {
 				? [value, ...AUTO_IMAGE_PROVIDER_ORDER.filter(id => id !== value)]
 				: undefined,
 		);
-
 		return raw;
 	}
 
