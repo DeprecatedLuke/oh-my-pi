@@ -14,7 +14,14 @@
  * resolve renderer under `resolve` and `reject` so device writes and legacy
  * `resolve` tool transcripts draw the same block.
  */
-import type { AgentToolResult, CustomMessage } from "@oh-my-pi/pi-agent-core";
+import type {
+	AgentTool,
+	AgentToolContext,
+	AgentToolResult,
+	AgentToolUpdateCallback,
+	CustomMessage,
+} from "@oh-my-pi/pi-agent-core";
+import { type } from "arktype";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
@@ -144,6 +151,54 @@ interface ResolveInvocation {
 	action: ResolveAction;
 	reason: string;
 }
+
+const resolveSchema = type({
+	action: type("'apply' | 'discard'").describe("whether to apply or discard the pending action"),
+	reason: type("string").describe("why the action should be applied or discarded"),
+});
+
+/** Compatibility JSON-tool facade for the current xd:// resolution protocol. */
+export class ResolveTool implements AgentTool<typeof resolveSchema, ResolveDetails> {
+	readonly name = "resolve";
+	readonly approval = "read" as const;
+	readonly label = "Resolve";
+	readonly hidden = true;
+	readonly description =
+		"Apply or discard a pending staged action. Prefer writing a reason to xd://resolve or xd://reject.";
+	readonly parameters = resolveSchema;
+	readonly strict = true;
+
+	async execute(
+		_toolCallId: string,
+		params: ResolveInvocation,
+		signal?: AbortSignal,
+		_onUpdate?: AgentToolUpdateCallback<ResolveDetails>,
+		_context?: AgentToolContext,
+	): Promise<AgentToolResult<ResolveDetails>> {
+		if (signal?.aborted) throw new ToolError("Resolve aborted");
+		const invoker = this.session.peekQueueInvoker?.() ?? this.session.peekPendingInvoker?.();
+		if (!invoker) {
+			this.session.clearPendingInvokers?.();
+			if (params.action === "discard") {
+				return {
+					content: [{ type: "text", text: "Nothing to discard; no pending action remains." }],
+					details: { action: "discard", reason: params.reason },
+				};
+			}
+			throw new ToolError("No pending action to resolve. Nothing to apply or discard.");
+		}
+		return (await invoker(params)) as AgentToolResult<ResolveDetails>;
+	}
+
+	private constructor(private readonly session: ToolSession) {}
+
+	static createIf(session: ToolSession): ResolveTool {
+		return new ResolveTool(session);
+	}
+}
+
+/** Historical details name retained for SDK consumers. */
+export type ResolveToolDetails = ResolveDetails;
 
 /** Monotonic suffix making each staged preview's pending-invoker id UNIQUE, so
  *  stacked previews never clobber one another by label. */

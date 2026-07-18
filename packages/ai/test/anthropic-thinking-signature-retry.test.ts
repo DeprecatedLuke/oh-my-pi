@@ -63,7 +63,7 @@ interface WireBlock {
 }
 
 function assistantBlocks(messages: Message[], model: Model<"anthropic-messages">, strip: boolean): WireBlock[] {
-	const params = convertAnthropicMessages(messages, model, false, strip);
+	const params = convertAnthropicMessages(messages, model, false, { stripThinkingSignatures: strip });
 	const assistant = params.find(p => p.role === "assistant");
 	return (assistant?.content as WireBlock[] | undefined) ?? [];
 }

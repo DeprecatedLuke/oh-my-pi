@@ -160,6 +160,34 @@ const mockMaxSuffixModels: Model<Api>[] = [
 	}),
 ];
 
+const mockAutoSuffixModels: Model<Api>[] = [
+	buildModel({
+		id: "runtime",
+		name: "Example Runtime",
+		api: "openai-completions",
+		provider: "example",
+		baseUrl: "https://example.test/v1",
+		reasoning: true,
+		thinking: { mode: "effort", efforts: [Effort.Low, Effort.Medium, Effort.High] },
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	}),
+	buildModel({
+		id: "runtime:auto",
+		name: "Example Runtime Auto",
+		api: "openai-completions",
+		provider: "example",
+		baseUrl: "https://example.test/v1",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	}),
+];
+
 // Sibling models where one id is a prefix of the other AND the longer id embeds
 // a thinking-tier token (`-highspeed` contains `high`). Regression fixture for
 // the fuzzy match swallowing a `:high` thinking suffix into the longer id.

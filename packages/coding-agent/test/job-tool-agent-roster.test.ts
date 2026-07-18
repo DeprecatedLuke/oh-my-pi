@@ -130,7 +130,7 @@ describe("hub wait with no matching jobs", () => {
 		const result = await tool.execute("call", { op: "wait" });
 
 		expect(resultText(result)).toBe("No background jobs.");
-		expect(result.details?.jobs).toEqual([]);
+		expect((result.details as CoordinationDetails)?.jobs).toEqual([]);
 	});
 
 	test("bare wait reports running agents outside job control", async () => {

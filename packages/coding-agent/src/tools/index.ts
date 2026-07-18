@@ -31,6 +31,7 @@ import type { ToolChoiceQueue } from "../session/tool-choice-queue";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
 import { canSpawnAtDepth, type StructuredSubagentSchemaMode } from "../task/types";
+import type { DiscoverableTool, DiscoverableToolSearchIndex } from "../tool-discovery/tool-index";
 import type { EventBus } from "../utils/event-bus";
 import { type InspectImageMode, isInspectImageToolActive } from "../utils/inspect-image-mode";
 import { WebSearchTool } from "../web/search";
@@ -51,6 +52,10 @@ import { GlobTool } from "./glob";
 import { GrepTool } from "./grep";
 import { HubTool, isIrcEnabled } from "./hub";
 import { InspectImageTool } from "./inspect-image";
+import { IrcTool } from "./irc";
+import { IssuesTool } from "./issues";
+import { JobTool } from "./job";
+import { LaunchTool } from "./launch";
 import { LearnTool } from "./learn";
 import { ManageSkillTool } from "./manage-skill";
 import { MemoryEditTool } from "./memory-edit";
@@ -60,6 +65,8 @@ import { MemoryRetainTool } from "./memory-retain";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { ReadTool } from "./read";
 import type { PlanProposalHandler } from "./resolve";
+import { SearchToolBm25Tool } from "./search-tool-bm25";
+import { loadSshTool } from "./ssh";
 import { type TodoPhase, TodoTool } from "./todo";
 import { WriteTool } from "./write";
 import { isMountableUnderXdev, type XdevState } from "./xdev";
@@ -86,9 +93,26 @@ export * from "./eval-backends";
 export * from "./gh";
 export * from "./glob";
 export * from "./grep";
-export * from "./hub";
+export { HubTool, hubToolRenderer } from "./hub";
+export { isWaitingPollDetails } from "./hub/jobs";
+export type {
+	AgentActivitySnapshot,
+	CancelOutcome,
+	CancelStatus,
+	CoordinationDetails,
+	HubDetails,
+	HubOp,
+	HubRenderArgs,
+	HubPeerInfo,
+	JobSnapshot,
+} from "./hub/types";
 export * from "./image-gen";
 export * from "./inspect-image";
+export { IrcTool, ircToolRenderer } from "./irc";
+export type { IrcDetails } from "./irc";
+export * from "./issues";
+export * from "./job";
+export * from "./launch";
 export * from "./learn";
 export * from "./manage-skill";
 export * from "./memory-edit";
@@ -99,6 +123,8 @@ export * from "./read";
 export * from "./report-tool-issue";
 export * from "./resolve";
 export * from "./review";
+export * from "./search-tool-bm25";
+export * from "./ssh";
 export * from "./todo";
 export * from "./tts";
 export * from "./vibe";
@@ -319,6 +345,22 @@ export interface ToolSession {
 	setTodoPhases?: (phases: TodoPhase[]) => void;
 	/** The tool-choice queue used to force forthcoming tool invocations and carry invocation handlers. */
 	getToolChoiceQueue?(): ToolChoiceQueue;
+	/** Whether legacy/generic tool discovery is active for this session. */
+	isToolDiscoveryEnabled?: () => boolean;
+	/** Names selected by prior discovery calls. */
+	/** Whether legacy MCP-only discovery is active for this session. */
+	isMCPDiscoveryEnabled?: () => boolean;
+	/** MCP tool names selected by prior discovery calls. */
+	getSelectedMCPToolNames?: () => string[];
+	/** Activate MCP tools and return names accepted by the session. */
+	activateDiscoveredMCPTools?: (toolNames: string[]) => Promise<string[]>;
+	/** Hidden built-in/MCP/extension tools available to BM25 discovery. */
+	getDiscoverableTools?: (filter?: { source?: DiscoverableTool["source"] }) => DiscoverableTool[];
+	/** Cached BM25 index for discoverable tools. */
+	getDiscoverableToolSearchIndex?: () => DiscoverableToolSearchIndex;
+	getSelectedDiscoveredToolNames?: () => string[];
+	/** Activate discovered tools and return the names accepted by the session. */
+	activateDiscoveredTools?: (toolNames: string[]) => Promise<string[]>;
 	/** Build a model-provider-specific ToolChoice that targets the named tool, or undefined if unsupported. */
 	buildToolChoice?(toolName: string): ToolChoice | undefined;
 	/** Steer a hidden custom message into the conversation (e.g. a preview reminder). */
@@ -395,12 +437,14 @@ export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool |
 export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	read: s => new ReadTool(s),
 	bash: s => new BashTool(s),
+	launch: s => new LaunchTool(s),
 	edit: s => new EditTool(s),
 	ast_grep: s => new AstGrepTool(s),
 	ast_edit: s => new AstEditTool(s),
 	ask: AskTool.createIf,
 	debug: DebugTool.createIf,
 	eval: s => new EvalTool(s),
+	ssh: loadSshTool,
 	github: GithubTool.createIf,
 	glob: s => new GlobTool(s, { rootPathAlias: true }),
 	grep: s => new GrepTool(s),
@@ -414,6 +458,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	hub: s => new HubTool(s),
 	todo: s => new TodoTool(s),
 	web_search: s => new WebSearchTool(s),
+	search_tool_bm25: SearchToolBm25Tool.createIf,
 	write: s => new WriteTool(s),
 	memory_edit: MemoryEditTool.createIf,
 	retain: MemoryRetainTool.createIf,
@@ -559,6 +604,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			return goalState === undefined || goalState.enabled === true || goalState.goal.status === "dropped";
 		}
 		if (name === "lsp") return enableLsp && session.settings.get("lsp.enabled");
+		if (name === "launch") return session.settings.get("launch.enabled");
 		if (name === "bash") return session.settings.get("bash.enabled");
 		if (name === "eval") return allowEval;
 		if (name === "debug") return session.settings.get("debug.enabled");

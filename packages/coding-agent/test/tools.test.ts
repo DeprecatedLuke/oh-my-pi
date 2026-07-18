@@ -17,8 +17,8 @@ import * as toolTimeouts from "@oh-my-pi/pi-coding-agent/tools/tool-timeouts";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 import { unzip } from "@oh-my-pi/pi-coding-agent/utils/zip";
 import { $which, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
-import { GlobTool } from "../src/tools/glob";
-import { DEFAULT_FILE_LIMIT, GrepTool, MULTI_FILE_PER_FILE_MATCHES } from "../src/tools/grep";
+import { FindTool } from "../src/tools/glob";
+import { DEFAULT_FILE_LIMIT, MULTI_FILE_PER_FILE_MATCHES, SearchTool } from "../src/tools/grep";
 import { HubTool } from "../src/tools/hub";
 
 // Helper to extract text from content blocks
@@ -1671,7 +1671,7 @@ function b() {
 			});
 			const jobTool = new HubTool(session);
 
-			manager.register("bash", "test job", async () => "success");
+			const jobId = manager.register("bash", "test job", async () => "success");
 			await manager.waitForAll();
 
 			// Job is running, call poll

@@ -263,6 +263,12 @@ function fileEntriesToSessionEntries(entries: readonly FileEntry[]): SessionEntr
 }
 
 function textOnlyMessage(message: Message): Message | undefined {
+	if (message.role === "assistant") {
+		const content = message.content.filter(
+			(block): block is TextContent => block.type === "text" && block.text.length > 0,
+		);
+		return content.length > 0 ? { ...message, content } : undefined;
+	}
 	if (typeof message.content === "string") {
 		return message.content.trim().length > 0 ? message : undefined;
 	}

@@ -12,6 +12,13 @@ const stripAnsi = (s: string): string => s.replace(/\u001b\[[0-9;]*m/g, "");
 const hasLine = (lines: readonly string[], n: number): boolean =>
 	new RegExp(`\\bline ${n}\\b`).test(stripAnsi(lines.join("\n")));
 
+async function getUiTheme() {
+	await themeModule.initTheme();
+	const uiTheme = (await themeModule.getThemeByName("dark")) ?? (await themeModule.getThemeByName("light"));
+	if (!uiTheme) throw new Error("Expected a built-in UI theme");
+	return uiTheme;
+}
+
 describe("write streaming preview honors Ctrl+O expansion", () => {
 	let initialized = false;
 

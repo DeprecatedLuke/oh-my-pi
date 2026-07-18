@@ -680,3 +680,5 @@ export const globToolRenderer = {
 	},
 	mergeCallAndResult: true,
 };
+/** Legacy import alias; `FindTool` is the canonical fork name. */
+export { FindTool as GlobTool };

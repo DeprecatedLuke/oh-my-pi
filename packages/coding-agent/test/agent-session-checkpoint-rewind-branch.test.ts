@@ -202,6 +202,32 @@ async function expectNoActiveCheckpointError(session: AgentSession): Promise<voi
 	);
 }
 
+function createToolSession(overrides: Partial<ToolSession> = {}): ToolSession {
+	return {
+		cwd: "/tmp/test",
+		hasUI: true,
+		getSessionFile: () => null,
+		getSessionSpawns: () => "*",
+		settings: Settings.isolated(),
+		...overrides,
+	};
+}
+
+function rewindToolForSession(session: AgentSession): RewindTool {
+	return new RewindTool(
+		createToolSession({
+			getCheckpointState: () => session.getCheckpointState(),
+			getLastCompletedRewind: () => session.getLastCompletedRewind(),
+		}),
+	);
+}
+
+async function expectNoActiveCheckpointError(session: AgentSession): Promise<void> {
+	await expect(rewindToolForSession(session).execute("repeat_rewind", { report: "retry" })).rejects.toThrow(
+		"No active checkpoint. Create a checkpoint before calling rewind.",
+	);
+}
+
 describe("AgentSession checkpoint rewind branch context", () => {
 	it("rebuilds active history through branch_summary before the post-rewind assistant turn", async () => {
 		const report = "findings: kept checkpoint; risks: stale signed thinking";

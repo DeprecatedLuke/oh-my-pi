@@ -624,7 +624,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	#flushRawPasteCandidate(): void {
 		const content = this.#takeRawPasteCandidate();
 		if (content.length === 0) return;
-		const result = extractCompleteSequences(content, 0);
+		const result = extractCompleteSequences(content);
 		for (const sequence of result.sequences) {
 			this.#emitDataSequence(sequence);
 		}
@@ -732,7 +732,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		this.#clearFlushTimer();
 
 		const rawCandidate = this.#takeRawPasteCandidate();
-		const sequences = rawCandidate.length > 0 ? extractCompleteSequences(rawCandidate, 0).sequences : [];
+		const sequences = rawCandidate.length > 0 ? extractCompleteSequences(rawCandidate).sequences : [];
 
 		if (this.#buffer.length === 0) {
 			this.#pendingKittyPrintableCodepoint = undefined;

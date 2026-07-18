@@ -23,8 +23,8 @@ function createSession(testDir: string): ToolSession {
 		},
 		settings: Settings.isolated({
 			"fetch.enabled": true,
-			"grep.contextBefore": 0,
-			"grep.contextAfter": 0,
+			"search.contextBefore": 0,
+			"search.contextAfter": 0,
 			"astGrep.enabled": true,
 			"astEdit.enabled": true,
 			"tools.xdev": false,

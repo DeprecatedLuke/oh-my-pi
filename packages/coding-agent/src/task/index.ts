@@ -13,10 +13,12 @@
  *   - Progress tracking via JSON events
  *   - Session artifacts for debugging
  */
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import path from "node:path";
 import type { AgentTool, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Usage } from "@oh-my-pi/pi-ai";
-import { $env, logger, prompt } from "@oh-my-pi/pi-utils";
+import { $env, logger, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "..";
 import type { Theme } from "../modes/theme/theme";
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
@@ -479,11 +481,12 @@ function discoverAgentsForCreate(cwd: string): Promise<DiscoveryResult> {
 	const key = path.resolve(cwd);
 	let pending = discoveryMemo.get(key);
 	if (!pending) {
-		pending = fn(cwd);
-		discoveryMemo.set(key, pending);
-		pending.catch(() => {
-			if (discoveryMemo.get(key) === pending) discoveryMemo.delete(key);
+		const created = fn(cwd);
+		discoveryMemo.set(key, created);
+		created.catch(() => {
+			if (discoveryMemo.get(key) === created) discoveryMemo.delete(key);
 		});
+		pending = created;
 	}
 	return pending;
 }
@@ -1445,14 +1448,15 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				maxRuntimeMs: this.session.settings.get("task.maxRuntimeMs"),
 				signal,
 				onProgress: progress => {
-					latestProgress = { ...progress, recentTools: progress.recentTools.slice() };
+					const nextProgress = { ...progress, recentTools: progress.recentTools.slice() };
+					latestProgress = nextProgress;
 					onUpdate?.({
 						content: [{ type: "text", text: `Running agent ${progress.id}...` }],
 						details: {
 							projectAgentsDir: null,
 							results: [],
 							totalDurationMs: Date.now() - startTime,
-							progress: [latestProgress],
+							progress: [nextProgress],
 						},
 					});
 				},

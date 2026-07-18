@@ -1856,3 +1856,5 @@ export const grepToolRenderer = {
 	},
 	mergeCallAndResult: true,
 };
+/** Legacy import alias; `SearchTool` is the canonical fork name. */
+export { SearchTool as GrepTool };

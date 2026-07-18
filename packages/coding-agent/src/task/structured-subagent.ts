@@ -20,6 +20,18 @@ import type { TaskEffort } from "../thinking";
 import type { ToolSession } from "../tools";
 import { isIrcEnabled } from "../tools/hub";
 import { buildOutputValidator } from "../tools/output-schema-validator";
+import {
+	applyNativePatch,
+	createNativePatch,
+	defaultPatchStore,
+	detectGitRepos,
+	dropNativePatch,
+	formatRepoLabel,
+	manifestAllIgnored,
+	type NativePatchManifest,
+} from "../patches";
+import * as git from "../utils/git";
+import { generateCommitMessage } from "../utils/commit-message-generator";
 import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
 import { type ExecutorOptions, runSubprocess } from "./executor";
 import {
@@ -39,8 +51,14 @@ import {
 	canSpawnAtDepth,
 	type SingleResult,
 	type StructuredSubagentOutput,
+	type TaskPatchSummary,
 } from "./types";
-import { type NestedRepoPatch, parseIsolationMode } from "./worktree";
+import {
+	type NestedRepoPatch,
+	cleanupIsolation,
+	ensureIsolation,
+	parseIsolationMode,
+} from "./worktree";
 
 /** Validation behavior requested for an effective output schema. */
 export type StructuredSubagentSchemaMode = "permissive" | "strict";
@@ -62,10 +80,11 @@ export interface StructuredSubagentSchemaResolution {
 	outputSchemaOverridesAgent: boolean;
 }
 
+export type StructuredSubagentMergeMode = "patch" | "branch" | "patch-tool";
 /** Isolation controls shared by the task and eval surfaces. */
 export interface StructuredSubagentIsolationControls {
 	requested?: boolean;
-	merge?: "patch" | "branch";
+	merge?: StructuredSubagentMergeMode;
 	apply?: boolean;
 }
 
@@ -126,7 +145,7 @@ export interface EffectiveSubagentPolicy {
 	schema: StructuredSubagentSchemaResolution;
 	planMode: boolean;
 	isIsolated: boolean;
-	mergeMode: "patch" | "branch";
+	mergeMode: StructuredSubagentMergeMode;
 	applyChanges: boolean;
 	enableLsp: boolean;
 	enableIrc: boolean;
@@ -436,6 +455,234 @@ function buildExecutorOptions(
 		parentServiceTier: session.getServiceTierByFamily ? (session.getServiceTierByFamily() ?? null) : undefined,
 	};
 }
+interface NativePatchTarget {
+	repoPath: string;
+	repoLabel: string;
+	relativePath: string;
+	git: boolean;
+}
+
+function buildNativePatchTargets(
+	cwd: string,
+	sourceRoot: string,
+	repos: readonly string[] | null,
+): NativePatchTarget[] {
+	if (!repos || repos.length === 0) {
+		return [{ repoPath: sourceRoot, repoLabel: formatRepoLabel(cwd, sourceRoot), relativePath: "", git: false }];
+	}
+	return repos.map(repoPath => ({
+		repoPath,
+		repoLabel: formatRepoLabel(cwd, repoPath),
+		relativePath: path.relative(sourceRoot, repoPath).split(path.sep).join("/"),
+		git: true,
+	}));
+}
+function nativePatchSummary(
+	manifest: NativePatchManifest,
+	target: NativePatchTarget,
+	status: TaskPatchSummary["status"],
+	options: { error?: string; commit?: string; recovery?: boolean } = {},
+): TaskPatchSummary {
+	return {
+		patchId: manifest.id,
+		status,
+		repoPath: target.repoPath,
+		repoLabel: target.repoLabel,
+		uri: `patch://${manifest.id}`,
+		message: manifest.message,
+		commit: options.commit,
+		error: options.error,
+		conflicts: manifest.conflicts?.map(conflict => ({
+			path: conflict.path,
+			reason: conflict.reason,
+			expectedHash: conflict.expectedHash,
+			actualHash: conflict.actualHash,
+		})),
+		recovery: options.recovery,
+	};
+}
+
+async function runNativePatchSubprocess(
+	request: StructuredSubagentRequest,
+	policy: EffectiveSubagentPolicy,
+	baseOptions: ExecutorOptions,
+	isolationContext: IsolationContext,
+	id: string,
+): Promise<SingleResult> {
+	const preferredBackend = parseIsolationMode(request.session.settings.get("task.isolation.mode"));
+	const discovered = await detectGitRepos(request.session.cwd);
+	const targets = buildNativePatchTargets(request.session.cwd, isolationContext.repoRoot, discovered?.repos ?? null);
+	const store = defaultPatchStore(request.session.cwd);
+	const description = request.assignment.trim() || trimToUndefined(request.identity?.label) || `changes from isolated task ${id}`;
+	const generateMessage = async (manifest: NativePatchManifest): Promise<string> => {
+		if (request.session.settings.get("task.isolation.commits") === "ai" && request.session.modelRegistry) {
+			const lines = [
+				`Native patch ${manifest.id}`,
+				manifest.description ? `Description: ${manifest.description}` : undefined,
+				manifest.taskId ? `Task: ${manifest.taskId}` : undefined,
+				"Files:",
+				...manifest.files.map(file => `- ${file.op} ${file.path}`),
+			];
+			const generated = await generateCommitMessage(
+				lines.filter((line): line is string => line !== undefined).join("\n"),
+				request.session.modelRegistry,
+				request.session.settings,
+				request.session.getSessionId?.() ?? undefined,
+			);
+			if (generated?.trim()) return generated.trim();
+		}
+		return description;
+	};
+	const baselineHandle = await ensureIsolation(isolationContext.repoRoot, `${id}-baseline`, preferredBackend);
+	try {
+		const childHandle = await ensureIsolation(baselineHandle.mergedDir, id, preferredBackend);
+		try {
+			const result = await runSubprocess({
+				...baseOptions,
+				worktree: childHandle.mergedDir,
+				preloadedExtensionPaths: undefined,
+				preloadedCustomToolPaths: undefined,
+			});
+
+			const summaries: TaskPatchSummary[] = [];
+			const failures: string[] = [];
+			const recovery = result.aborted === true || result.exitCode !== 0 || result.error !== undefined;
+			let recoveryCaptureStatus: SingleResult["recoveryCaptureStatus"] = recovery ? "empty" : undefined;
+			for (const target of targets) {
+				const baselineRoot = target.relativePath
+					? path.join(baselineHandle.mergedDir, target.relativePath)
+					: baselineHandle.mergedDir;
+				const changedRoot = target.relativePath
+					? path.join(childHandle.mergedDir, target.relativePath)
+					: childHandle.mergedDir;
+				try {
+					const captured = await createNativePatch({
+						store,
+						baselineRoot,
+						changedRoot,
+						targetRoot: target.repoPath,
+						repoRoot: target.git ? target.repoPath : undefined,
+						taskId: id,
+						description,
+					});
+					if (captured.empty || captured.manifest.files.length === 0) {
+						await dropNativePatch(store, captured.manifest.id);
+						continue;
+					}
+					if (recovery) {
+						summaries.push(nativePatchSummary(captured.manifest, target, "pending", { recovery: true }));
+						if (recoveryCaptureStatus !== "failed") recoveryCaptureStatus = "preserved";
+						continue;
+					}
+					if (!policy.applyChanges) {
+						summaries.push(nativePatchSummary(captured.manifest, target, "pending"));
+						continue;
+					}
+					if (
+						target.git &&
+						(await git.status(target.repoPath)).trim().length > 0 &&
+						!(await manifestAllIgnored(target.repoPath, target.repoPath, captured.manifest.files))
+					) {
+						const error = `failed to apply ${target.repoLabel}/${captured.manifest.id}: target repo is dirty, git commit ${target.repoPath} and reapply`;
+						summaries.push(nativePatchSummary(captured.manifest, target, "pending", { error }));
+						failures.push(error);
+						continue;
+					}
+					try {
+						const applied = await applyNativePatch(store, captured.manifest.id, {
+							cwd: request.session.cwd,
+							targetRoot: target.repoPath,
+							repoRoot: target.git ? target.repoPath : undefined,
+							repoLabel: target.repoLabel,
+							generateMessage,
+						});
+						const status: TaskPatchSummary["status"] =
+							applied.manifest.status === "conflicted"
+								? "conflicted"
+								: applied.applied
+									? "applied"
+									: "pending";
+						const error =
+							status === "conflicted"
+								? applied.manifest.conflicts?.map(conflict => `${conflict.path}: ${conflict.reason}`).join("; ")
+								: undefined;
+						summaries.push(nativePatchSummary(applied.manifest, target, status, { error, commit: applied.commit }));
+						if (error) failures.push(error);
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						const status: TaskPatchSummary["status"] = message.includes("target repo is dirty") ? "pending" : "failed";
+						summaries.push(nativePatchSummary(captured.manifest, target, status, { error: message }));
+						failures.push(message);
+					}
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					failures.push(`${target.repoLabel}: ${message}`);
+					if (recovery) recoveryCaptureStatus = "failed";
+				}
+			}
+			const error = recovery ? result.error : failures.length > 0 ? [result.error, ...failures].filter(Boolean).join("; ") : result.error;
+			return {
+				...result,
+				patches: summaries.length > 0 ? summaries : undefined,
+				recoveryCaptureStatus,
+				...(recoveryCaptureStatus === "failed"
+					? { recoveryCaptureError: failures.join("; ") || "native recovery capture failed" }
+					: {}),
+				...(error ? { error } : {}),
+			};
+		} finally {
+			await cleanupIsolation(childHandle);
+		}
+	} finally {
+		await cleanupIsolation(baselineHandle);
+	}
+}
+function buildNativePatchMergeSummary(result: SingleResult): string {
+	const patches = result.patches ?? [];
+	let summary = "";
+	const applied = patches.filter(patch => patch.status === "applied" && !patch.recovery);
+	if (applied.length > 0) {
+		summary += `\n\nautomatically applied:\n\n${applied
+			.map(patch => `${patch.repoLabel}: ${patch.patchId} (${patch.message ?? "applied"})`)
+			.join("\n")}`;
+	}
+	const pending = patches.filter(patch => patch.status === "pending" && !patch.recovery);
+	if (pending.length > 0) {
+		summary += `\n\npending patches:\n\n${pending
+			.map(patch => `${patch.repoLabel}: ${patch.uri} — ${patch.error ?? `${patch.uri} is pending`}`)
+			.join("\n")}\n\nUse the \`patch\` tool after cleaning the target repo; edit and reapply if needed.`;
+	}
+	const conflicted = patches.filter(patch => patch.status === "conflicted" && !patch.recovery);
+	if (conflicted.length > 0) {
+		summary += `\n\nconflicted patches:\n\n${conflicted
+			.map(patch => `${patch.repoLabel}: ${patch.uri} — ${patch.error ?? `${patch.uri} conflicted`}`)
+			.join("\n")}\n\nOpen the listed patch:// files, edit and reapply.`;
+	}
+	const failed = patches.filter(patch => patch.status === "failed" && !patch.recovery);
+	if (failed.length > 0) {
+		summary += `\n\nfailed patches:\n\n${failed
+			.map(patch => `${patch.repoLabel}: ${patch.uri} — ${patch.error ?? `${patch.uri} failed`}`)
+			.join("\n")}\n\nInspect with the \`patch\` tool, edit and reapply.`;
+	}
+	const recovered = patches.filter(patch => patch.recovery);
+	const recoveryVerb = result.aborted ? "aborted" : "failed";
+	const recoveryTitle = result.aborted ? "Aborted" : "Failed";
+	if (recovered.length > 0) {
+		const recoveryLabel = result.description ? `${result.id} — ${result.description}` : result.id;
+		const plural = recovered.length === 1 ? "" : "es";
+		summary += `\n\n<system-notification>${recovered.length} recovery patch${plural} preserved ${recoveryVerb} task edits in the durable native patch store.\n\nRecovery patches:\n${recovered.map(patch => `- ${recoveryLabel}: ${patch.repoLabel}: ${patch.uri}`).join("\n")}\n\nUse the \`patch\` tool to inspect/apply, or edit patch:// files and reapply.</system-notification>`;
+	}
+	if (result.recoveryCaptureStatus === "empty") {
+		const recoveryLabel = result.description ? `${result.id} — ${result.description}` : result.id;
+		summary += `\n\n<system-notification>${recoveryTitle} task ${recoveryLabel} had no recovery patch because recovery capture found no file changes in the isolated worktree. Restart from the original assignment instead of searching session artifact directories for a missing patch.</system-notification>`;
+	}
+	if (result.recoveryCaptureStatus === "failed") {
+		const recoveryLabel = result.description ? `${result.id} — ${result.description}` : result.id;
+		const detail = result.recoveryCaptureError ? ` Error: ${result.recoveryCaptureError}` : "";
+		summary += `\n\n<system-notification>Recovery capture failed for ${recoveryVerb} task ${recoveryLabel}. The isolation worktree was torn down and no reliable native patch was written. Restart from the original assignment or inspect the logged recovery error if the work should have produced a delta.${detail}</system-notification>`;
+	}
+	return summary.trimStart() || "No changes to apply.";
+}
 
 async function loadPlanReference(
 	request: StructuredSubagentRequest,
@@ -558,27 +805,41 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 				);
 			}
 		}
-		const result = !isolationContext
-			? await runSubprocess(baseOptions)
-			: await runIsolatedSubprocess({
-					baseOptions,
-					context: isolationContext,
-					preferredBackend: parseIsolationMode(request.session.settings.get("task.isolation.mode")),
-					agentId: id,
-					mergeMode: policy.mergeMode,
-					artifactsDir: lease.artifactsDir,
-					description: trimToUndefined(request.identity?.label),
-					buildCommitMessage: makeIsolationCommitMessage(request.session),
-					buildFailureResult: buildFailureResult(request, policy, id, Date.now()),
-				});
+		const nativePatchMode = policy.isIsolated && policy.mergeMode === "patch-tool";
+		const result =
+			nativePatchMode && isolationContext
+				? await runNativePatchSubprocess(request, policy, baseOptions, isolationContext, id)
+				: !isolationContext
+					? await runSubprocess(baseOptions)
+					: await runIsolatedSubprocess({
+							baseOptions,
+							context: isolationContext,
+							preferredBackend: parseIsolationMode(request.session.settings.get("task.isolation.mode")),
+							agentId: id,
+							mergeMode: policy.mergeMode,
+							artifactsDir: lease.artifactsDir,
+							description: trimToUndefined(request.identity?.label),
+							buildCommitMessage: makeIsolationCommitMessage(request.session),
+							buildFailureResult: buildFailureResult(request, policy, id, Date.now()),
+						});
 		attachStructuredOutputMetadata(result, policy.schema);
 		requiresRecoveryArtifacts =
 			policy.isIsolated &&
 			(result.exitCode !== 0 || result.error !== undefined || result.aborted === true) &&
-			(result.patchPath !== undefined || result.branchName !== undefined || (result.nestedPatches?.length ?? 0) > 0);
+			((result.patchPath !== undefined ||
+				result.branchName !== undefined ||
+				(result.nestedPatches?.length ?? 0) > 0 ||
+				(result.patches?.length ?? 0) > 0 ||
+				result.recoveryCaptureStatus === "failed"));
 
+		if (nativePatchMode) {
+			const patches = result.patches ?? [];
+			changesApplied =
+				patches.length === 0 ? null : patches.some(patch => patch.status === "applied") ? true : false;
+			mergeSummary = buildNativePatchMergeSummary(result);
+		}
 		if (
-			policy.isIsolated &&
+			!nativePatchMode &&
 			isolationContext &&
 			policy.applyChanges &&
 			result.exitCode === 0 &&
@@ -605,7 +866,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 				requiresRecoveryArtifacts ||=
 					nestedPatchSummary.includes("<system-notification>") && (result.nestedPatches?.length ?? 0) > 0;
 			}
-		} else if (policy.isIsolated && isolationContext && !policy.applyChanges) {
+		} else if (!nativePatchMode && policy.isIsolated && isolationContext && !policy.applyChanges) {
 			if (result.branchName)
 				mergeSummary = `\n\nIsolation: changes captured on branch \`${result.branchName}\` (apply=false). Not merged.`;
 			else if (result.patchPath)

@@ -88,6 +88,7 @@ export class ChatTranscriptBuilder {
 	#pendingUsageTimestamp: number | undefined;
 	#lastAssistantUsage: Usage | undefined;
 	#todoSnapshot: ToolExecutionComponent | null = null;
+	#waitingPoll: ToolExecutionComponent | null = null;
 	#expandables: Array<{ setExpanded(expanded: boolean): void }> = [];
 	#expanded = false;
 
@@ -136,6 +137,7 @@ export class ChatTranscriptBuilder {
 		this.#pendingUsageTimestamp = undefined;
 		this.#lastAssistantUsage = undefined;
 		this.#todoSnapshot = null;
+		this.#waitingPoll = null;
 		this.#expandables = [];
 		this.container.dispose();
 		this.container.clear();

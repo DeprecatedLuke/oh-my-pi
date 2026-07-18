@@ -132,8 +132,8 @@ describe("patch-tool merge strategy", () => {
 		const tool = await TaskTool.create(createSession(repo));
 		const result = await tool.execute("tc-clean", {
 			agent: "task",
-			id: "Patcher",
-			assignment: "Add a file.",
+			name: "Patcher",
+			task: "Add a file.",
 			isolated: true,
 		} as TaskParams);
 
@@ -158,8 +158,8 @@ describe("patch-tool merge strategy", () => {
 		const tool = await TaskTool.create(createSession(repo));
 		const result = await tool.execute("tc-dirty", {
 			agent: "task",
-			id: "Patcher",
-			assignment: "Add a file.",
+			name: "Patcher",
+			task: "Add a file.",
 			isolated: true,
 		} as TaskParams);
 
@@ -185,8 +185,8 @@ describe("patch-tool merge strategy", () => {
 		const tool = await TaskTool.create(createSession(repo));
 		const result = await tool.execute("tc-abort", {
 			agent: "task",
-			id: "Patcher",
-			assignment: "Add a file.",
+			name: "Patcher",
+			task: "Add a file.",
 			isolated: true,
 		} as TaskParams);
 
@@ -218,8 +218,8 @@ describe("patch-tool merge strategy", () => {
 		const tool = await TaskTool.create(createSession(repo));
 		const result = await tool.execute("tc-abort-empty", {
 			agent: "task",
-			id: "Patcher",
-			assignment: "Add a file.",
+			name: "Patcher",
+			task: "Add a file.",
 			isolated: true,
 		} as TaskParams);
 

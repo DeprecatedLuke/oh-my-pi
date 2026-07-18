@@ -99,8 +99,8 @@ export interface IsolatedRunOptions {
 	preferredBackend: IsoBackendKind | undefined;
 	/** Stable id used as the isolation worktree namespace and as the branch suffix. */
 	agentId: string;
-	/** Merge mode driving how changes are captured ("branch" commits, "patch" diffs). */
-	mergeMode: "patch" | "branch";
+	/** Merge mode driving how changes are captured ("branch" commits, "patch" diffs, or native "patch-tool"). */
+	mergeMode: "patch" | "branch" | "patch-tool";
 	/** Output dir for `${agentId}.patch` artifacts (patch mode and branch-mode commit failures). */
 	artifactsDir: string;
 	/** Human description carried onto the branch commit (branch mode). */
@@ -145,6 +145,9 @@ async function writeIsolationPatch(
  * The isolation handle is always torn down in `finally`.
  */
 export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<SingleResult> {
+	if (opts.mergeMode === "patch-tool") {
+		return opts.buildFailureResult(new Error("patch-tool isolation must use the native patch execution path"));
+	}
 	let handle: IsolationHandle | undefined;
 	try {
 		const taskBaseline = structuredClone(opts.context.baseline);
@@ -221,7 +224,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 export interface IsolationMergeOptions {
 	result: SingleResult;
 	repoRoot: string;
-	mergeMode: "patch" | "branch";
+	mergeMode: "patch" | "branch" | "patch-tool";
 }
 
 export interface IsolationMergeOutcome {
@@ -250,6 +253,14 @@ export interface IsolationMergeOutcome {
 export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise<IsolationMergeOutcome> {
 	const { result, repoRoot, mergeMode } = opts;
 	try {
+		if (mergeMode === "patch-tool") {
+			return {
+				summary: "\n\nNative patch-tool mode must be merged by its dedicated native adapter.",
+				changesApplied: false,
+				hadAnyChanges: false,
+				mergedBranchForNestedPatches: false,
+			};
+		}
 		if (mergeMode === "branch") {
 			if (!result.branchName && result.exitCode === 0 && !result.aborted && result.error) {
 				const patchList = result.patchPath ? `\nPatch artifact:\n- ${result.patchPath}` : "";
@@ -358,7 +369,7 @@ export interface NestedPatchApplyOptions {
 	/** Subagent result carrying `nestedPatches`/`exitCode`/`aborted`. */
 	result: SingleResult;
 	repoRoot: string;
-	mergeMode: "patch" | "branch";
+	mergeMode: "patch" | "branch" | "patch-tool";
 	/** Parent merge outcome — patch mode skips nested apply when this is `false`. */
 	changesApplied: boolean | null;
 	/** Branch mode gates nested apply on whether the root branch merged. */
@@ -378,7 +389,7 @@ export interface NestedPatchApplyOptions {
  */
 export async function applyEligibleNestedPatches(opts: NestedPatchApplyOptions): Promise<string> {
 	const { result, repoRoot, mergeMode, changesApplied, mergedBranchForNestedPatches, commitMessage } = opts;
-	if (mergeMode === "patch" && changesApplied === false) return "";
+	if (mergeMode === "patch-tool" || (mergeMode === "patch" && changesApplied === false)) return "";
 	const nestedPatches = result.nestedPatches ?? [];
 	const eligible =
 		nestedPatches.length > 0 &&

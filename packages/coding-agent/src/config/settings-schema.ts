@@ -4160,6 +4160,26 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 100,
 	},
+	"async.pollWaitDuration": {
+		type: "enum",
+		values: ["5s", "10s", "30s", "1m", "5m", "smart"] as const,
+		default: "smart",
+		ui: {
+			tab: "tools",
+			group: "Execution",
+			label: "Max Poll Time",
+			description:
+				"How long a `hub` wait watches background jobs before returning the current state. A fixed value waits that exact duration every time. `smart` adapts: it starts at 5s and lengthens with each back-to-back wait (up to 5m), then resets to 5s after about a minute without waiting.",
+			options: [
+				{ value: "5s", label: "5 seconds" },
+				{ value: "10s", label: "10 seconds" },
+				{ value: "30s", label: "30 seconds" },
+				{ value: "1m", label: "1 minute" },
+				{ value: "5m", label: "5 minutes" },
+				{ value: "smart", label: "Smart", description: "Default — adaptive 5s→5m, resets when you stop polling" },
+			],
+		},
+	},
 
 	"async.batchSettleMs": {
 		type: "number",
@@ -4195,6 +4215,33 @@ export const SETTINGS_SCHEMA = {
 	"bash.autoBackground.thresholdMs": {
 		type: "number",
 		default: 60_000,
+	},
+
+	// Legacy BM25 discovery settings remain schema-valid for fork API/tests.
+	// Runtime migration removes them from persisted config; xd:// is the active
+	// presentation path for current sessions.
+	"tools.discoveryMode": {
+		type: "enum",
+		values: ["auto", "off", "mcp-only", "all"] as const,
+		default: "auto",
+		ui: {
+			tab: "tools",
+			group: "Discovery & MCP",
+			label: "Tool Discovery",
+			description:
+				"Legacy tool-discovery mode retained for compatibility with existing settings and SDK callers.",
+		},
+	},
+	"tools.essentialOverride": {
+		type: "array",
+		default: [] as string[],
+		ui: {
+			tab: "tools",
+			group: "Discovery & MCP",
+			label: "Essential Tools Override",
+			description:
+				"Override the always-loaded built-in tools for legacy discovery callers; leave empty to use defaults.",
+		},
 	},
 
 	"tools.xdev": {
@@ -4263,6 +4310,17 @@ export const SETTINGS_SCHEMA = {
 			group: "Discovery & MCP",
 			label: "MCP Markdown Results",
 			description: "Render non-JSON MCP text results as Markdown in the transcript",
+		},
+	},
+
+	"mcp.discoveryMode": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			group: "Discovery & MCP",
+			label: "MCP Tool Discovery",
+			description: "Legacy MCP discovery toggle retained for compatibility with existing settings callers."
 		},
 	},
 

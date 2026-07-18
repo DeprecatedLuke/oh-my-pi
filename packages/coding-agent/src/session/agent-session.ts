@@ -157,7 +157,6 @@ import type { PlanModeState } from "../plan-mode/state";
 import goalModeContextPrompt from "../prompts/goals/goal-mode-context.md" with { type: "text" };
 import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
-
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
@@ -333,6 +332,7 @@ import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
 
 const PLAN_MODE_REMINDER_MAX = 3;
 
+
 /** Internal marker for hook messages queued through the agent loop */
 // ============================================================================
 // Constants
@@ -465,6 +465,7 @@ export class AgentSession {
 	#planModeReminderCount = 0;
 	#planModeReminderAwaitingProgress = false;
 	readonly #todo: TodoTracker;
+	#issuesReminderCount = 0;
 	#replanTitleRefreshInFlight: Promise<void> | undefined = undefined;
 	/** Resolved TITLE_SYSTEM.md override applied to every automatic session-title
 	 *  generation path. Refresh via {@link AgentSession.setTitleSystemPrompt} when
@@ -541,6 +542,8 @@ export class AgentSession {
 	#preferWebsockets: boolean | undefined;
 	#convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
+	/** Session-local fallback MCP selections used while restoring a transcript. */
+	#sessionDefaultSelectedMCPToolNames = new Map<string, string[]>();
 
 	readonly #ttsr: TtsrCoordinator;
 	readonly #stats: SessionStatsTracker;
@@ -1434,6 +1437,7 @@ export class AgentSession {
 		this.#unsubscribeAppendOnly = onAppendOnlyModeChanged(_value => this.#syncAppendOnlyContext(this.model));
 		this.#unsubscribeModelRoles = onModelRolesChanged(() => this.#advisors.onModelRolesChanged());
 	}
+
 	/** Model registry for API key resolution and model discovery */
 	get modelRegistry(): ModelRegistry {
 		return this.#modelRegistry;
@@ -3640,6 +3644,7 @@ export class AgentSession {
 		this.#closeAllProviderSessions("dispose");
 		this.setHindsightSessionState(undefined);
 		hindsightState?.dispose();
+
 		this.#disconnectFromAgent();
 		if (this.#unsubscribeAppendOnly) {
 			this.#unsubscribeAppendOnly();
@@ -4032,6 +4037,35 @@ export class AgentSession {
 
 	#applyActiveToolsByName(toolNames: string[]): Promise<void> {
 		return this.#tools.applyActiveToolsByName(toolNames);
+	}
+
+	#getSessionDefaultSelectedMCPToolNames(sessionFile: string | null | undefined): string[] {
+		if (!sessionFile) return this.getSelectedMCPToolNames();
+		return this.#sessionDefaultSelectedMCPToolNames.get(path.resolve(sessionFile)) ?? this.getSelectedMCPToolNames();
+	}
+
+	async #restoreMCPSelectionsForSessionContext(
+		sessionContext: SessionContext,
+		options?: { fallbackSelectedMCPToolNames?: Iterable<string> },
+	): Promise<void> {
+		const persistedNames = Reflect.get(sessionContext, "selectedMCPToolNames");
+		const hasPersistedSelection = Reflect.get(sessionContext, "hasPersistedMCPToolSelection") === true;
+		const sessionFallback = this.sessionFile
+			? this.#sessionDefaultSelectedMCPToolNames.get(path.resolve(this.sessionFile))
+			: undefined;
+		const fallback = options?.fallbackSelectedMCPToolNames ?? sessionFallback ?? this.getSelectedMCPToolNames();
+		const selectedNames = hasPersistedSelection && Array.isArray(persistedNames) ? persistedNames : [...fallback];
+		const registry = this.#tools.registry;
+		const mcpToolNames = selectedNames.filter(
+			(name): name is string => typeof name === "string" && isMCPToolName(name) && registry.has(name),
+		);
+		const activeNonMCPToolNames = this.getActiveToolNames().filter(
+			name => !isMCPToolName(name) && registry.has(name),
+		);
+		if (this.sessionFile) {
+			this.#sessionDefaultSelectedMCPToolNames.set(path.resolve(this.sessionFile), [...mcpToolNames]);
+		}
+		await this.#applyActiveToolsByName([...new Set([...activeNonMCPToolNames, ...mcpToolNames])]);
 	}
 
 	#takePendingXdevMountNotice(): CustomMessage | undefined {
@@ -4977,6 +5011,9 @@ export class AgentSession {
 			this.#irc.flushPending();
 
 			this.#todo.resetCycle();
+			this.#planModeReminderCount = 0;
+			this.#planModeReminderAwaitingProgress = false;
+			this.#issuesReminderCount = 0;
 			this.#resetPromptMaintenanceState();
 			this.#recovery.setAcceptTerminalEmptyStop(options?.acceptTerminalEmptyStop === true);
 
@@ -6109,6 +6146,9 @@ export class AgentSession {
 		this.sessionManager.appendServiceTierChange(this.#models.serviceTierEntry());
 
 		this.#todo.resetCycle();
+		this.#planModeReminderCount = 0;
+		this.#planModeReminderAwaitingProgress = false;
+		this.#issuesReminderCount = 0;
 		this.#planReferenceSent = false;
 		this.#planReferencePath = "local://PLAN.md";
 		this.#advisors.resetSessionState();
@@ -6389,6 +6429,345 @@ export class AgentSession {
 		return this.#handoff.handoff(customInstructions, options);
 	}
 
+	/**
+	 * Build the {@link AgentOptions} for a headless knowledge pass: the same
+	 * request shape as the live session (stream / secret transforms / cache keys /
+	 * thinking config and the SAME tool instances + base tool context) so the
+	 * provider prompt-cache prefix stays warm and secrets round-trip raw. The loop
+	 * `messages` seeds the loop (the full session context for a save; empty for a compact, which works off the files).
+	 */
+	#knowledgeAgentOptions(model: Model, messages: readonly Message[]): AgentOptions {
+		return {
+			initialState: {
+				systemPrompt: this.#systemPromptWithHandoff(),
+				messages: [...messages],
+				model,
+				tools: this.agent.state.tools,
+				thinkingLevel: this.agent.state.thinkingLevel,
+				disableReasoning: this.agent.state.disableReasoning,
+			},
+			streamFn: this.agent.streamFn,
+			getApiKey: this.agent.getApiKey,
+			getToolContext: this.agent.getToolContext,
+			convertToLlm: this.#convertToLlm,
+			transformProviderContext: this.agent.transformProviderContext,
+			transformToolCallArguments: this.agent.transformToolCallArguments,
+			sessionId: this.agent.sessionId,
+			promptCacheKey: this.agent.promptCacheKey,
+			providerSessionState: this.agent.providerSessionState,
+			thinkingBudgets: this.agent.thinkingBudgets,
+			temperature: this.agent.temperature,
+			topP: this.agent.topP,
+			topK: this.agent.topK,
+			minP: this.agent.minP,
+			presencePenalty: this.agent.presencePenalty,
+			repetitionPenalty: this.agent.repetitionPenalty,
+			serviceTier: this.agent.serviceTier,
+			hideThinkingSummary: this.agent.hideThinkingSummary,
+			maxRetryDelayMs: this.agent.maxRetryDelayMs,
+			telemetry: this.agent.telemetry,
+		};
+	}
+
+	/**
+	 * Run one knowledge SAVE pass: extract durable facts from the current session
+	 * into `.omp/knowledge` and return the commit result. Never throws.
+	 */
+	async #writeSessionKnowledge(
+		sourceTitle: string,
+		messages: readonly Message[],
+		signal?: AbortSignal,
+		commit = true,
+	): Promise<sessionKnowledge.RunSessionKnowledgeAgentResult> {
+		const model = this.model;
+		if (!model) return { committed: false };
+		if (messages.length === 0) {
+			logger.debug("Session knowledge save skipped: empty context", { sourceTitle });
+			return { committed: false };
+		}
+		return sessionKnowledge.runSessionKnowledgeAgent({
+			cwd: this.sessionManager.getCwd(),
+			sourceTitle,
+			signal,
+			commit,
+			instruction: prompt.render(sessionKnowledgeTemplate, { sourceTitle }),
+			metadata: this.agent.metadataForProvider(model.provider),
+			agent: this.#knowledgeAgentOptions(model, messages),
+		});
+	}
+
+	/**
+	 * Background (compaction/handoff) session distill. Unlike foreground
+	 * `/knowledge save`, this captures the distilled `.omp/knowledge` edits as a
+	 * native patch (auto-applied on a clean repo, left pending otherwise) and
+	 * delivers the outcome to the main agent via an `AsyncJobManager` completion —
+	 * so an unattended distill never background-commits and the main agent is
+	 * told when a patch needs manual apply. Degrades to a direct-commit
+	 * fire-and-forget when no job manager is available.
+	 */
+	#startSessionKnowledgeUpdate(sourceTitle: string, messages: readonly Message[], signal?: AbortSignal): void {
+		const manager = this.#asyncJobManager;
+		if (!manager || messages.length === 0 || !this.model) {
+			void this.#writeSessionKnowledge(sourceTitle, messages, signal).catch(error => {
+				if (signal?.aborted) return;
+				logger.debug("Failed to run session knowledge update", {
+					sourceTitle,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			});
+			return;
+		}
+		const cwd = this.sessionManager.getCwd();
+		// Skip if a KnowledgeDistill job is already running — avoid stacking
+		// duplicate distill passes when multiple triggers fire in quick succession.
+		const existing = manager.getJob("KnowledgeDistill");
+		if (existing && existing.status === "running") {
+			logger.debug("Session knowledge distill already running, skipping", { sourceTitle });
+			return;
+		}
+		try {
+			manager.register(
+				"task",
+				"KnowledgeDistill",
+				async ({ jobId: agentId, signal: jobSignal, markRunning }) => {
+					markRunning();
+					const pass = await runInProcessKnowledgePatchPass({
+						cwd,
+						taskId: agentId,
+						description: sourceTitle,
+						generateMessage: async () => `chore(knowledge): update .omp/knowledge\n\nSource: ${sourceTitle}`,
+						runDistill: async () => {
+							// Writes the real `.omp/knowledge` but does NOT commit — the patch
+							// pass captures the edits, reverts the tree, and applies-or-pends.
+							await this.#writeSessionKnowledge(sourceTitle, messages, jobSignal, false);
+						},
+					});
+					return `Session knowledge distill (${sourceTitle}) — ${pass.summary}`;
+				},
+				{ id: "KnowledgeDistill", ownerId: this.#agentId ?? undefined },
+			);
+		} catch (error) {
+			logger.debug("Failed to schedule session knowledge distill", {
+				sourceTitle,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
+	/**
+	 * Regenerate `.omp/knowledge` from the CURRENT session now and await the
+	 * result. Powers `/knowledge save`; the background compaction/handoff triggers
+	 * use the fire-and-forget {@link #startSessionKnowledgeUpdate} wrapper over the
+	 * same core.
+	 */
+	async saveKnowledge(opts?: { sourceTitle?: string }): Promise<sessionKnowledge.RunSessionKnowledgeAgentResult> {
+		return this.#writeSessionKnowledge(opts?.sourceTitle ?? "/knowledge save", this.#sessionKnowledgeMessages());
+	}
+
+	/**
+	 * Spawn a detached, knowledge-writable subagent that maintains
+	 * `.omp/knowledge` and commits the result. Shared plumbing for
+	 * {@link compactKnowledge} (prune/dedup) and {@link updateKnowledge}
+	 * (verify/correct/reconcile against the repo).
+	 *
+	 * Routes through the real subagent executor ({@link runSubprocess}) so the
+	 * pass registers in the `AgentRegistry` — observable in the Agent Hub
+	 * (Ctrl+S) with a live session-file transcript — while the wrapping
+	 * {@link AsyncJobManager} job keeps it in the Background Jobs panel and
+	 * delivers a completion follow-up. Returns immediately with the job/agent
+	 * id; the pass runs to turn-end and commits on its own.
+	 */
+	#spawnKnowledgeMaintenance(spec: {
+		/** Distinguishes the job label, agent name, and temp-dir prefix. */
+		kind: "compact" | "update" | "build";
+		/** Label recorded on the knowledge commit. */
+		sourceTitle: string;
+		/** Subagent definition description. */
+		description: string;
+		/** Rendered system prompt that drives the pass. */
+		systemPrompt: string;
+		/** Tools granted to the pass. */
+		tools: string[];
+		/** Task/assignment text for the subagent. */
+		task: string;
+		/** Completion-message noun, e.g. "Knowledge compaction". */
+		noun: string;
+		/** Completion-message verb for success, e.g. "Compacted". */
+		successVerb: string;
+	}): { started: boolean; jobId?: string; reason?: string } {
+		const manager = this.#asyncJobManager;
+		if (!manager) return { started: false, reason: "Background jobs are disabled in this session." };
+		const model = this.model;
+		if (!model) return { started: false, reason: "No model selected." };
+		const cwd = this.sessionManager.getCwd();
+		// The subagent's transcript lands at `<artifactsDir>/<id>.jsonl`; deriving
+		// the dir from the parent session file (minus `.jsonl`) mirrors the task
+		// tool, so the run is reachable via `history://` / the Agent Hub. With no
+		// session file (in-memory session) fall back to a temp dir.
+		const sessionFile = this.sessionManager.getSessionFile();
+		const artifactsDir = sessionFile
+			? sessionFile.slice(0, -6)
+			: path.join(os.tmpdir(), `omp-knowledge-${spec.kind}-${Snowflake.next()}`);
+		const modelOverride = formatModelString(model);
+		const jobLabel =
+			spec.kind === "compact" ? "KnowledgeCompact" : spec.kind === "build" ? "KnowledgeBuild" : "KnowledgeUpdate";
+		// Self-contained agent run from an EMPTY context seed (no session
+		// inheritance needed). `bash` is granted because the prompt deletes files
+		// via `rm`; the executor auto-adds `irc`.
+		const agent: AgentDefinition = {
+			name: `knowledge-${spec.kind}`,
+			description: spec.description,
+			systemPrompt: spec.systemPrompt,
+			tools: spec.tools,
+			source: "bundled",
+		};
+		try {
+			// `#resolveJobId` dedups synchronously (`<jobLabel>`, then `-2`, …), so
+			// `ctx.jobId` is the single id shared by the job and the subagent — no
+			// separate async `AgentOutputManager.allocate` (this method is
+			// synchronous and cannot await one).
+			const jobId = manager.register(
+				"task",
+				jobLabel,
+				async ({ jobId: agentId, signal, markRunning }) => {
+					markRunning();
+					// Run the maintenance subagent in an ISOLATED worktree and capture its
+					// `.omp/knowledge` edits as a native patch — the patch auto-applies when
+					// the repo is clean and is left pending (for `patch apply`) when dirty or
+					// conflicting, instead of writing+committing the real tree directly.
+					const pass = await runIsolatedKnowledgePass({
+						cwd,
+						taskId: agentId,
+						description: spec.description,
+						isolationMode: this.settings.get("task.isolation.mode"),
+						generateMessage: async () => `chore(knowledge): update .omp/knowledge\n\nSource: ${spec.sourceTitle}`,
+						runInWorktree: async worktreeDir => {
+							const result = await runSubprocess({
+								cwd,
+								worktree: worktreeDir,
+								agent,
+								eventBus: this.#eventBus,
+								task: spec.task,
+								assignment: spec.task,
+								index: 0,
+								id: agentId,
+								parentToolCallId: undefined,
+								detached: true,
+								enableLsp: false,
+								modelOverride,
+								modelRegistry: this.modelRegistry,
+								authStorage: this.#modelRegistry.authStorage,
+								settings: this.settings,
+								skills: [...this.skills],
+								promptTemplates: [...this.promptTemplates],
+								mcpManager: MCPManager.instance(),
+								localProtocolOptions: this.#localProtocolOptions(),
+								parentArtifactManager: this.sessionManager.getArtifactManager() ?? undefined,
+								parentHindsightSessionState: this.getHindsightSessionState(),
+								parentMnemopiSessionState: this.getMnemopiSessionState(),
+								parentTelemetry: this.agent.telemetry,
+								parentEvalSessionId: this.getEvalSessionId() ?? undefined,
+								sessionFile,
+								persistArtifacts: !!sessionFile,
+								artifactsDir,
+								signal,
+							});
+							return { exitCode: result.exitCode, aborted: result.aborted ?? false };
+						},
+					});
+					if (pass.aborted) return `${spec.noun} aborted — ${pass.summary}`;
+					if (pass.exitCode !== 0) return `${spec.noun} failed (exit ${pass.exitCode}) — ${pass.summary}`;
+					return `${spec.successVerb} .omp/knowledge — ${pass.summary}`;
+				},
+				{ id: jobLabel, ownerId: this.#agentId ?? undefined },
+			);
+			return { started: true, jobId };
+		} catch (error) {
+			return { started: false, reason: error instanceof Error ? error.message : String(error) };
+		}
+	}
+
+	/**
+	 * Spawn a detached subagent that prunes obsolete, duplicate, and outdated
+	 * files from `.omp/knowledge` (delete + consolidate) and commits the result.
+	 * With a goal, switches the same subagent to goal-directed maintenance.
+	 * Powers `/knowledge compact`.
+	 */
+	compactKnowledge(opts?: { sourceTitle?: string; goal?: string }): {
+		started: boolean;
+		jobId?: string;
+		reason?: string;
+	} {
+		const goal = opts?.goal?.trim() || undefined;
+		return this.#spawnKnowledgeMaintenance({
+			kind: "compact",
+			sourceTitle: opts?.sourceTitle ?? "/knowledge compact",
+			description: goal
+				? "Maintain the project knowledge base toward a goal."
+				: "Prune and consolidate the project knowledge base.",
+			systemPrompt: prompt.render(knowledgeCompactTemplate, { goal }),
+			tools: goal ? ["read", "write", "edit", "bash", "search", "find"] : ["read", "write", "edit", "bash"],
+			task: goal ?? "Compact the project knowledge base.",
+			noun: "Knowledge compaction",
+			successVerb: "Compacted",
+		});
+	}
+
+	/**
+	 * Spawn a detached subagent that reads EVERY file under `.omp/knowledge`,
+	 * confirms each claim against the current repository, corrects stale/wrong
+	 * facts, and resolves conflicting information across files, then commits the
+	 * result. Broader scope than {@link compactKnowledge}: it verifies the whole
+	 * base rather than only pruning duplicates. An optional `focus` concentrates
+	 * the verification. Powers `/knowledge update`.
+	 */
+	updateKnowledge(opts?: { sourceTitle?: string; focus?: string }): {
+		started: boolean;
+		jobId?: string;
+		reason?: string;
+	} {
+		const focus = opts?.focus?.trim() || undefined;
+		return this.#spawnKnowledgeMaintenance({
+			kind: "update",
+			sourceTitle: opts?.sourceTitle ?? (focus ? `/knowledge update ${focus}` : "/knowledge update"),
+			description: "Verify and reconcile the project knowledge base.",
+			systemPrompt: prompt.render(knowledgeUpdateTemplate, { focus }),
+			tools: ["read", "write", "edit", "bash", "search", "find"],
+			task: focus
+				? `Verify and reconcile the project knowledge base (focus: ${focus}).`
+				: "Verify and reconcile the project knowledge base.",
+			noun: "Knowledge update",
+			successVerb: "Reconciled",
+		});
+	}
+
+	/**
+	 * Spawn a detached subagent that explores the project from scratch and
+	 * AUTHORS durable knowledge notes under `.omp/knowledge` — distinct from
+	 * {@link updateKnowledge} (verify/correct existing) and {@link saveKnowledge}
+	 * (distill the current session): it surveys the repository and writes the
+	 * knowledge base that does not yet exist, then commits. An optional `focus`
+	 * concentrates the build on one area. Powers `/knowledge build`.
+	 */
+	buildKnowledge(opts?: { sourceTitle?: string; focus?: string }): {
+		started: boolean;
+		jobId?: string;
+		reason?: string;
+	} {
+		const focus = opts?.focus?.trim() || undefined;
+		return this.#spawnKnowledgeMaintenance({
+			kind: "build",
+			sourceTitle: opts?.sourceTitle ?? (focus ? `/knowledge build ${focus}` : "/knowledge build"),
+			description: "Explore the project and author the knowledge base.",
+			systemPrompt: prompt.render(knowledgeBuildTemplate, { focus }),
+			tools: ["read", "write", "edit", "bash", "search", "find"],
+			task: focus
+				? `Explore the project and build the knowledge base (focus: ${focus}).`
+				: "Explore the project and build the knowledge base.",
+			noun: "Knowledge build",
+			successVerb: "Built",
+		});
+	}
 	#isTerminalYieldToolResult(event: { toolName: string; isError?: boolean; result?: { details?: unknown } }): boolean {
 		if (event.toolName !== "yield" || event.isError) return false;
 		const details = event.result?.details;
@@ -6499,7 +6878,6 @@ export class AgentSession {
 			"agent",
 		);
 		this.#lastCompletedRewind = { report, startedAt: checkpointState.startedAt, rewoundAt };
-
 		if (activeMessages) {
 			for (const message of activeMessages) {
 				if (message.role === "toolResult" && semanticToolResult(message.toolName, message)?.toolName === "rewind") {
@@ -6508,6 +6886,7 @@ export class AgentSession {
 			}
 		}
 		const sessionContext = this.buildDisplaySessionContext();
+		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
 		if (activeMessages) {
 			activeMessages.splice(0, activeMessages.length, ...sessionContext.messages);
 		}
@@ -6526,6 +6905,7 @@ export class AgentSession {
 	async #enforcePlanModeDecisionAtSettle(): Promise<boolean> {
 		if (!this.#planModeState?.enabled) {
 			return false;
+
 		}
 		const assistantMessage = this.#findLastAssistantMessage();
 		if (!assistantMessage) {
@@ -6534,7 +6914,6 @@ export class AgentSession {
 		if (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "aborted") {
 			return false;
 		}
-
 		const calledDecisionTool = assistantMessage.content.some(
 			content => content.type === "toolCall" && this.#isPlanDecisionTool(content),
 		);
@@ -7370,6 +7749,7 @@ export class AgentSession {
 
 		// Reload messages from entries (works for both file and in-memory mode)
 		const sessionContext = this.buildDisplaySessionContext();
+		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
 
 		// Emit session_branch event to hooks (after branch completes)
 		if (this.#extensionRunner) {
@@ -7785,6 +8165,7 @@ export class AgentSession {
 		// Update agent state — build display context to populate agent messages.
 		const stateContext = this.sessionManager.buildSessionContext();
 		const displayContext = deobfuscateSessionContext(stateContext, this.#obfuscator);
+		await this.#restoreMCPSelectionsForSessionContext(displayContext);
 		this.agent.replaceMessages(displayContext.messages);
 		this.#rehydrateCheckpointRewindState();
 		this.#advisors.resetSessionState({ preserveCost: true });

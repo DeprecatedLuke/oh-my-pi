@@ -38,7 +38,7 @@ function cwdFromRegistry(): string | undefined {
 	return main?.session?.sessionManager?.getCwd();
 }
 
-function resolveIssuesCwd(context?: ResolveContext): string {
+function resolveIssuesCwd(context?: { cwd?: string }): string {
 	const cwd = context?.cwd ?? cwdFromRegistry();
 	if (!cwd) throw new Error("issues:// requires a session cwd");
 	return cwd;

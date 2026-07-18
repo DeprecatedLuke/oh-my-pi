@@ -394,10 +394,12 @@ function createAnthropicProviderSessionState(): AnthropicProviderSessionState {
 	const state: AnthropicProviderSessionState = {
 		strictToolsDisabled: false,
 		fastModeDisabled: false,
+
 		replayUnsignedThinkingDisabled: false,
 		close: () => {
 			state.strictToolsDisabled = false;
 			state.fastModeDisabled = false;
+
 			state.replayUnsignedThinkingDisabled = false;
 		},
 	};
@@ -1123,6 +1125,14 @@ export interface AnthropicOptions extends StreamOptions {
 	 * Other `ServiceTier` values are currently ignored on this provider.
 	 */
 	serviceTier?: ServiceTier;
+	/**
+	 * Server-side fallback beta chain (`server-side-fallback-2026-06-01`).
+	 * When set, `fallbacks` is forwarded on the request body and the beta
+	 * header is auto-attached; persisted fallback boundaries are replayed only
+	 * on official Anthropic requests. Leaving this undefined preserves the
+	 * default request behavior.
+	 */
+	fallbacks?: FallbackParam[];
 	/** Force OAuth bearer auth mode for proxy tokens that don't match Anthropic token prefixes. */
 	isOAuth?: boolean;
 	/**
@@ -1822,6 +1832,7 @@ const streamAnthropicOnce = (
 			let disableStrictTools =
 				(providerSessionState?.strictToolsDisabled ?? false) || (model.compat?.disableStrictTools ?? false);
 			let dropFastMode = providerSessionState?.fastModeDisabled ?? false;
+
 			let forceDemoteUnsignedThinking = providerSessionState?.replayUnsignedThinkingDisabled ?? false;
 			const mergedCallerHeaders = mergeHeaders(model.headers, options?.headers);
 			const umansGatewayWebSearchHeader = getUmansWebSearchHeader(model, mergedCallerHeaders);

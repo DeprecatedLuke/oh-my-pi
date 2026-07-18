@@ -337,7 +337,6 @@ export class MCPOAuthFlow extends OAuthCallbackFlow {
 		/** First line of the response body (or thrown error message), trimmed. */
 		detail?: string;
 	};
-
 	constructor(
 		private config: MCPOAuthConfig,
 		ctrl: OAuthController,
