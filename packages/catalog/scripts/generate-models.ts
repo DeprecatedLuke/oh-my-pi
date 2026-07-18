@@ -588,7 +588,7 @@ async function generateModels() {
 	// Seed the curated ClinePass catalog. ClinePass has no `/v1/models` endpoint
 	// (discovery 404s) and its descriptor deliberately omits `catalogDiscovery`,
 	// so the generator never fetches it; this seed is the source of truth and
-	// makes a credential-free regen reproduce the ten models. Deduped behind any
+	// makes a credential-free regen reproduce the eleven models. Deduped behind any
 	// identical previous-snapshot entry.
 	allModels.push(...buildClinepassSeed());
 

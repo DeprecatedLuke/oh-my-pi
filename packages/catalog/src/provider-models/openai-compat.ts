@@ -2104,7 +2104,7 @@ function createClinepassStaticModel(
  * Curated ClinePass catalog. ClinePass has no `/v1/models` endpoint (discovery
  * 404s), so — like Fire Pass — the bundled entries are the source of truth.
  * `generate-models.ts` pushes this seed so a credential-free regen reproduces
- * the ten models rather than re-ingesting an already-edited snapshot.
+ * the eleven models rather than re-ingesting an already-edited snapshot.
  * `applyGeneratedModelPolicies` re-bakes each `thinking` block; the resolved
  * per-model compat (wire prefix, `reasoning` field, effort passthrough) is
  * derived from the `clinepass` host in {@link buildOpenAICompat}.
