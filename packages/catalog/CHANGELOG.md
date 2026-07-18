@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added the ClinePass Kimi K3 model with image input, a 1M-token context window, and a 128K output budget.
 
 ## [17.1.8] - 2026-07-28
 

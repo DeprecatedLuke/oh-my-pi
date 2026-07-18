@@ -2144,6 +2144,14 @@ export const CLINEPASS_STATIC_MODELS: readonly ModelSpec<"openai-completions">[]
 		CLINEPASS_EFFORTS,
 	),
 	createClinepassStaticModel(
+		"kimi-k3",
+		"Kimi K3 (ClinePass)",
+		1_048_576,
+		131072,
+		["text", "image"],
+		CLINEPASS_EFFORTS,
+	),
+	createClinepassStaticModel(
 		"mimo-v2.5",
 		"MiMo V2.5 (ClinePass)",
 		1_048_576,

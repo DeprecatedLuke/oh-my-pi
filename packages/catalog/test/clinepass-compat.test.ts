@@ -111,9 +111,9 @@ describe("clinepass compat resolution", () => {
 });
 
 describe("clinepass generator seed (source of truth)", () => {
-	it("seeds all ten models — ClinePass has no /v1/models, so the seed is canonical", () => {
+	it("seeds all eleven models — ClinePass has no /v1/models, so the seed is canonical", () => {
 		const seed = buildClinepassSeed();
-		expect(seed).toHaveLength(10);
+		expect(seed).toHaveLength(11);
 		expect(seed.map(m => m.id).sort()).toEqual(CLINEPASS_STATIC_MODELS.map(m => m.id).sort());
 		for (const model of seed) {
 			expect(model.provider).toBe("clinepass");
@@ -145,7 +145,7 @@ describe("clinepass bundled catalog", () => {
 	const models = getBundledModels("clinepass");
 	const byId = new Map(models.map(model => [model.id, model]));
 
-	it("bundles all ten ClinePass models with bare public ids", () => {
+	it("bundles all eleven ClinePass models with bare public ids", () => {
 		expect([...byId.keys()].sort()).toEqual(
 			[
 				"deepseek-v4-flash",
@@ -153,6 +153,7 @@ describe("clinepass bundled catalog", () => {
 				"glm-5.2",
 				"kimi-k2.6",
 				"kimi-k2.7-code",
+				"kimi-k3",
 				"mimo-v2.5",
 				"mimo-v2.5-pro",
 				"minimax-m3",
@@ -163,7 +164,7 @@ describe("clinepass bundled catalog", () => {
 	});
 
 	it("advertises xhigh on the models that accept it and caps MiMo at high", () => {
-		for (const id of ["glm-5.2", "deepseek-v4-pro", "minimax-m3", "qwen3.7-max"]) {
+		for (const id of ["glm-5.2", "deepseek-v4-pro", "kimi-k3", "minimax-m3", "qwen3.7-max"]) {
 			expect(byId.get(id)?.thinking?.efforts).toContain(Effort.XHigh);
 		}
 		// MiMo's family map has no genuine xhigh tier; the catalog caps it at high.
@@ -185,10 +186,10 @@ describe("clinepass bundled catalog", () => {
 		// `clinepass` is excluded from the global models.dev fallback, so these
 		// curated `input` values survive verbatim. Vision support was probed live
 		// against api.cline.bot (colored-image recognition with color controls):
-		// kimi-k2.6/kimi-k2.7-code/mimo-v2.5/qwen3.7-plus genuinely read images;
+		// kimi-k2.6/kimi-k2.7-code/kimi-k3/mimo-v2.5/qwen3.7-plus genuinely read images;
 		// the rest either can't see them, 400 on image content, or (minimax-m3)
 		// accept the payload but are blind.
-		for (const id of ["kimi-k2.6", "kimi-k2.7-code", "mimo-v2.5", "qwen3.7-plus"]) {
+		for (const id of ["kimi-k2.6", "kimi-k2.7-code", "kimi-k3", "mimo-v2.5", "qwen3.7-plus"]) {
 			expect(byId.get(id)?.input).toEqual(["text", "image"]);
 		}
 		for (const id of [
@@ -211,6 +212,7 @@ describe("clinepass bundled catalog", () => {
 		// mimo is 1048576 (not the kimi-copied 262144).
 		const expected: Record<string, number> = {
 			"glm-5.2": 1_000_000,
+			"kimi-k3": 1_048_576,
 			"kimi-k2.7-code": 262_144,
 			"kimi-k2.6": 262_144,
 			"deepseek-v4-pro": 1_000_000,
@@ -237,5 +239,6 @@ describe("clinepass bundled catalog", () => {
 	it("keeps the curated (ClinePass) display names — fallback does not strip the suffix", () => {
 		expect(byId.get("kimi-k2.6")?.name).toBe("Kimi K2.6 (ClinePass)");
 		expect(byId.get("minimax-m3")?.name).toBe("MiniMax M3 (ClinePass)");
+		expect(byId.get("kimi-k3")?.name).toBe("Kimi K3 (ClinePass)");
 	});
 });
