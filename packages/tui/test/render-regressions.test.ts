@@ -179,7 +179,6 @@ function visible(term: VirtualTerminal): string[] {
 	return term.getViewport().map(line => line.trimEnd());
 }
 
-
 function countMatches(lines: string[], pattern: RegExp): number {
 	let count = 0;
 	for (const line of lines) {
@@ -223,9 +222,10 @@ describe("TUI terminal-state regressions", () => {
 		// Resize classification now depends on TERM_PROGRAM (Warp takes the
 		// in-place path), so neutralize the ambient terminal identity to keep
 		// these direct-terminal assertions deterministic on any dev machine.
-		for (const key of ["TERM_PROGRAM", "PI_TUI_RESIZE_IN_PLACE"]) {
+		for (const key of ["TERM_PROGRAM", "PI_TUI_RESIZE_IN_PLACE", "PI_TUI_SCROLLBACK_REBUILD"]) {
 			savedTerminalEnv[key] = Bun.env[key];
-			delete Bun.env[key];
+			if (key === "PI_TUI_SCROLLBACK_REBUILD") Bun.env[key] = "true";
+			else delete Bun.env[key];
 		}
 		vi.spyOn(performance, "now").mockImplementation(() => {
 			monotonicNow += 40;
