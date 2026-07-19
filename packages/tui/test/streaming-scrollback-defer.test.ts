@@ -124,6 +124,12 @@ function eraseScrollbackCount(writes: string[]): number {
 	return writes.join("").match(ERASE_SCROLLBACK)?.length ?? 0;
 }
 
+/** Scrollback history + active grid, right-trimmed, trailing blank rows dropped. */
+function tape(term: VirtualTerminal): string[] {
+	const buffer = term.getScrollBuffer().map(line => line.trimEnd());
+	while (buffer.length > 0 && buffer.at(-1) === "") buffer.pop();
+	return buffer;
+}
 function rows(prefix: string, count: number): string[] {
 	return Array.from({ length: count }, (_, i) => `${prefix}${i}`);
 }

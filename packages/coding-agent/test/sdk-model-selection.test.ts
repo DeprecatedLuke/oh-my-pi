@@ -258,7 +258,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			throw new Error(`buildSessionOptions unexpectedly exited with ${code}`);
 		});
 		try {
-			const cliOptions = await buildCliSessionOptions(
+			const { options: cliOptions } = await buildCliSessionOptions(
 				parsed,
 				[],
 				SessionManager.inMemory(),
@@ -313,7 +313,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			throw new Error(`buildSessionOptions unexpectedly exited with ${code}`);
 		});
 		try {
-			const cliOptions = await buildCliSessionOptions(
+			const { options: cliOptions } = await buildCliSessionOptions(
 				parsed,
 				[],
 				SessionManager.inMemory(),
