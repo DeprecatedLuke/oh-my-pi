@@ -1,4 +1,3 @@
-process.env.PI_TUI_SCROLLBACK_REBUILD = "true";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import {
@@ -179,6 +178,7 @@ function captureWrites(term: VirtualTerminal): string[] {
 function visible(term: VirtualTerminal): string[] {
 	return term.getViewport().map(line => line.trimEnd());
 }
+
 
 function countMatches(lines: string[], pattern: RegExp): number {
 	let count = 0;
