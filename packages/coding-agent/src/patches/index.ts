@@ -7,6 +7,7 @@ export {
 	listNativePatches,
 	readNativePatch,
 	resolveNativePatchStore,
+	searchNativePatches,
 	writeNativePatchMessage,
 } from "./store";
 export type {

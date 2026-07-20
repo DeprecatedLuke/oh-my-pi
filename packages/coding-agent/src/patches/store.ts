@@ -130,9 +130,11 @@ export async function writeManifestAtomic(
 	return cloneManifest(manifest);
 }
 
-export async function listNativePatches(
+type NativePatchScopeOptions = { cwd?: string };
+
+async function collectNativePatches(
 	store: PatchStore,
-	options: { listDropped?: boolean; cwd?: string } = {},
+	options: NativePatchScopeOptions = {},
 ): Promise<NativePatchManifest[]> {
 	// Read the canonical store first; legacy per-cwd stores (only resolvable
 	// when a cwd is supplied) are probed afterward so patches written before
@@ -156,7 +158,6 @@ export async function listNativePatches(
 			if (!entry.endsWith(".json")) continue;
 			const manifest = validateManifest(await readJsonFile<unknown>(path.join(dir, entry)));
 			if (byId.has(manifest.id)) continue;
-			if (!options.listDropped && manifest.status === "dropped") continue;
 			if (cwd) {
 				const targetRoot = path.resolve(manifest.targetRoot);
 				const repoRoot = manifest.repoRoot ? path.resolve(manifest.repoRoot) : undefined;
@@ -175,6 +176,37 @@ export async function listNativePatches(
 		return byTime === 0 ? comparePaths(b.id, a.id) : byTime;
 	});
 	return manifests;
+}
+
+export async function listNativePatches(
+	store: PatchStore,
+	options: { listDropped?: boolean; cwd?: string } = {},
+): Promise<NativePatchManifest[]> {
+	const manifests = await collectNativePatches(store, options);
+	return manifests.filter(
+		manifest => manifest.status !== "applied" && (options.listDropped || manifest.status !== "dropped"),
+	);
+}
+
+export async function searchNativePatches(
+	store: PatchStore,
+	query: string,
+	options: NativePatchScopeOptions = {},
+): Promise<NativePatchManifest[]> {
+	const manifests = await collectNativePatches(store, options);
+	const needle = query.toLowerCase();
+	if (needle.length === 0) return manifests;
+	return manifests.filter(manifest => {
+		const fields = [
+			manifest.id,
+			manifest.status,
+			manifest.description,
+			manifest.taskId,
+			manifest.message,
+			...manifest.files.map(file => file.path),
+		];
+		return fields.some(field => field?.toLowerCase().includes(needle));
+	});
 }
 
 /**

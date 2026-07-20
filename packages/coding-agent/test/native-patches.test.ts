@@ -10,6 +10,7 @@ import {
 	listNativePatches,
 	readPatchVirtualFile,
 	resolveNativePatchStore,
+	searchNativePatches,
 	validateNativePatch,
 	writeNativePatchMessage,
 	writePatchVirtualFile,
@@ -128,6 +129,47 @@ describe("native patch store", () => {
 		expect(result.manifest.status).toBe("applied");
 		expect(result.manifest.appliedAt).toEqual(expect.any(String));
 		expect(await fs.readFile(path.join(fixture.target, "a.txt"), "utf8")).toBe("new\n");
+		const listed = await listNativePatches(fixture.store, { cwd: fixture.target });
+		expect(listed.map(patch => patch.id)).not.toContain(fixture.manifest.id);
+		const listedWithDropped = await listNativePatches(fixture.store, {
+			cwd: fixture.target,
+			listDropped: true,
+		});
+		expect(listedWithDropped.map(patch => patch.id)).not.toContain(fixture.manifest.id);
+	});
+
+	it("searches applied and dropped history while list excludes applied patches", async () => {
+		const fixture = await createPatchFixture("omp-native-patch-history-");
+		await applyNativePatch(fixture.store, fixture.manifest.id, { cwd: fixture.target });
+
+		const droppedBaseline = path.join(fixture.root, "dropped-baseline");
+		const droppedChanged = path.join(fixture.root, "dropped-changed");
+		await fs.mkdir(droppedBaseline, { recursive: true });
+		await fs.mkdir(droppedChanged, { recursive: true });
+		await fs.writeFile(path.join(droppedBaseline, "a.txt"), "new\n");
+		await fs.writeFile(path.join(droppedChanged, "a.txt"), "dropped\n");
+		const droppedPatch = await createNativePatch({
+			store: fixture.store,
+			baselineRoot: droppedBaseline,
+			changedRoot: droppedChanged,
+			targetRoot: fixture.target,
+			taskId: "DroppedTask",
+			description: "archive a.txt",
+		});
+		await dropNativePatch(fixture.store, droppedPatch.manifest.id);
+
+		const appliedMatches = await searchNativePatches(fixture.store, "UPDATE A.TXT", {
+			cwd: fixture.target,
+		});
+		expect(appliedMatches.map(patch => patch.id)).toContain(fixture.manifest.id);
+		expect(appliedMatches.find(patch => patch.id === fixture.manifest.id)?.status).toBe("applied");
+		expect(appliedMatches.map(patch => patch.id)).not.toContain(droppedPatch.manifest.id);
+
+		const droppedMatches = await searchNativePatches(fixture.store, "DROPPED", { cwd: fixture.target });
+		expect(droppedMatches.find(patch => patch.id === droppedPatch.manifest.id)?.status).toBe("dropped");
+		expect(droppedMatches.map(patch => patch.id)).not.toContain(fixture.manifest.id);
+
+		expect(await searchNativePatches(fixture.store, "missing patch metadata", { cwd: fixture.target })).toEqual([]);
 	});
 
 	it("requires an explicit or generated commit message before Git patch apply", async () => {

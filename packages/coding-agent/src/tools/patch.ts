@@ -9,6 +9,7 @@ import {
 	listNativePatches,
 	type NativePatchManifest,
 	resolveNativePatchStore,
+	searchNativePatches,
 	writeNativePatchMessage,
 } from "../patches";
 import patchDescription from "../prompts/tools/native-patch.md" with { type: "text" };
@@ -22,6 +23,14 @@ const patchSchema = z.discriminatedUnion("op", [
 	z.object({
 		op: z.literal("list"),
 		list_dropped: z.boolean().optional().describe("include patches already marked dropped"),
+	}),
+	z.object({
+		op: z.literal("search"),
+		query: z
+			.string()
+			.describe(
+				"case-insensitive historical search across patch ids, statuses, descriptions, tasks, messages, and file paths",
+			),
 	}),
 	z.object({
 		op: z.literal("apply"),
@@ -44,6 +53,7 @@ export type PatchToolParams = z.infer<typeof patchSchema>;
 export interface PatchToolDetails {
 	op: PatchToolParams["op"];
 	patch?: string;
+	query?: string;
 	manifest?: NativePatchManifest;
 	patches?: NativePatchManifest[];
 	applied?: boolean;
@@ -55,16 +65,20 @@ export class PatchTool implements AgentTool<typeof patchSchema, PatchToolDetails
 	readonly name = "patch";
 	readonly approval = (args: unknown) => {
 		const op = (args as Partial<PatchToolParams>).op;
-		return op === "list" ? "read" : "write";
+		return op === "list" || op === "search" ? "read" : "write";
 	};
 	readonly label = "Patch";
-	readonly summary = "List, apply, reapply, or drop durable task patches";
+	readonly summary = "List, search, apply, reapply, or drop durable task patches";
 	readonly description: string;
 	readonly parameters = patchSchema;
 	readonly strict = true;
 	readonly loadMode = "discoverable";
 	readonly intent = (args: Partial<PatchToolParams>) => {
 		if (args.op === "list") return "listing patches";
+		if (args.op === "search") {
+			const query = args.query?.trim();
+			return query ? `searching patches for ${query}` : "searching patches";
+		}
 		if (args.op === "drop") return args.patch ? `dropping patch ${args.patch}` : "dropping patch";
 		if (args.op === "apply") return args.patch ? `applying patch ${args.patch}` : "applying patch";
 		if (args.op === "reapply") return args.patch ? `reapplying patch ${args.patch}` : "reapplying patch";
@@ -90,12 +104,26 @@ export class PatchTool implements AgentTool<typeof patchSchema, PatchToolDetails
 		return untilAborted(signal, async () => {
 			const store = defaultPatchStore(this.session.cwd);
 			if (params.op === "list") {
+				const listDropped = params.list_dropped ?? false;
 				const patches = await listNativePatches(store, {
-					listDropped: params.list_dropped ?? false,
+					listDropped,
 					cwd: this.session.cwd,
 				});
 				const details: PatchToolDetails = { op: "list", patches };
-				return toolResult<PatchToolDetails>(details).text(formatPatchList(this.session.cwd, patches)).done();
+				return toolResult<PatchToolDetails>(details)
+					.text(formatPatchList(this.session.cwd, patches, listDropped))
+					.done();
+			}
+			if (params.op === "search") {
+				const query = params.query.trim();
+				if (query.length === 0) throw new ToolError("search query is required.");
+				const patches = await searchNativePatches(store, query, { cwd: this.session.cwd });
+				const details: PatchToolDetails = { op: "search", query, patches };
+				const text =
+					patches.length === 0
+						? `No patches found matching "${query}".`
+						: patches.map(patch => formatPatchSummary(this.session.cwd, patch)).join("\n");
+				return toolResult<PatchToolDetails>(details).text(text).done();
 			}
 
 			const patchId = params.patch.trim();
@@ -156,8 +184,10 @@ export class PatchTool implements AgentTool<typeof patchSchema, PatchToolDetails
 	}
 }
 
-function formatPatchList(cwd: string, patches: readonly NativePatchManifest[]): string {
-	if (patches.length === 0) return "No pending patches.";
+function formatPatchList(cwd: string, patches: readonly NativePatchManifest[], listDropped: boolean): string {
+	if (patches.length === 0) {
+		return listDropped ? "No pending, conflicted, or dropped patches." : "No pending or conflicted patches.";
+	}
 	return patches.map(patch => formatPatchSummary(cwd, patch)).join("\n");
 }
 
