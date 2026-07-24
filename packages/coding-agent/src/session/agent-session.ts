@@ -92,7 +92,6 @@ import {
 	postmortem,
 	prompt,
 	Snowflake,
-	stringProperty,
 	withTimeout,
 } from "@oh-my-pi/pi-utils";
 import type { AdvisorConfig, AdvisorRuntimeStatus } from "../advisor";
@@ -142,6 +141,7 @@ import type { GoalModeState } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
 import type { IrcMessage } from "../irc/bus";
+
 import { shutdownMnemopiEmbedClient } from "../mnemopi/embed-client";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../mnemopi/state";
 import { containsOrchestrate, ORCHESTRATE_NOTICE } from "../modes/orchestrate";
@@ -166,6 +166,7 @@ import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool
 import rewindReportTemplate from "../prompts/system/rewind-report.md" with { type: "text" };
 import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
 import vibeModeActivePrompt from "../prompts/system/vibe-mode-active.md" with { type: "text" };
+
 import {
 	deobfuscateAssistantContent,
 	deobfuscateSessionContext,
@@ -173,6 +174,7 @@ import {
 	obfuscateProviderContext,
 	type SecretObfuscator,
 } from "../secrets/obfuscator";
+
 import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
@@ -184,6 +186,7 @@ import { shutdownTinyTitleClient } from "../tiny/title-client";
 import { resolveApproval } from "../tools/approval";
 import { type AskToolDetails, type AskToolInput, recoverAskQuestions } from "../tools/ask";
 import { releaseTabsForOwner } from "../tools/browser/tab-supervisor";
+
 import type { CheckpointState, CompletedRewindState } from "../tools/checkpoint";
 import { releaseComputerSessionsForOwner } from "../tools/computer/supervisor";
 import { normalizeLocalScheme, resolveToCwd } from "../tools/path-utils";
@@ -199,6 +202,7 @@ import type { TodoPhase } from "../tools/todo";
 import { ToolError } from "../tools/tool-errors";
 import { parseCommandArgs } from "../utils/command-args";
 import type { EditMode } from "../utils/edit-mode";
+
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import { extractFileMentions, generateFileMentionMessages } from "../utils/file-mentions";
 import { normalizeModelContextImages } from "../utils/image-loading";
@@ -236,12 +240,6 @@ import {
 	buildAsyncResultBatchMessage,
 } from "./async-job-delivery";
 import { BashRunner, type BashRunnerHost } from "./bash-runner";
-import {
-	checkpointStartedAtFromEntry,
-	completedRewindFromEntry,
-	isSuccessfulCheckpointEntry,
-	semanticToolResult,
-} from "./checkpoint-entries";
 import type { ClientBridge } from "./client-bridge";
 import {
 	type CodexAutoRedeemRedeemDecision,
@@ -261,13 +259,13 @@ import {
 	type ToolExecutionStartData,
 } from "./exit-diagnostics";
 import { IrcBridge, type IrcBridgeHost } from "./irc-bridge";
+import * as sessionKnowledge from "./knowledge-base";
 import {
 	type BashExecutionMessage,
 	buildReplanTitleContext,
 	type CustomMessage,
 	type CustomMessagePayload,
 	convertToLlm,
-	dedupeEphemeralReply,
 	demoteInterruptedThinking,
 	didSessionMessagesChange,
 	type FileMentionMessage,
@@ -276,25 +274,22 @@ import {
 	type InterruptedThinkingDetails,
 	isEmptyErrorTurn,
 	isUserInterruptAbort,
-	logProviderTurnError,
-	normalizeCustomMessagePayload,
 	type PythonExecutionMessage,
 	SILENT_ABORT_MARKER,
 	SKILL_PROMPT_MESSAGE_TYPE,
-	sanitizeAssistantForReparentedHistory,
 	USER_INTERRUPT_LABEL,
 } from "./messages";
-import { ModelControls, type ModelControlsHost } from "./model-controls";
-import { PrewalkCoordinator, type PrewalkCoordinatorHost } from "./prewalk";
 import {
 	isAdvisorCard,
 	isDisplayableQueuedMessage,
 	isHiddenUserCompanion,
+	isTerminalTextAssistantAnswer,
 	isUserQueuedMessage,
 	queueChipText,
 	toRestoredQueuedMessage,
 } from "./queued-messages";
-import { formatRetryFallbackSelector, type RetryFallbackSelector } from "./retry-fallback-chains";
+import { ModelControls, type ModelControlsHost } from "./model-controls";
+import { PrewalkCoordinator, type PrewalkCoordinatorHost } from "./prewalk";
 import { type AdvisorStats, SessionAdvisors, type SessionAdvisorsHost } from "./session-advisors";
 import type { BuildSessionContextOptions, SessionContext } from "./session-context";
 import { getRestorableSessionModels } from "./session-context";
@@ -302,7 +297,6 @@ import { formatSessionDumpText } from "./session-dump-format";
 import type { BranchSummaryEntry, NewSessionOptions } from "./session-entries";
 import { SessionHandoff, type SessionHandoffHost } from "./session-handoff";
 import {
-	COMPACTION_CHECK_NONE,
 	createCodexCompactionContext as createMaintenanceCodexCompactionContext,
 	SessionMaintenance,
 	type SessionMaintenanceHost,
@@ -320,18 +314,17 @@ import { TurnRecovery, type TurnRecoveryHost } from "./turn-recovery";
 import { runWokenTurnTracked } from "./woken-turn";
 import { YieldQueue } from "./yield-queue";
 
+
 export * from "./agent-session-events";
 export * from "./agent-session-types";
 export type { AdvisorStats, PerAdvisorStat } from "./session-advisors";
 
 const SESSION_STOP_CONTINUATION_CAP = 8;
-
 import { LoopGuards, type StreamGuardsHost, StreamingEditGuard } from "./stream-guards";
 import { TodoTracker, type TodoTrackerHost } from "./todo-tracker";
 import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
 
 const PLAN_MODE_REMINDER_MAX = 3;
-
 
 /** Internal marker for hook messages queued through the agent loop */
 // ============================================================================
@@ -394,6 +387,7 @@ type ScheduledAgentContinueOptions = {
 	onError?: (error: unknown) => void;
 };
 
+
 type SessionTitleSource = "auto" | "user";
 type SessionNameTrigger = "replan";
 type SetSessionNameWithTrigger = (
@@ -401,6 +395,7 @@ type SetSessionNameWithTrigger = (
 	source?: SessionTitleSource,
 	trigger?: SessionNameTrigger,
 ) => Promise<boolean>;
+
 
 export class AgentSession {
 	readonly agent: Agent;
@@ -4158,6 +4153,7 @@ export class AgentSession {
 		return this.#tools.buildSystemPromptForAgentStart(promptText);
 	}
 
+
 	/** Replaces connected MCP tools and enables them immediately. */
 	refreshMCPTools(mcpTools: CustomTool[]): Promise<void> {
 		return this.#tools.refreshMCPTools(mcpTools);
@@ -4251,6 +4247,7 @@ export class AgentSession {
 	): SessionContext {
 		return this.#providerBoundary.buildTranscriptSessionContext(options);
 	}
+
 
 	#obfuscateTextForProvider(text: string | undefined): string | undefined {
 		return this.#providerBoundary.obfuscateText(text);
@@ -8856,4 +8853,5 @@ export class AgentSession {
 	get extensionRunner(): ExtensionRunner | undefined {
 		return this.#extensionRunner;
 	}
+
 }
