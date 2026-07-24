@@ -1147,6 +1147,7 @@ export class AgentSession {
 			skillsSettings: config.skillsSettings,
 			skillsReloadable: config.skillsReloadable,
 		});
+		this.#baseSystemPrompt = this.#tools.baseSystemPrompt;
 		this.#disconnectOwnedMcpManager = config.disconnectOwnedMcpManager;
 		const ttsrHost: TtsrCoordinatorHost = {
 			agent: this.agent,
@@ -4159,8 +4160,9 @@ export class AgentSession {
 	}
 
 	/** Rebuilds the stable base prompt for the current tools and model. */
-	refreshBaseSystemPrompt(): Promise<void> {
-		return this.#tools.refreshBaseSystemPrompt();
+	async refreshBaseSystemPrompt(): Promise<void> {
+		await this.#tools.refreshBaseSystemPrompt();
+		this.#baseSystemPrompt = this.#tools.baseSystemPrompt;
 	}
 
 	#buildSystemPromptForAgentStart(promptText: string): Promise<string[]> {
@@ -7355,7 +7357,7 @@ export class AgentSession {
 		}
 		const sanitizedMessage: AssistantMessage = {
 			...assistantMessage,
-			content: assistantMessage.content.filter(block => block.type !== "toolCall"),
+			content: (assistantMessage.content ?? []).filter(block => block.type !== "toolCall"),
 		};
 		return {
 			replyText: args.dedupeReply === false ? replyText.trim() : dedupeEphemeralReply(replyText.trim()),

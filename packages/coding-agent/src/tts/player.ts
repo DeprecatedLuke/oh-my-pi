@@ -91,8 +91,7 @@ export async function playAudioFile(filePath: string, options: PlayAudioOptions 
 	const commands = playerCommandsFor(process.platform, filePath);
 	if (commands.length === 0) {
 		throw new Error(
-			"No audio player available. Install PulseAudio (paplay) or ALSA (aplay), " +
-				"or run `omp setup speech` to download a bundled ffmpeg.",
+			"No audio player available. Install PulseAudio (paplay), ALSA (aplay), or ffmpeg.",
 		);
 	}
 

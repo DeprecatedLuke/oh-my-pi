@@ -405,7 +405,10 @@ describe("buildSessionContext", () => {
 			expect(blocks.filter(block => block.type === "image")).toHaveLength(0);
 			expect(summary.images ?? []).toHaveLength(0);
 
-			const transcript = buildSessionContext(entries, undefined, undefined, { transcript: true });
+			const transcript = buildSessionContext(entries, undefined, undefined, {
+				transcript: true,
+				collapseCompactedHistory: false,
+			});
 			const transcriptSummary = transcript.messages[2];
 			if (transcriptSummary?.role !== "compactionSummary") throw new Error("Expected transcript compaction summary");
 			expect(transcriptSummary.blocks?.filter(block => block.type === "image")).toHaveLength(17);

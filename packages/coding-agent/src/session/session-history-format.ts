@@ -124,12 +124,27 @@ export function formatToolCallPrimaryArg(name: string, args: Record<string, unkn
 		if (note) return oneLine(note);
 		if (severity) return oneLine(severity);
 	}
-	if (name === "search") {
+	if (name === "search" || name === "grep") {
 		const pattern = primaryArgValue(args.pattern);
-		const paths = primaryArgValue(args.paths);
+		const paths = primaryArgValue(args.paths) || primaryArgValue(args.path);
 		if (pattern && paths) return oneLine(`${pattern} @ ${paths}`);
 		if (pattern) return oneLine(pattern);
 		if (paths) return oneLine(paths);
+	}
+	if (name === "ast_grep") {
+		const pattern = primaryArgValue(args.pat);
+		if (pattern) return oneLine(pattern);
+	}
+	if (name === "ast_edit") {
+		const ops = args.ops;
+		if (Array.isArray(ops) && ops.length > 0) {
+			const first = ops[0];
+			const pattern =
+				typeof first === "object" && first !== null && "pat" in first && typeof first.pat === "string"
+					? first.pat
+					: "";
+			if (pattern) return oneLine(pattern);
+		}
 	}
 	if (name === "find") {
 		const paths = primaryArgValue(args.paths);
