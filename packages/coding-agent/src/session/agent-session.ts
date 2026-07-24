@@ -1012,9 +1012,10 @@ export class AgentSession {
 			takeMnemopiSessionState: () => setMnemopiSessionState(this, undefined),
 			setBaseSystemPrompt: prompt => {
 				this.#tools.setBaseSystemPrompt(prompt);
+				this.#baseSystemPrompt = prompt;
 				this.agent.setSystemPrompt(prompt);
 			},
-			refreshBaseSystemPrompt: () => this.#tools.refreshBaseSystemPrompt(),
+			refreshBaseSystemPrompt: () => this.refreshBaseSystemPrompt(),
 			replaceMemoryTools: tools => this.#tools.replaceMemoryTools(tools),
 		};
 		this.#memory = new SessionMemory(memoryHost, {
@@ -7656,6 +7657,7 @@ export class AgentSession {
 			this.#memory.rekeyForCurrentSessionId();
 			this.agent.setTools(previousTools);
 			this.#tools.setBaseSystemPrompt(previousBaseSystemPrompt);
+			this.#baseSystemPrompt = previousBaseSystemPrompt;
 			this.#memory.restorePromotionSnapshot(previousBaseSystemPromptBeforeMemoryPromotion);
 			this.agent.setSystemPrompt(previousSystemPrompt);
 			this.agent.replaceMessages(previousAgentMessages);
