@@ -90,9 +90,7 @@ export async function playAudioFile(filePath: string, options: PlayAudioOptions 
 	if (signal?.aborted) throw playbackAbortError(signal);
 	const commands = playerCommandsFor(process.platform, filePath);
 	if (commands.length === 0) {
-		throw new Error(
-			"No audio player available. Install PulseAudio (paplay), ALSA (aplay), or ffmpeg.",
-		);
+		throw new Error("No audio player available. Install PulseAudio (paplay), ALSA (aplay), or ffmpeg.");
 	}
 
 	const failures: string[] = [];
