@@ -568,7 +568,7 @@ export class EditTool implements AgentTool<TInput> {
 								beginDeferredDiagnosticsForPath: p => tool.#deferredDiagnostics.begin(p),
 							}),
 					);
-					return executeSinglePathEntries(targetPath, runs, batchRequest, onUpdate, tool.session.cwd, signal);
+					return executeSinglePathEntries(targetPath, runs, batchRequest, onUpdate);
 				},
 			},
 			apply_patch: {
@@ -671,7 +671,7 @@ export class EditTool implements AgentTool<TInput> {
 								beginDeferredDiagnosticsForPath: p => tool.#deferredDiagnostics.begin(p),
 							}),
 					);
-					return executeSinglePathEntries(targetPath, runs, batchRequest, onUpdate, tool.session.cwd, signal);
+					return executeSinglePathEntries(targetPath, runs, batchRequest, onUpdate);
 				},
 			},
 		}[this.mode];

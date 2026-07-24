@@ -27,6 +27,7 @@ import type { FileSlashCommand } from "../extensibility/slash-commands";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import type { ConfiguredThinkingLevel } from "../thinking";
 import type { XdevState } from "../tools/xdev";
+import type { EventBus } from "../utils/event-bus";
 import type { SessionManager } from "./session-manager";
 
 /** Maximum time the interactive shutdown path waits for Mnemopi consolidation. */
@@ -200,6 +201,8 @@ export interface AgentSessionConfig {
 	ownedAsyncJobManager?: AsyncJobManager;
 	/** Async job manager visible to this session. */
 	asyncJobManager?: AsyncJobManager;
+	/** Shared event bus for background-job lifecycle notifications. */
+	eventBus?: EventBus;
 	/** Registry identity used for IRC routing. */
 	agentId?: string;
 	/** Whether this is a top-level or subagent session. */

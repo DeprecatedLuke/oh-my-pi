@@ -94,11 +94,12 @@ import {
 	Snowflake,
 	withTimeout,
 } from "@oh-my-pi/pi-utils";
+import * as snapcompact from "@oh-my-pi/snapcompact";
 import type { AdvisorConfig, AdvisorRuntimeStatus } from "../advisor";
 import { type AsyncJob, AsyncJobManager } from "../async";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { ModelRegistry } from "../config/model-registry";
-import { type ResolvedModelRoleValue, resolveModelOverride } from "../config/model-resolver";
+import { formatModelString, type ResolvedModelRoleValue, resolveModelOverride } from "../config/model-resolver";
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily } from "../config/service-tier";
 import type { Settings, SkillsSettings } from "../config/settings";
@@ -171,8 +172,10 @@ import {
 	deobfuscateAssistantContent,
 	deobfuscateSessionContext,
 	deobfuscateToolArguments,
+	obfuscateMessages,
 	obfuscateProviderContext,
 	type SecretObfuscator,
+	stripPendingSecretPlaceholderSuffix,
 } from "../secrets/obfuscator";
 
 import {
@@ -198,8 +201,9 @@ import {
 	PROPOSE_DEVICE_NAME,
 	writeDeviceDispatch,
 } from "../tools/resolve";
-import type { TodoPhase } from "../tools/todo";
+import type { TodoItem, TodoPhase } from "../tools/todo";
 import { ToolError } from "../tools/tool-errors";
+import type { XdevRegistry } from "../tools/xdev";
 import { parseCommandArgs } from "../utils/command-args";
 import type { EditMode } from "../utils/edit-mode";
 
@@ -274,27 +278,28 @@ import {
 	type InterruptedThinkingDetails,
 	isEmptyErrorTurn,
 	isUserInterruptAbort,
+	logProviderTurnError,
 	type PythonExecutionMessage,
 	SILENT_ABORT_MARKER,
 	SKILL_PROMPT_MESSAGE_TYPE,
 	USER_INTERRUPT_LABEL,
 } from "./messages";
+import { ModelControls, type ModelControlsHost } from "./model-controls";
+import { PrewalkCoordinator, type PrewalkCoordinatorHost } from "./prewalk";
 import {
 	isAdvisorCard,
 	isDisplayableQueuedMessage,
 	isHiddenUserCompanion,
-	isTerminalTextAssistantAnswer,
 	isUserQueuedMessage,
 	queueChipText,
 	toRestoredQueuedMessage,
 } from "./queued-messages";
-import { ModelControls, type ModelControlsHost } from "./model-controls";
-import { PrewalkCoordinator, type PrewalkCoordinatorHost } from "./prewalk";
+import { formatRetryFallbackSelector, type RetryFallbackSelector } from "./retry-fallback-chains";
 import { type AdvisorStats, SessionAdvisors, type SessionAdvisorsHost } from "./session-advisors";
 import type { BuildSessionContextOptions, SessionContext } from "./session-context";
 import { getRestorableSessionModels } from "./session-context";
 import { formatSessionDumpText } from "./session-dump-format";
-import type { BranchSummaryEntry, NewSessionOptions } from "./session-entries";
+import type { BranchSummaryEntry, NewSessionOptions, SessionEntry } from "./session-entries";
 import { SessionHandoff, type SessionHandoffHost } from "./session-handoff";
 import {
 	createCodexCompactionContext as createMaintenanceCodexCompactionContext,
@@ -315,13 +320,15 @@ import { runWokenTurnTracked } from "./woken-turn";
 import { YieldQueue } from "./yield-queue";
 
 
+
 export * from "./agent-session-events";
 export * from "./agent-session-types";
 export type { AdvisorStats, PerAdvisorStat } from "./session-advisors";
+export type { ShakeMode, ShakeResult };
 
 const SESSION_STOP_CONTINUATION_CAP = 8;
 import { LoopGuards, type StreamGuardsHost, StreamingEditGuard } from "./stream-guards";
-import { TodoTracker, type TodoTrackerHost } from "./todo-tracker";
+import { isAwaitingUserAnswer, TodoTracker, type TodoTrackerHost } from "./todo-tracker";
 import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
 
 const PLAN_MODE_REMINDER_MAX = 3;
@@ -330,6 +337,7 @@ const PLAN_MODE_REMINDER_MAX = 3;
 // ============================================================================
 // Constants
 // ============================================================================
+
 
 const noOpUIContext: ExtensionUIContext = {
 	select: async (_title, _options, _dialogOptions) => undefined,
@@ -370,7 +378,6 @@ type MessageEndPersistenceSlot = {
 	persist: (persistMessage: () => void) => Promise<void>;
 	release: () => void;
 };
-
 type PostPromptSkipReason = "aborted" | "stale-generation";
 
 type AgentContinueSkipReason =
@@ -386,6 +393,7 @@ type ScheduledAgentContinueOptions = {
 	onSkip?: (reason: AgentContinueSkipReason) => void;
 	onError?: (error: unknown) => void;
 };
+
 
 
 type SessionTitleSource = "auto" | "user";
@@ -539,6 +547,7 @@ export class AgentSession {
 	#disconnectOwnedMcpManager: (() => Promise<void>) | undefined;
 	/** Session-local fallback MCP selections used while restoring a transcript. */
 	#sessionDefaultSelectedMCPToolNames = new Map<string, string[]>();
+
 
 	readonly #ttsr: TtsrCoordinator;
 	readonly #stats: SessionStatsTracker;
@@ -1711,6 +1720,11 @@ export class AgentSession {
 	 * distinguish a scheduling pause from terminal completion.
 	 */
 	hasPendingAsyncWork(): boolean {
+		return this.#hasPendingAsyncWake();
+	}
+
+	/** Compatibility name used by idle-compaction and goal-continuation callers. */
+	hasPendingBackgroundJobs(): boolean {
 		return this.#hasPendingAsyncWake();
 	}
 
@@ -4247,6 +4261,7 @@ export class AgentSession {
 	): SessionContext {
 		return this.#providerBoundary.buildTranscriptSessionContext(options);
 	}
+
 
 
 	#obfuscateTextForProvider(text: string | undefined): string | undefined {

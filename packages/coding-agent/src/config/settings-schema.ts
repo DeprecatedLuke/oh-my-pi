@@ -5036,6 +5036,17 @@ export const SETTINGS_SCHEMA = {
 			description: "Speak the assistant's output aloud through the speakers as it streams",
 		},
 	},
+
+	"speech.enhanced": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "providers",
+			group: "Services",
+			label: "Enhanced Speech",
+			description: "Rewrite assistant output into natural spoken prose before synthesis",
+		},
+	},
 	"speech.mode": {
 		type: "enum",
 		values: ["all", "assistant", "yield"] as const,
