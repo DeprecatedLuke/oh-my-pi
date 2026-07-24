@@ -1045,6 +1045,113 @@ describe("AgentSession message pipeline", () => {
 		expect(contexts[1]!.systemPrompt?.join("\n")).not.toContain(injected);
 	});
 
+	it("restores the pre-switch prompt after a failed session switch", async () => {
+		using tempDir = TempDir.createSync("@pi-memory-switch-rollback-");
+		const sessionManager = SessionManager.create(tempDir.path(), tempDir.join("sessions"));
+		const previousSessionFile = sessionManager.getSessionFile();
+		expect(previousSessionFile).toBeString();
+		await sessionManager.flush();
+		const targetManager = SessionManager.create(tempDir.path(), tempDir.join("sessions"));
+		const targetSessionFile = targetManager.getSessionFile();
+		expect(targetSessionFile).toBeString();
+		await targetManager.flush();
+
+		const api = "test-memory-switch-rollback-cache";
+		const contexts: Context[] = [];
+		let remembered = false;
+		let recallAvailable = true;
+		const memoryNotice = "<memories>session A only</memories>";
+		const canonicalPrompt = ["base", "static memory instructions"];
+		const fakeBackend: MemoryBackend = {
+			id: "mnemopi",
+			async start() {},
+			async buildDeveloperInstructions() {
+				return remembered ? `static memory instructions\n\n${memoryNotice}` : "static memory instructions";
+			},
+			async clear() {},
+			async enqueue() {},
+			async beforeAgentStartPrompt() {
+				if (remembered || !recallAvailable) return undefined;
+				remembered = true;
+				return memoryNotice;
+			},
+		};
+		vi.spyOn(memoryBackend, "resolveMemoryBackend").mockResolvedValue(fakeBackend);
+		registerCustomApi(api, (_model, context) => {
+			contexts.push(context);
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage("ok");
+				stream.push({ type: "text_delta", contentIndex: 0, delta: "ok", partial: message });
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+		const model = buildModel({
+			id: "local-model",
+			name: "Local Model",
+			api,
+			provider: "ollama",
+			baseUrl: "http://127.0.0.1:11434",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		const agent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: canonicalPrompt,
+				messages: [],
+				tools: [],
+			},
+		});
+		agent.setAppendOnlyContext(new AppendOnlyContextManager());
+		const session = new AgentSession({
+			agent,
+			sessionManager,
+			settings: Settings.isolated({
+				"compaction.enabled": false,
+				"memory.backend": "mnemopi",
+				"provider.appendOnlyContext": "on",
+			}),
+			modelRegistry: createModelRegistryStub() as never,
+			rebuildSystemPrompt: async () => ({
+				systemPrompt:
+					sessionManager.getSessionFile() === targetSessionFile ? ["failed-session base"] : canonicalPrompt,
+			}),
+		});
+		sessions.push(session);
+		setMnemopiSessionState(session, {
+			aliasOf: undefined,
+			setSessionId(_sessionId: string) {},
+			resetConversationTracking() {
+				remembered = false;
+			},
+			async dispose() {},
+		} as unknown as MnemopiSessionState);
+
+		await session.sendUserMessage("first");
+		const preSwitchSystemPrompt = [...session.systemPrompt];
+		expect(preSwitchSystemPrompt.join("\n")).toContain(memoryNotice);
+		recallAvailable = false;
+
+		const originalRefreshBaseSystemPrompt = session.refreshBaseSystemPrompt.bind(session);
+		vi.spyOn(session, "refreshBaseSystemPrompt").mockImplementationOnce(async () => {
+			await originalRefreshBaseSystemPrompt();
+			throw new Error("failed prompt refresh");
+		});
+
+		await expect(session.switchSession(targetSessionFile!)).rejects.toThrow("failed prompt refresh");
+		expect(session.systemPrompt).toEqual(preSwitchSystemPrompt);
+
+		await session.sendUserMessage("second");
+
+		expect(session.systemPrompt).toEqual(canonicalPrompt);
+		expect(contexts[1]!.systemPrompt).toEqual(canonicalPrompt);
+	});
+
 	it("clears promoted memory from the base prompt when starting a new session", async () => {
 		const api = "test-injected-memory-new-session-cache";
 		const contexts: Context[] = [];
@@ -1127,6 +1234,7 @@ describe("AgentSession message pipeline", () => {
 		recallAvailable = false;
 
 		await session.newSession();
+		expect(session.systemPrompt).toEqual(["base", "static memory instructions"]);
 		await session.sendUserMessage("second");
 
 		expect(session.systemPrompt.join("\n")).not.toContain(injected);
