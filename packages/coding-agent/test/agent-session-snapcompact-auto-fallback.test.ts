@@ -10,6 +10,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import * as snapcompact from "@oh-my-pi/snapcompact";
 
 const UNRENDERABLE_SNAPCOMPACT_TEXT = "\uE000\uE001\uE002\uE003\uE004\uE005\uE006\uE007\uE008\uE009";
 
@@ -24,6 +25,7 @@ interface Harness {
 interface HarnessOptions {
 	activeModel: { provider: GeneratedProvider; id: string };
 	seedMessages?: Message[];
+	strategy?: "snapcompact" | "context-full";
 }
 
 async function createHarness(tempDir: TempDir, authStorage: AuthStorage, options: HarnessOptions): Promise<Harness> {
@@ -42,7 +44,7 @@ async function createHarness(tempDir: TempDir, authStorage: AuthStorage, options
 	if (!firstKeptEntryId) throw new Error("Expected seeded branch entry");
 
 	const settings = Settings.isolated({
-		"compaction.strategy": "snapcompact",
+		"compaction.strategy": options.strategy ?? "snapcompact",
 		// Force a 1-token recent window so the post-turn cut always splits off the
 		// last turn and summarizes the seeded unrenderable history. With the default
 		// 20k window the cut keeps both tiny messages, leaving nothing for
@@ -176,5 +178,49 @@ describe("AgentSession auto-snapcompact local-blocker fallback", () => {
 			type: "compaction",
 			summary: "compacted",
 		});
+	});
+
+	it("shakes images after a successful automatic snapcompact compaction", async () => {
+		tempDir = TempDir.createSync("@pi-snapcompact-image-shake-");
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
+		const harness = await createHarness(tempDir, authStorage, {
+			activeModel: { provider: "anthropic", id: "claude-sonnet-4-5" },
+		});
+		session = harness.session;
+
+		const snapcompactSpy = vi.spyOn(snapcompact, "compact").mockImplementation(async preparation => ({
+			summary: "snapcompact archive",
+			shortSummary: undefined,
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: preparation.tokensBefore,
+			details: { readFiles: [], modifiedFiles: [] },
+		}));
+		const dropImagesSpy = vi.spyOn(session, "dropImages").mockResolvedValue({ removed: 1 });
+
+		harness.triggerThreshold();
+		const result = await harness.awaitCompactionEnd();
+
+		expect(result).toEqual({ action: "snapcompact", errorMessage: undefined });
+		expect(snapcompactSpy).toHaveBeenCalledTimes(1);
+		expect(compactionModule.compact).not.toHaveBeenCalled();
+		expect(dropImagesSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not shake images after automatic context-full compaction", async () => {
+		tempDir = TempDir.createSync("@pi-context-full-image-shake-");
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
+		const harness = await createHarness(tempDir, authStorage, {
+			activeModel: { provider: "anthropic", id: "claude-sonnet-4-5" },
+			strategy: "context-full",
+		});
+		session = harness.session;
+		const dropImagesSpy = vi.spyOn(session, "dropImages").mockResolvedValue({ removed: 1 });
+
+		harness.triggerThreshold();
+		const result = await harness.awaitCompactionEnd();
+
+		expect(result).toEqual({ action: "context-full", errorMessage: undefined });
+		expect(compactionModule.compact).toHaveBeenCalledTimes(1);
+		expect(dropImagesSpy).not.toHaveBeenCalled();
 	});
 });

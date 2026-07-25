@@ -425,6 +425,20 @@ export class SessionMaintenance {
 		return { removed };
 	}
 
+	/** Reuses `/shake images` after a snapcompact rewrite without failing compaction. */
+	async #autoShakeImagesAfterSnapcompact(): Promise<void> {
+		try {
+			const { removed } = await this.#host.dropImages();
+			if (removed > 0) {
+				logger.info("Snapcompact automatically shook attached images", { removed });
+			}
+		} catch (error) {
+			logger.warn("Snapcompact automatic image shake failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
 	/**
 	 * Surgically reduce context by dropping heavy content ("shake").
 	 *
@@ -821,6 +835,7 @@ export class SessionMaintenance {
 				fromExtension,
 				preserveData,
 			);
+			if (snapcompactResult) await this.#autoShakeImagesAfterSnapcompact();
 			const newEntries = this.#host.sessionManager.getEntries();
 			const sessionContext = this.#host.buildDisplaySessionContext();
 			this.#host.agent.replaceMessages(sessionContext.messages);
@@ -2623,6 +2638,7 @@ export class SessionMaintenance {
 				fromExtension,
 				preserveData,
 			);
+			if (snapcompactResult) await this.#autoShakeImagesAfterSnapcompact();
 			const newEntries = this.#host.sessionManager.getEntries();
 			const sessionContext = this.#host.buildDisplaySessionContext();
 			this.#host.agent.replaceMessages(sessionContext.messages);
