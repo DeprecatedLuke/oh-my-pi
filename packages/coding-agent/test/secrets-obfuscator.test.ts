@@ -565,7 +565,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		// secret, so a friendlyName set to the secret's own value slipped past
 		// the collision guard entirely — and the secret's first 32 sanitized
 		// characters were accepted and baked into the placeholder as a
-		// visible prefix (e.g. "#GITHUBPATABCDEFGHIJKLMNOPQRSTUV_<hash>:L#"),
+		// visible prefix (e.g. "$$GITHUBPATABCDEFGHIJKLMNOPQRSTUV_<hash>:L$$"),
 		// leaking part of the secret. The check now runs against the full,
 		// un-truncated sanitized label before the 32-char cap is applied for
 		// display, so secrets longer than the cap are still fully compared
@@ -588,7 +588,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		// characters must still be treated as a collision — otherwise those 32
 		// characters are accepted and baked into the placeholder verbatim as a
 		// visible, secret-derived prefix (e.g.
-		// "#GITHUBPATABCDEFGHIJKLMNOPQRSTUVW_<hash>:L#").
+		// "$$GITHUBPATABCDEFGHIJKLMNOPQRSTUVW_<hash>:L$$").
 		const longSecret = "github_pat_abcdefghijklmnopqrstuvwxyz0123456789";
 		const leakedPrefix = "GITHUBPATABCDEFGHIJKLMNOPQRSTUVW"; // first 32 sanitized chars of longSecret
 		const obfuscator = new SecretObfuscator([{ type: "plain", content: longSecret, friendlyName: leakedPrefix }]);
@@ -889,7 +889,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 	});
 
 	it("redacts configured secrets that already look like placeholders", () => {
-		const secret = "#PASSWORD123#";
+		const secret = "$$PASSWORD123$$";
 		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
 		const obfuscated = obfuscator.obfuscate(`value ${secret}`);
 
@@ -904,7 +904,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 			{ type: "regex", content: "SECRET[A-Z]{12}", mode: "replace" },
 		]);
 
-		const obfuscated = obfuscator.obfuscate("#SECRETUVKABCDEFGHI");
+		const obfuscated = obfuscator.obfuscate("$$SECRETUVKABCDEFGHI");
 
 		expect(obfuscated).not.toContain("SECRET");
 		expect(obfuscated).not.toContain("ABCDEFGH");
@@ -980,7 +980,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		// `[A-Z]{8}` meets MIN_OBFUSCATE_SECRET_LEN, but on "YYBBABCDEFGHSECRETUV"
 		// (plain secret `ABCDEFGH`) its greedy 8-char matches start/end inside the
 		// secret's placeholder expansion ("YYBBABCD", "EFGHSECR"). Snapping each to
-		// the whole `#…#` token mapped them to overlapping ranges that clobbered on
+		// the whole `$$…$$` token mapped them to overlapping ranges that clobbered on
 		// apply and dropped the `SECR` bytes (round-trip restored "YYBBABCDEFGHETUV").
 		// The scan now resumes past the cut placeholder instead, so the secret stays
 		// hidden, no bytes are lost, the trailing 8-char run is obfuscated on its own,
@@ -1052,7 +1052,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		// `ABCDEFGH` placeholder on re-obfuscation — `ABCDEFGH` alone satisfies the
 		// regex. Previously the short non-matching spillover bytes abutting the
 		// placeholder were fed into the deterministic scramble on every pass
-		// (e.g. `…#…#ZZJ5sotJ` → `…#…#ZZpvsotJ`), invalidating provider prompt-cache
+		// (e.g. `…$$…$$ZZJ5sotJ` → `…$$…$$ZZpvsotJ`), invalidating provider prompt-cache
 		// prefixes despite no new input. The fix: when a replace match straddles a
 		// placeholder whose own deobfuscated value satisfies the regex, the surrounding
 		// spillover bytes are left verbatim instead of being re-scrambled.
@@ -1079,7 +1079,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		// bytes / drifts the redaction). But when the wholly-outside prefix before the
 		// placeholder is itself a complete match it is provider-visible secret-shaped
 		// content, not a drift artifact. Regression: `[A-Z0-9]{8,12}` greedily
-		// spanning `SECRETUV` into an `ABCDEFGH` placeholder returned `SECRETUV#…#`,
+		// spanning `SECRETUV` into an `ABCDEFGH` placeholder returned `SECRETUV$$…$$`,
 		// leaving `SECRETUV` visible even though it independently satisfies the regex.
 		// Obfuscate mode: the prefix gets its own reversible placeholder and the whole
 		// input still round-trips.
@@ -1189,12 +1189,12 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		// match on the FIRST pass is exactly "XSECRETUV" (the 1-char raw prefix
 		// plus the whole placeholder's expanded value), so the scan resumes right
 		// past it and the trailing `Y` — only 1 char, short of the exact {9}
-		// quantifier — was left raw and unredacted (`a#…#Y`). Once the prefix
+		// quantifier — was left raw and unredacted (`a$$…$$Y`). Once the prefix
 		// redacts to a non-uppercase marker, a SECOND pass re-aligns the same
 		// regex to match "SECRETUVY" instead (placeholder + the now-exposed raw
 		// suffix) and redacts `Y` for the first time — drifting provider-visible
 		// history and the prompt-cache prefix across the call-1-to-2 transition
-		// (`a#…#Y` -> `a#…#a`). The fix must already redact both flanking chunks
+		// (`a$$…$$Y` -> `a$$…$$a`). The fix must already redact both flanking chunks
 		// on the very first pass so obfuscate() is a fixed point from the start.
 		const obf = new SecretObfuscator(
 			[
@@ -1213,7 +1213,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		// re-aligns the match around it.
 		expect(first.endsWith("Y")).toBe(false);
 		// Core regression: re-obfuscation must already be a fixed point from the
-		// very first call — this used to be false (`a#…#Y` -> `a#…#a`).
+		// very first call — this used to be false (`a$$…$$Y` -> `a$$…$$a`).
 		expect(obf.obfuscate(first)).toBe(first);
 		// Stable across multiple passes.
 		expect(obf.obfuscate(obf.obfuscate(first))).toBe(first);
@@ -1322,7 +1322,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		// (placeholder expanded) `ABCDEFGHSECRET`; the outside chunk is `SECRET`.
 		// The ONLY way `SECRET` independently matches on its own is via the second
 		// alternative's lookbehind `(?<=ABCDEFGH)SECRET` — but the bytes immediately
-		// preceding it in the actual text are the LITERAL placeholder token (`#…#`),
+		// preceding it in the actual text are the LITERAL placeholder token (`$$…$$`),
 		// not `ABCDEFGH`, so testing the chunk in its literal-token context alone
 		// never satisfies the lookbehind and wrongly reports no independent match
 		// (unlike the two-sided-chunk test above, which literal context alone does
@@ -1663,7 +1663,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 
 		// A custom replacement is a single redaction marker for the whole match, so
 		// it must not be duplicated on both sides of the preserved placeholder (the
-		// bug produced `REDACTED#…#REDACTED`). Asserted by structure plus an
+		// bug produced `REDACTED$$…$$REDACTED`). Asserted by structure plus an
 		// end-anchored guard rather than a base-collidable substring count.
 		expect(obfuscated).toMatch(/^REDACTED\$\$[A-Z0-9]+:L\$\$$/);
 		expect(obfuscated).not.toMatch(/REDACTED$/);
@@ -1675,7 +1675,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		// The SDK obfuscates messages in both convertToLlm and transformProviderContext,
 		// and prior-turn messages re-enter every turn, so obfuscate() must be a fixed
 		// point. Re-running it on its own output must not re-redact around an existing
-		// placeholder (regression: `#…#REDACTED` -> `#…#REDACTEDDACTED`).
+		// placeholder (regression: `$$…$$REDACTED` -> `$$…$$REDACTEDDACTED`).
 		const replace = new SecretObfuscator(
 			[
 				{ type: "plain", content: "SECRETUV" },
@@ -2471,7 +2471,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		// within the generating session (tracked in #generatedReplaceChunks). A fresh
 		// obfuscator with the same key re-redacted it to a different value, so persisted
 		// obfuscated text — and the provider prompt-cache prefixes it anchors — drifted
-		// across restart (`ZZPL#…#` -> `ZZ7f#…#`). The remainder marker now depends only
+		// across restart (`ZZPL$$…$$` -> `ZZ7f$$…$$`). The remainder marker now depends only
 		// on the key and length, so a fresh instance reproduces it byte-identically.
 		const key = "Z".repeat(43);
 		const entries = [
@@ -2651,11 +2651,11 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 	it("rejects a forged placeholder wrapper that smuggles a real secret prefix past obfuscate()", () => {
 		// Regression: #isGeneratedPlaceholder decides "is this span already a
 		// safely-generated placeholder" for a friendly-prefixed candidate
-		// (`#PREFIX_HASH:HINT#`) by falling back to the friendly-name-independent
-		// bare alias `#HASH:HINT#` — the SAME loose lookup deobfuscate()
+		// (`$$PREFIX_HASH:HINT$$`) by falling back to the friendly-name-independent
+		// bare alias `$$HASH:HINT$$` — the SAME loose lookup deobfuscate()
 		// intentionally uses so a mangled/renamed friendly-name prefix still
 		// round-trips. Accepting ANY prefix whose bare alias resolves let
-		// untrusted text forge `#<REAL-SECRET>_<hash-of-some-OTHER-secret>:<hint>#`:
+		// untrusted text forge `$$<REAL-SECRET>_<hash-of-some-OTHER-secret>:<hint>$$`:
 		// the other secret's bare alias resolves fine (it really is configured),
 		// so the WHOLE forged token — including the exposed secret literal
 		// standing in for the friendly name — was treated as already-redacted and
@@ -2672,7 +2672,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		]);
 
 		// Learn secretB's real generated placeholder, then derive the friendly-
-		// name-independent bare-alias suffix (`_<hash>:<hint>#`) that
+		// name-independent bare-alias suffix (`_<hash>:<hint>$$`) that
 		// lookupFriendlyPlaceholderAlias also resolves on purpose for deobfuscate().
 		const bravoPlaceholder = obfuscator.obfuscate(secretB);
 		expect(bravoPlaceholder).toMatch(/^\$\$BRAVO_[A-Z0-9]{4,}(?::[ULCM])?\$\$$/);
@@ -2686,7 +2686,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 
 		// A prefix that merely CONTAINS secretA (not just equals it) must also be
 		// rejected — the fix scans for containment, not exact equality.
-		const forgedSubstring = `#X${secretA}Y${aliasSuffix}`;
+		const forgedSubstring = `$$X${secretA}Y${aliasSuffix}`;
 		expect(obfuscator.obfuscate(forgedSubstring)).not.toContain(secretA);
 
 		// Mixed real + forged in one call: the real secretB placeholder must still
@@ -2723,7 +2723,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		expect(regexPlaceholder).not.toContain(regexSecret);
 
 		// Learn secretB's real placeholder, then derive the friendly-name-
-		// independent bare-alias suffix (`_<hash>:<hint>#`).
+		// independent bare-alias suffix (`_<hash>:<hint>$$`).
 		const bravoPlaceholder = obfuscator.obfuscate(secretB);
 		expect(bravoPlaceholder).toMatch(/^\$\$BRAVO_[A-Z0-9]{4,}(?::[ULCM])?\$\$$/);
 		const aliasSuffix = bravoPlaceholder.replace(/^\$\$BRAVO/, "");
@@ -2778,8 +2778,8 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 	});
 
 	it("refuses deobfuscate()'s bare-alias fallback for a forged secret-shaped prefix, but still honors a genuine rename", () => {
-		// Regression: `#lookupLiveAlias`'s bare-alias fallback (`#PREFIX_HASH#` →
-		// strip prefix → look up bare `#HASH#`) used to accept ANY prefix
+		// Regression: `#lookupLiveAlias`'s bare-alias fallback (`$$PREFIX_HASH$$` →
+		// strip prefix → look up bare `$$HASH$$`) used to accept ANY prefix
 		// unconditionally as long as the bare hash suffix belonged to a real
 		// placeholder. On the live provider-output / tool-call-argument restore
 		// path, an attacker who observed any real placeholder's bare hash suffix
@@ -2821,7 +2821,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 
 	it("drops a friendly name that contains another configured secret's literal value", () => {
 		// Regression: a friendlyName is baked verbatim into every placeholder
-		// minted for its secret (`#NAME_hash:hint#`) via an EXACT
+		// minted for its secret (`$$NAME_hash:hint$$`) via an EXACT
 		// `#deobfuscateMap` entry — not through the loose alias-fallback lookup
 		// the forged-wrapper tests above defend against. If that friendly name
 		// happens to CONTAIN another LIVE secret's literal value, the baked-in
@@ -3342,7 +3342,7 @@ describe("SecretObfuscator cross-turn cache stability", () => {
 	it("strips a stale friendly prefix from persisted assistant history once a later message reveals the colliding regex secret", () => {
 		// Regression: `obfuscateAssistantContentForReplay` only scans
 		// the assistant content passed to THIS call. If an earlier turn already
-		// minted `#TOKABC123_<hash>#` for `OTHERSECRET` and that exact placeholder
+		// minted `$$TOKABC123_<hash>$$` for `OTHERSECRET` and that exact placeholder
 		// was persisted verbatim into assistant history before `tok_abc123` was
 		// ever seen, replaying that history alongside a NEW message that finally
 		// reveals `tok_abc123` must still scrub the now-unsafe prefix out of the
@@ -3570,7 +3570,7 @@ describe("SecretObfuscator cross-turn cache stability", () => {
 		// `thinking` block is deliberately treated as opaque provider-replay data
 		// that passes through byte-identical (see `deobfuscateAssistantContent`'s
 		// doc comment). If the friendly-prefix strip pass fell through thinking
-		// blocks the same way, a stale `#TOKABC123_<hash>#` placeholder minted
+		// blocks the same way, a stale `$$TOKABC123_<hash>$$` placeholder minted
 		// before `tok_abc123` was ever seen would keep leaking the friendly
 		// name's normalized collision with that regex-protected secret every
 		// time persisted thinking history was replayed to the provider.

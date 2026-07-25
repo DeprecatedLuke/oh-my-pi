@@ -279,7 +279,7 @@ describe("runFixRefusal", () => {
 	it("drops a proposed pattern that targets an already-redacted placeholder", async () => {
 		// Round 0: SecretCorp is visible -> judge proposes it -> it gets masked.
 		// Round 1+: the main model still refuses (conceptual trigger), and the judge
-		// misbehaves by proposing a pattern that matches the #TOKEN# placeholder that
+		// misbehaves by proposing a pattern that matches the $$TOKEN$$ placeholder that
 		// now stands in for SecretCorp. The deterministic guard must drop it.
 		const complete: FixRefusalComplete = async ({ model, context }) => {
 			if (model === UNCENSORED) {
@@ -289,8 +289,8 @@ describe("runFixRefusal", () => {
 				if (transcript.includes("SecretCorp")) {
 					return toolResponse({ resolved: false, patterns: [{ regex: "SecretCorp" }] });
 				}
-				// SecretCorp is masked now; target the placeholder itself.
-				return toolResponse({ resolved: false, patterns: [{ regex: "#[A-Z0-9]{4}" }] });
+				// SecretCorp is masked now; target the dollar-delimited placeholder itself.
+				return toolResponse({ resolved: false, patterns: [{ regex: "\\$\\$[A-Z0-9]{4,}(?::[ULCM])?\\$\\$" }] });
 			}
 			return textResponse(REFUSAL); // conceptual refusal: masking never clears it
 		};

@@ -583,7 +583,7 @@ function mergePatterns(
 			continue;
 		}
 		// Deterministic guard: refuse to re-redact an already-masked span. A pattern
-		// that matches an existing #TOKEN# placeholder would corrupt the placeholder
+		// that matches an existing $$TOKEN$$ placeholder would corrupt the placeholder
 		// (and is never load-bearing — the target can no longer see what it replaced).
 		if (matchesPlaceholder(entry, placeholders)) {
 			step(`Skipped already-redacted pattern: ${describeEntry(entry)}`);
@@ -597,7 +597,7 @@ function mergePatterns(
 	return additions;
 }
 
-/** Collect every `#TOKEN#` placeholder currently present in the masked transcript. */
+/** Collect every `$$TOKEN$$` placeholder currently present in the masked transcript. */
 function collectPlaceholders(messages: Message[]): Set<string> {
 	const found = new Set<string>();
 	for (const match of JSON.stringify(messages).matchAll(PLACEHOLDER_RE)) found.add(match[0]);
