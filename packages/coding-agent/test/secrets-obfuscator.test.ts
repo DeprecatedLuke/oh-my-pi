@@ -423,6 +423,7 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		const obf = new SecretObfuscator([{ type: "plain", content: "hunter22" }]);
 		const masked = obf.obfuscate("login with hunter22 now");
 		expect(masked).toMatch(/\$\$[A-Z0-9]{4}(?::[ULCM])?\$\$/);
+
 		expect(masked).not.toMatch(/\$\$[A-Z0-9]+_[A-Z0-9]{4}/);
 		expect(obf.deobfuscate(masked)).toBe("login with hunter22 now");
 	});
