@@ -11,6 +11,20 @@
 ### Added
 
 - Added omp cleanse, a new command that automatically detects language-ecosystem checkers, parses diagnostics (such as Cargo Clippy JSON), distributes repair workloads across concurrent subagents, and runs verification checks with a live progress bar.
+- Added the `magicKeywords.ultrasolve` setting and `ultrasolve` keyword: it inherits ultrathink's maximum-thinking behavior and guides a bounded `task` → `agent: "solver"` escalation with self-contained context that genericizes irrelevant identity details while preserving technical semantics.
+
+- Added automatic `/shake images` cleanup after snapcompact compaction archives prior session history.
+
+### Fixed
+
+- Fixed secret placeholders in filenames colliding with hashline snapshot tags by using dollar-delimited placeholder tokens.
+- Fixed automatic `/fix-refusal` recovery being dropped when `agent_end` arrived before the session finished settling to idle.
+- Fixed auto-retry skipping empty provider abort errors reported as `Error: Request was aborted`, while preserving caller-abort and partial-content safeguards.
+
+### Removed
+
+- Removed the fork-only `canWriteKnowledge` capability gate. `knowledge://` URLs and `.omp/knowledge` filesystem paths are now writable by any agent in any session — no capability flag, no `shouldGrantKnowledgeWrite` identity check, no `ToolContextStore.setKnowledgeWritable` threading. The `knowledge` agent remains the designated knowledge maintainer by convention (prompt-level), not by enforcement.
+- Added per-agent prewalk for subagents: a `prewalk` frontmatter field (`true` = hand off to the default prewalk target, a string = custom target model pattern) and a `task.agentPrewalk` settings override toggled per agent from the `/agents` dashboard with `P`. The bundled generic `task` agent ships with prewalk enabled by default (skipped when the target resolves to the subagent's own starting model, and never armed for plan-mode spawns). Prewalk-armed subagents keep the normally parent-owned `todo` tool so the plan-nudge → todo → hand-off flow works, and the prewalk todo gate now keys on the active tool set instead of the registry so a deactivated todo tool can no longer stall the switch.
 
 ### Changed
 
