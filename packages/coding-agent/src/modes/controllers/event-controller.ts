@@ -72,6 +72,79 @@ type AgentSessionEventHandlers = {
 	[E in AgentSessionEventKind]: (event: Extract<AgentSessionEvent, { type: E }>) => Promise<void>;
 };
 
+const JOB_TYPE_TAG: Record<AsyncJobSnapshotItem["type"], string> = {
+	task: "[task]",
+	bash: "[shell]",
+};
+
+function jobTag(job: { type: AsyncJobSnapshotItem["type"]; agentType?: string }): string {
+	if (job.type === "task" && job.agentType && job.agentType !== "task") {
+		return `[${job.agentType}]`;
+	}
+	return JOB_TYPE_TAG[job.type];
+}
+
+function formatJobAge(ms: number): string {
+	const clamped = Math.max(0, ms);
+	if (clamped < 1000) return `${clamped}ms`;
+	const s = Math.round(clamped / 1000);
+	if (s < 60) return `${s}s`;
+	const m = Math.floor(s / 60);
+	const rem = s % 60;
+	return rem ? `${m}m${rem}s` : `${m}m`;
+}
+
+/** A single row in the anchored "Background Jobs" panel. */
+export interface BackgroundJobRow {
+	type: AsyncJobSnapshotItem["type"];
+	/** Subagent type for task jobs (e.g. "research", "explore"); undefined for bash. */
+	agentType?: string;
+	/** Formatted task id for task jobs; empty for shell jobs (the command is the whole row). */
+	id: string;
+	/** One-line summary: a task's live current action, or a shell job's command. */
+	summary: string;
+	ageMs: number;
+}
+
+/**
+ * Render the anchored background-jobs panel, e.g.
+ *
+ * Background Jobs (2 running, 1 completed):
+ *     [task] SomeTask: summarized current action - 1m23s
+ *     [shell] some long command - 1m23s
+ *
+ * Returns an empty array when nothing is running so the container clears.
+ */
+export function renderBackgroundJobsLines(
+	jobs: BackgroundJobRow[],
+	settled: { completed: number; failed: number; cancelled: number },
+	columns: number,
+): string[] {
+	if (jobs.length === 0) return [];
+	const indent = "  ";
+	const counts = [`${jobs.length} running`];
+	if (settled.completed > 0) counts.push(`${settled.completed} completed`);
+	if (settled.failed > 0) counts.push(`${settled.failed} failed`);
+	if (settled.cancelled > 0) counts.push(`${settled.cancelled} cancelled`);
+	const lines = ["", theme.bold(theme.fg("accent", `Background Jobs (${counts.join(", ")}):`))];
+	for (const job of jobs) {
+		const tag = jobTag(job);
+		const age = formatJobAge(job.ageMs);
+		const idPart = job.id ? `${job.id}: ` : "";
+		const fixedWidth = visibleWidth(`${indent}${tag} ${idPart}`) + visibleWidth(` - ${age}`);
+		const budget = Math.max(TRUNCATE_LENGTHS.SHORT, columns - fixedWidth);
+		const summary = truncateToWidth(
+			replaceTabs(job.summary).replace(/\s+/g, " ").trim() || "(no label)",
+			budget,
+			Ellipsis.Unicode,
+		);
+		const head = job.id
+			? `${indent}${theme.fg("dim", tag)} ${theme.fg("accent", theme.bold(job.id))}: `
+			: `${indent}${theme.fg("dim", tag)} `;
+		lines.push(`${head}${summary}${theme.fg("dim", ` - ${age}`)}`);
+	}
+	return lines;
+}
 
 export class EventController {
 	#lastReadGroup: ReadToolGroupComponent | undefined = undefined;

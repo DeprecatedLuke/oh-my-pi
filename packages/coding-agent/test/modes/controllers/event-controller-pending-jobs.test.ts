@@ -76,9 +76,10 @@ describe("renderBackgroundJobsLines", () => {
 	});
 
 	it("renders the running-count header and a [task] Id: summary - age row", () => {
-		const out = Bun.stripANSI(renderBackgroundJobsLines([taskRow()], NO_SETTLED, 120).join("\n"));
-		expect(out).toContain("Background Jobs (1 running):");
-		expect(out).toContain("[task] SomeTask: summarized current action - 1m23s");
+		const lines = renderBackgroundJobsLines([taskRow()], NO_SETTLED, 120).map(line => Bun.stripANSI(line));
+		const header = lines.find(line => line.includes("Background Jobs")) ?? "";
+		expect(header).toMatch(/^Background Jobs \(1 running\):/);
+		expect(lines.join("\n")).toContain("[task] SomeTask: summarized current action - 1m23s");
 	});
 
 	it("renders shell jobs as [shell] cmd - age with no id or colon", () => {
