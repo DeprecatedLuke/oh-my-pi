@@ -2629,7 +2629,7 @@ class CodexStreamProcessor {
 					sentTurnStateHeader: Boolean(this.requestContext.websocketState?.turnState),
 					sentModelsEtagHeader: Boolean(this.requestContext.websocketState?.modelsEtag),
 				});
-			throw new CodexProviderStreamError("Codex stream ended before terminal completion event", false);
+			throw new CodexProviderStreamError("Codex stream ended before terminal completion event", true);
 		}
 		if (output.stopReason === "aborted" || output.stopReason === "error") {
 			throw new CodexProviderStreamError("Codex response failed", false);

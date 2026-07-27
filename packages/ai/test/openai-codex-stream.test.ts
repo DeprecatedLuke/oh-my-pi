@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { scheduler } from "node:timers/promises";
 import { streamSimple } from "@oh-my-pi/pi-ai";
+import * as AIError from "@oh-my-pi/pi-ai/error";
 import {
 	getOpenAICodexTransportDetails,
 	getOpenAICodexWebSocketDebugStats,
@@ -1884,8 +1885,8 @@ describe("openai-codex streaming", () => {
 			apiKey: token,
 			fetch: fetchMock as FetchImpl,
 		}).result();
-		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toContain("terminal completion event");
+		expect(result.errorMessage).toBe("Codex stream ended before terminal completion event");
+		expect(AIError.is(result.errorId, AIError.Flag.Transient)).toBe(true);
 	});
 
 	it("stops reading SSE responses after a terminal response event", async () => {
