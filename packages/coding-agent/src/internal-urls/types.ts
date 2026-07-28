@@ -183,7 +183,6 @@ export interface ProtocolHandler {
 	 * Handlers that omit this method are treated as read-only; the write tool
 	 * surfaces a clear "not writable" error when invoked against them.
 	 */
-	// biome-ignore lint/suspicious/noConfusingVoidType: a write handler may surface a WriteResult status or nothing; void-returning handlers (vault/host-uris) cannot satisfy `| undefined` without a forced return.
 	write?(url: InternalUrl, content: string, context?: WriteContext): Promise<WriteResult | void>;
 	/**
 	 * Optional autocomplete hook. Returns candidate completions for the

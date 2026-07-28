@@ -17,7 +17,7 @@ async function expectRootSearchRejected(searchPath: string): Promise<void> {
 	const tool = new GlobTool(session);
 	let thrown: unknown;
 	try {
-		await tool.execute("glob-root-regression", { path: searchPath });
+		await tool.execute("glob-root-regression", { paths: [searchPath] });
 	} catch (error) {
 		thrown = error;
 	}

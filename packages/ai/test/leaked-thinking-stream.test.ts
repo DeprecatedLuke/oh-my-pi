@@ -659,10 +659,8 @@ describe("leaked thinking healing through stream()", () => {
 		return Object.assign(fn, { preconnect: fetch.preconnect });
 	}
 
-	it("splits a leaked fence from a provider with no own healer", async () => {
-		// Anthropic has no provider-local visible-text healer, so a split here
-		// proves the central wrapper is composed into stream().
-		const model: Model<"anthropic-messages"> = buildModel({
+	function anthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}): Model<"anthropic-messages"> {
+		return buildModel({
 			id: "claude-sonnet-4-5",
 			name: "Claude Sonnet 4.5",
 			api: "anthropic-messages",
@@ -673,10 +671,17 @@ describe("leaked thinking healing through stream()", () => {
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 200_000,
 			maxTokens: 8_192,
+			...overrides,
 		});
-		const leaked = "```thinking\nDeliberate.\n```\nFinal answer.";
-		const context: Context = { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] };
-		const result = await stream(model, context, {
+	}
+
+	const leaked = "```thinking\nDeliberate.\n```\nFinal answer.";
+	const context: Context = { messages: [{ role: "user", content: "hi", timestamp: Date.now() }] };
+
+	it("splits a leaked fence from a provider with no own healer", async () => {
+		// Anthropic has no provider-local visible-text healer, so a split here
+		// proves the central wrapper is composed into stream().
+		const result = await stream(anthropicModel(), context, {
 			apiKey: "test",
 			fetch: anthropicLeakFetch(leaked),
 		}).result();

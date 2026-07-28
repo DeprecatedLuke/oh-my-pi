@@ -282,6 +282,7 @@ import {
 	type PythonExecutionMessage,
 	SILENT_ABORT_MARKER,
 	SKILL_PROMPT_MESSAGE_TYPE,
+	sanitizeAssistantForReparentedHistory,
 	USER_INTERRUPT_LABEL,
 } from "./messages";
 import { ModelControls, type ModelControlsHost } from "./model-controls";
@@ -318,7 +319,6 @@ import { planTurnPersistence, sameMessageContent, sessionMessagePersistenceKey }
 import { TurnRecovery, type TurnRecoveryHost } from "./turn-recovery";
 import { runWokenTurnTracked } from "./woken-turn";
 import { YieldQueue } from "./yield-queue";
-
 
 
 export * from "./agent-session-events";

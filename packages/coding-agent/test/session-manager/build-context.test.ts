@@ -1,4 +1,5 @@
 import { describe, expect, it, spyOn } from "bun:test";
+
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { buildSessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import type {

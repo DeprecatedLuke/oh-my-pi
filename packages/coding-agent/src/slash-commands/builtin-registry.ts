@@ -52,7 +52,6 @@ import {
 	RECENT_CHANGELOG_ENTRY_LIMIT,
 	renderChangelogEntries,
 } from "../utils/changelog";
-import { copyToClipboard } from "../utils/clipboard";
 import type { InspectImageMode } from "../utils/inspect-image-mode";
 import { CollabQrCodeComponent } from "./helpers/collab-qrcode";
 import { buildContextReportText } from "./helpers/context-report";

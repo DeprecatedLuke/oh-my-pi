@@ -3,6 +3,7 @@ import {
 	type BlockState,
 	mergeCursorMcpToolCallArgs,
 	processInteractionUpdate,
+	synthesizeCursorExecToolCall,
 	type ToolCallState,
 	type UsageState,
 } from "@oh-my-pi/pi-ai/providers/cursor";

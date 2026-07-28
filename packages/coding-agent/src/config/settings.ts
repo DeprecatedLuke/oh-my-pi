@@ -40,7 +40,6 @@ import { AgentStorage } from "../session/agent-storage";
 import { AUTO_IMAGE_PROVIDER_ORDER, isImageProviderId } from "../tools/image-providers";
 import { type EditMode, normalizeEditMode } from "../utils/edit-mode";
 import { INSPECT_IMAGE_MODES } from "../utils/inspect-image-mode";
-import { isSearchProviderId, SEARCH_PROVIDER_ORDER } from "../web/search/types";
 import { withFileLock } from "./file-lock";
 import {
 	type BashInterceptorRule,

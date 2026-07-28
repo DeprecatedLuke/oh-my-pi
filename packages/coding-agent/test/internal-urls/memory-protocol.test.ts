@@ -256,12 +256,12 @@ describe("MemoryProtocolHandler", () => {
 			await Bun.write(path.join(memoryRoot, "skills", "demo", "notes.txt"), "not markdown");
 
 			const tool = createGlobTool(cwd);
-			const result = await tool.execute("memory-glob", { path: "memory://root/skills/**/*.md" });
+			const result = await tool.execute("memory-glob", { paths: ["memory://root/skills/**/*.md"] });
 
 			expect(result.details?.files).toHaveLength(1);
 			expect(result.details?.files?.[0]).toEndWith("/skills/demo/nested/SKILL.md");
 
-			const rootResult = await tool.execute("memory-root-glob", { path: "memory://root/**/*.md" });
+			const rootResult = await tool.execute("memory-root-glob", { paths: ["memory://root/**/*.md"] });
 
 			expect(rootResult.details?.files).toHaveLength(1);
 			expect(rootResult.details?.files?.[0]).toEndWith("/skills/demo/nested/SKILL.md");
@@ -276,7 +276,7 @@ describe("MemoryProtocolHandler", () => {
 			await Bun.write(path.join(skillsDir, "ab.md"), "two characters");
 
 			const result = await createGlobTool(cwd).execute("memory-question-glob", {
-				path: "memory://root/skills/?.md",
+				paths: ["memory://root/skills/?.md"],
 			});
 
 			expect(result.details?.files).toHaveLength(1);
@@ -291,7 +291,7 @@ describe("MemoryProtocolHandler", () => {
 			await Bun.write(path.join(encodedLiteralDir, "SKILL.md"), "encoded literal directory");
 
 			const result = await createGlobTool(cwd).execute("memory-encoded-literal-glob", {
-				path: "memory://root/skills/%5Bdemo%5D/*.md",
+				paths: ["memory://root/skills/%5Bdemo%5D/*.md"],
 			});
 
 			expect(result.details?.files).toHaveLength(1);
@@ -307,7 +307,7 @@ describe("MemoryProtocolHandler", () => {
 			await Bun.write(path.join(skillsDir, "d.md"), "single character");
 
 			const result = await createGlobTool(cwd).execute("memory-encoded-suffix-glob", {
-				path: "memory://root/*/%5Bdemo%5D.md",
+				paths: ["memory://root/*/%5Bdemo%5D.md"],
 			});
 
 			expect(result.details?.files).toHaveLength(1);
@@ -319,7 +319,7 @@ describe("MemoryProtocolHandler", () => {
 		"rejects traversal in a memory glob suffix: %s",
 		async pattern => {
 			await withMemoryFixture(async ({ cwd }) => {
-				await expect(createGlobTool(cwd).execute("memory-glob-traversal", { path: pattern })).rejects.toThrow(
+				await expect(createGlobTool(cwd).execute("memory-glob-traversal", { paths: [pattern] })).rejects.toThrow(
 					/traversal/i,
 				);
 			});
@@ -330,7 +330,7 @@ describe("MemoryProtocolHandler", () => {
 		"rejects encoded separators in a memory glob suffix: %s",
 		async pattern => {
 			await withMemoryFixture(async ({ cwd }) => {
-				await expect(createGlobTool(cwd).execute("memory-glob-separator", { path: pattern })).rejects.toThrow(
+				await expect(createGlobTool(cwd).execute("memory-glob-separator", { paths: [pattern] })).rejects.toThrow(
 					/encoded path separator/i,
 				);
 			});
