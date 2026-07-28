@@ -1,8 +1,6 @@
 /**
- * Unified `hub` wait: one blocking primitive racing background jobs against
- * incoming peer messages. These contracts are new to the merge — the halves
- * (pure message wait, pure job poll) are covered by the pre-existing
- * messaging/job suites.
+ * `hub wait` routes peer-message waits while rejecting removed background-job
+ * blocking. Job snapshots and automatic delivery are covered by the job suites.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
@@ -18,7 +16,6 @@ function makeSession(manager: AsyncJobManager | undefined): ToolSession {
 		cwd: process.cwd(),
 		settings: {
 			get(key: string): unknown {
-				if (key === "async.pollWaitDuration") return "5m";
 				if (key === "irc.timeoutMs") return 120_000;
 				return undefined;
 			},
@@ -31,14 +28,12 @@ function makeSession(manager: AsyncJobManager | undefined): ToolSession {
 	return stub as unknown as ToolSession;
 }
 
-/** Register a job that never settles on its own; returns its id + resolver. */
-function registerHangingJob(manager: AsyncJobManager, label: string): { id: string; finish: (text: string) => void } {
-	const { promise, resolve } = Promise.withResolvers<string>();
-	const id = manager.register("bash", label, async () => promise, { ownerId: SELF_ID });
-	return { id, finish: resolve };
+/** Register a job that never settles on its own; returns its id. */
+function registerHangingJob(manager: AsyncJobManager, label: string): string {
+	return manager.register("bash", label, () => new Promise<string>(() => {}), { ownerId: SELF_ID });
 }
 
-describe("hub unified wait", () => {
+describe("hub peer-message wait routing", () => {
 	beforeEach(() => {
 		AgentRegistry.resetGlobalForTests();
 		IrcBus.resetGlobalForTests();
@@ -48,18 +43,18 @@ describe("hub unified wait", () => {
 		IrcBus.resetGlobalForTests();
 	});
 
-	test("an incoming message settles the wait while watched jobs keep running", async () => {
+	test("a from-scoped wait consumes matching peer messages while jobs stay untouched", async () => {
 		const registry = AgentRegistry.global();
 		registry.register({ id: SELF_ID, displayName: "main", kind: "main", session: null });
 		registry.register({ id: "Peer", displayName: "task", kind: "sub", parentId: SELF_ID, session: null });
 
 		const manager = new AsyncJobManager({ onJobComplete: () => {} });
-		const job = registerHangingJob(manager, "sleep forever");
+		const jobId = registerHangingJob(manager, "sleep forever");
 		const tool = new HubTool(makeSession(manager));
 
 		// The bus waiter is parked synchronously before execute()'s first
 		// suspension, so the send below cannot race the park.
-		const pending = tool.execute("call_1", { op: "wait" });
+		const pending = tool.execute("call_1", { op: "wait", from: "Peer" });
 		await IrcBus.global().send({ from: "Peer", to: SELF_ID, body: "shared file is yours" });
 
 		const result = await pending;
@@ -68,45 +63,30 @@ describe("hub unified wait", () => {
 		expect(details.op).toBe("wait");
 		expect(details.waited?.from).toBe("Peer");
 		expect(details.waited?.body).toBe("shared file is yours");
-		// The job was not consumed by the message win.
-		expect(manager.getJob(job.id)?.status).toBe("running");
+		// The message win does not settle or cancel an unrelated running job.
+		expect(manager.getJob(jobId)?.status).toBe("running");
 
-		manager.cancel(job.id);
+		manager.cancel(jobId);
 	});
 
-	test("a settling job returns the snapshot exactly like the old poll", async () => {
-		const registry = AgentRegistry.global();
-		registry.register({ id: SELF_ID, displayName: "main", kind: "main", session: null });
-		registry.register({ id: "Peer", displayName: "task", kind: "sub", parentId: SELF_ID, session: null });
-
+	test("rejects background-job waits without settling or cancelling jobs", async () => {
 		const manager = new AsyncJobManager({ onJobComplete: () => {} });
-		const job = registerHangingJob(manager, "quick job");
+		const jobId = registerHangingJob(manager, "sleep forever");
 		const tool = new HubTool(makeSession(manager));
 
-		const pending = tool.execute("call_2", { op: "wait", ids: [job.id] });
-		job.finish("done output");
+		const bare = await tool.execute("call_bare", { op: "wait" });
+		const byId = await tool.execute("call_ids", { op: "wait", ids: [jobId] });
+		const fromAndIds = await tool.execute("call_from_ids", { op: "wait", from: "Peer", ids: [jobId] });
+		const fromAndEmptyIds = await tool.execute("call_from_empty_ids", { op: "wait", from: "Peer", ids: [] });
+		for (const result of [bare, byId, fromAndIds, fromAndEmptyIds]) {
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			expect(result.isError).toBe(true);
+			expect(text).toContain("Background-job waiting is disabled");
+			expect(text).toContain("auto-deliver");
+			expect(text).toContain("End the turn immediately");
+			expect(manager.getJob(jobId)?.status).toBe("running");
+		}
 
-		const result = await pending;
-		const details = result.details as CoordinationDetails;
-		expect(details.op).toBe("wait");
-		expect(details.jobs?.map(j => j.status)).toEqual(["completed"]);
-		expect(details.jobs?.[0]?.resultText).toBe("done output");
-		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("## Completed (1)");
-	});
-
-	test("bare wait with no jobs and no running peers returns immediately", async () => {
-		const registry = AgentRegistry.global();
-		registry.register({ id: SELF_ID, displayName: "main", kind: "main", session: null });
-		registry.register({ id: "Sleeper", displayName: "task", kind: "sub", session: null, status: "idle" });
-
-		const manager = new AsyncJobManager({ onJobComplete: () => {} });
-		const tool = new HubTool(makeSession(manager));
-
-		// A regression to a blocking message wait fails via the test timeout.
-		const result = await tool.execute("call_3", { op: "wait" });
-		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-		expect(text).toContain("No running background jobs to wait for.");
-		expect(result.useless).toBe(true);
+		manager.cancel(jobId);
 	});
 });

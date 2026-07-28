@@ -130,11 +130,19 @@ describe("AgentSession magic keyword settings", () => {
 
 		await session.prompt("please orchestrate and workflowz this");
 
-		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
+		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ content?: string; customType?: string }>;
 		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([
 			"orchestrate-notice",
 			"workflow-notice",
 		]);
+		const orchestrateNotice =
+			promptMessages.find(message => message.customType === "orchestrate-notice")?.content ?? "";
+		expect(orchestrateNotice).toContain("Results auto-deliver");
+		expect(orchestrateNotice).toContain("sole blocker");
+		expect(orchestrateNotice).toContain(
+			"end the turn IMMEDIATELY — produce NO prose, status, filler, or progress tokens, invoke NO wait/sleep/poll/status/unrelated tool call.",
+		);
+		expect(orchestrateNotice).not.toContain("hub wait");
 	});
 
 	it("renders the eval-specific workflowz notice", async () => {

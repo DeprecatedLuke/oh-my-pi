@@ -133,6 +133,10 @@ describe("task spawn routing", () => {
 		const jobId = result.details?.async?.jobId;
 		expect(jobId).toBeTruthy();
 		expect(text).toContain(`job \`${jobId}\``);
+		expect(text).toContain("auto-delivers on yield");
+		expect(text).toContain("hub jobs");
+		expect(text).toContain("hub` only to inspect (`jobs`) or cancel");
+		expect(text).not.toContain("hub wait");
 		const job = manager.getJob(jobId!);
 		expect(job?.status).toBe("running");
 		expect(job?.resultText).toBeUndefined();

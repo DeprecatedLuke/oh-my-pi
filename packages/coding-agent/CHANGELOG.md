@@ -50,6 +50,9 @@
 - Fixed omp worktree clear prematurely deleting active task-isolation sandboxes owned by running subagents.
 - Fixed /vibe mode preventing the director from completing parent tasks after verifying worker results by keeping the built-in todo tool active.
 - Fixed numeric GitHub issue and pull request autocomplete being suppressed inside skill slash-command arguments.
+### Breaking Changes
+
+- Removed background-job waiting from `hub wait`: bare waits and waits with `ids` now fail immediately, while peer-message waits (`from`) and supervised-process waits (`name`) remain. Background results auto-deliver, job snapshots are inspection-only, sole-blocker guidance requires ending the turn without status or delay calls, and the obsolete `async.pollWaitDuration` setting is gone.
 
 ## [17.1.7] - 2026-07-27
 

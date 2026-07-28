@@ -202,11 +202,10 @@ export class EventController {
 	// Insertion-ordered IRC cards not yet retired; values are the transcript
 	// components each card contributed (see #retireIrcCard for the guard).
 	#liveIrcCards = new Map<string, Component[]>();
-	// Most recent `hub` tool block whose result still had every watched job
-	// running. Kept un-finalized (live) so the next `hub` call displaces it —
-	// one persistent poll instead of a stack of "waiting on N jobs" frames —
-	// and sealed in place the moment anything else lands below it.
-	#displaceablePollComponent: ToolExecutionComponent | undefined = undefined;
+	// Most recent all-running `hub jobs` snapshot. Kept live so the next `hub`
+	// call replaces it instead of stacking status frames, then sealed when
+	// anything else lands below it.
+	#displaceableHubSnapshotComponent: ToolExecutionComponent | undefined = undefined;
 	// Most recent successful `todo` snapshot in the active turn. It stays live
 	// across intervening tool output so a later `todo` update can replace the
 	// old full list; the turn boundary seals the final snapshot as history.
@@ -436,7 +435,7 @@ export class EventController {
 		}
 		this.#ircExpiryTimers.clear();
 		this.#liveIrcCards.clear();
-		this.#displaceablePollComponent = undefined;
+		this.#displaceableHubSnapshotComponent = undefined;
 		this.#displaceableTodoComponent = undefined;
 		this.#lastTtsrNotification = undefined;
 		this.#streamingReveal.stop();
@@ -569,7 +568,7 @@ export class EventController {
 			const signature = `${textContent}\u0000${imageCount}`;
 
 			this.#resetReadGroup();
-			this.#resolveDisplaceablePoll();
+			this.#resolveDisplaceableHubSnapshot();
 			this.#resolveDisplaceableTodo();
 			const wasOptimistic = this.ctx.optimisticUserMessageSignature === signature;
 			const matchedLocalSubmission = this.ctx.locallySubmittedUserSignatures.delete(signature);
@@ -680,18 +679,18 @@ export class EventController {
 	}
 
 	/**
-	 * Resolve the pending displaceable poll block before the next block lands.
-	 * A follow-up `hub` call displaces it — the stale "waiting on N jobs" frame
-	 * is removed so repeated polls read as one persistent poll — while anything
-	 * else seals it in place as final history. Removal is gated on none of the
-	 * block's rows having entered native scrollback: rows already on the tape
-	 * are immutable visual history, so a scrolled-off poll seals instead of
-	 * being retracted.
+	 * Resolve the pending refreshable jobs snapshot before the next block lands.
+	 * A follow-up `hub` call displaces an all-running snapshot so repeated
+	 * inspections read as one live frame; anything else seals it in place as
+	 * final history. Removal is safe only because a
+	 * displaceable block never finalizes: commits stop at the first live block,
+	 * so none of its rows have entered native scrollback (see
+	 * ToolExecutionComponent.isDisplaceableBlock).
 	 */
-	#resolveDisplaceablePoll(nextToolName?: string): void {
-		const previous = this.#displaceablePollComponent;
+	#resolveDisplaceableHubSnapshot(nextToolName?: string): void {
+		const previous = this.#displaceableHubSnapshotComponent;
 		if (!previous) return;
-		this.#displaceablePollComponent = undefined;
+		this.#displaceableHubSnapshotComponent = undefined;
 		if (
 			nextToolName === "hub" &&
 			previous.isDisplaceableBlock() &&
@@ -699,7 +698,7 @@ export class EventController {
 		) {
 			this.ctx.chatContainer.removeChild(previous);
 		}
-		// Sealing stops the waiting-poll spinner and freezes the block (for a
+		// Sealing stops the running-jobs spinner and freezes the block (for a
 		// just-removed component it only clears the animation timer).
 		previous.seal();
 		this.ctx.ui.requestRender();
@@ -833,7 +832,7 @@ export class EventController {
 						continue;
 					}
 					if (readArgsCollapseIntoGroup(displayArgs)) {
-						if (!this.ctx.pendingTools.has(content.id)) this.#resolveDisplaceablePoll(content.name);
+						if (!this.ctx.pendingTools.has(content.id)) this.#resolveDisplaceableHubSnapshot(content.name);
 						this.#trackReadToolCall(content.id, displayArgs);
 						const component = this.ctx.pendingTools.get(content.id);
 						if (component) {
@@ -878,7 +877,7 @@ export class EventController {
 				// check the next cumulative update would recreate a card for a call
 				// that already finished, permanently pending.
 				if (!this.ctx.pendingTools.has(content.id) && !this.#toolTimelineComponents.has(content.id)) {
-					this.#resolveDisplaceablePoll(content.name);
+					this.#resolveDisplaceableHubSnapshot(content.name);
 					this.#resetReadGroup();
 					const component = new ToolExecutionComponent(
 						content.name,
@@ -1011,9 +1010,9 @@ export class EventController {
 						component.seal();
 					}
 				}
-				// These calls will never produce a result either, so the tracked
-				// waiting poll cannot be displaced anymore — freeze it in place.
-				this.#resolveDisplaceablePoll();
+				// These calls will never produce a result either, so a refreshable
+				// jobs snapshot cannot be displaced anymore — freeze it in place.
+				this.#resolveDisplaceableHubSnapshot();
 			}
 			// Surface a prompt-cache invalidation: if the previous turn cached a
 			// meaningful prefix and this request read none of it back, flag the turn.
@@ -1070,7 +1069,7 @@ export class EventController {
 			this.#approvalAttentionToolCallIds.add(event.toolCallId);
 			setTerminalTitleState("attention");
 		}
-		this.#resolveDisplaceablePoll(event.toolName);
+		this.#resolveDisplaceableHubSnapshot(event.toolName);
 		if (!this.ctx.pendingTools.has(event.toolCallId)) {
 			if (event.toolName === "read" && readArgsCollapseIntoGroup(event.args)) {
 				this.#trackReadToolCall(event.toolCallId, event.args);
@@ -1272,8 +1271,8 @@ export class EventController {
 				}
 				if (component instanceof ToolExecutionComponent && component.isDisplaceableBlock()) {
 					if (event.toolName === "hub" && component.canBeDisplacedBy("hub")) {
-						// Remember the waiting poll so the next `hub` call can displace it.
-						this.#displaceablePollComponent = component;
+						// Keep the all-running snapshot live so the next `hub` call can displace it.
+						this.#displaceableHubSnapshotComponent = component;
 					} else if (event.toolName === "todo" && component.canBeDisplacedBy("todo")) {
 						// Successful todo update supersedes the prior live snapshot. A failed
 						// follow-up never reaches this branch (canBeDisplacedBy("todo") returns
@@ -1410,9 +1409,9 @@ export class EventController {
 		this.#orphanedToolCompletions.clear();
 		this.#postToolAssistantComponents.clear();
 		this.#resetReadGroup();
-		// The turn is over: nothing else lands this turn, so the waiting poll is
-		// final history — seal it instead of letting its spinner tick while idle.
-		this.#resolveDisplaceablePoll();
+		// The turn is over: nothing else will land, so the jobs snapshot is final
+		// history — seal it instead of letting its spinner tick while idle.
+		this.#resolveDisplaceableHubSnapshot();
 		this.#resolveDisplaceableTodo();
 		this.ctx.flushPendingCommandOutput();
 		this.#lastAssistantComponent = undefined;

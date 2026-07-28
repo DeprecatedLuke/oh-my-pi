@@ -93,8 +93,7 @@ export * from "./eval-backends";
 export * from "./gh";
 export * from "./glob";
 export * from "./grep";
-export { HubTool, hubToolRenderer } from "./hub";
-export { isWaitingPollDetails } from "./hub/jobs";
+export { HubTool, hubToolRenderer, isRefreshableJobsSnapshotDetails } from "./hub";
 export type {
 	AgentActivitySnapshot,
 	CancelOutcome,

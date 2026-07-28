@@ -5,14 +5,14 @@
  *
  * Op families:
  * - messaging: `send` (with `to`), `inbox`, `list`, `wait` (with `from`);
- * - jobs: `wait` (bare or with `ids`), `cancel`, `jobs`;
+ * - jobs: `cancel`, `jobs`;
  * - processes: `start`, `ps`, `logs`, `stop`, `restart`, `describe`, plus
  *   `send`/`wait` when they carry a process `name`.
  *
- * The unified `wait` blocks until the FIRST of: a matching peer message, a
- * watched job settling, the wait window elapsing, or a steering interrupt.
- * Job results always deliver themselves when they finish — `wait` exists for
- * when the agent has nothing else to do.
+ * Job results auto-deliver. Background-job waiting is disabled.
+ * A bare `hub wait` or `wait` with `ids` returns an immediate error.
+ * Message wait (`wait` with `from`) and process wait (`wait` with `name`)
+ * still route correctly.
  */
 
 import type {
@@ -27,23 +27,11 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import type { RenderResultOptions } from "../../extensibility/custom-tools/types";
-import { IrcBus } from "../../irc/bus";
 import type { Theme } from "../../modes/theme/theme";
 import hubDescription from "../../prompts/tools/hub.md" with { type: "text" };
 import type { AgentRegistry } from "../../registry/agent-registry";
 import type { ToolSession } from "..";
-import {
-	buildJobResult,
-	executeCancel,
-	executeJobsSnapshot,
-	jobsRenderCall,
-	jobsRenderResult,
-	noMatchingJobsResult,
-	nothingToWaitForResult,
-	resolvePollWindow,
-	snapshotJobs,
-	visibleJobs,
-} from "./jobs";
+import { executeCancel, executeJobsSnapshot, jobsRenderCall, jobsRenderResult } from "./jobs";
 import {
 	executeLaunch,
 	type LaunchParams,
@@ -61,11 +49,10 @@ import {
 	messageResult,
 	messagingRenderCall,
 	messagingRenderResult,
-	normalizeIrcTimeoutMs,
 } from "./messaging";
 import { type HubDetails, type HubRenderArgs, hubErrorResult } from "./types";
 
-export { isWaitingPollDetails } from "./jobs";
+export { isRefreshableJobsSnapshotDetails } from "./jobs";
 export type { LaunchParams, LaunchToolDetails } from "./launch";
 export { createIrcMessageCard, isIrcEnabled } from "./messaging";
 export * from "./types";
@@ -79,8 +66,8 @@ const hubSchema = type({
 	"replyTo?": type("string").describe("send: message id being answered"),
 	"await?": type("boolean").describe('send: wait for the recipient\'s reply (invalid with to:"all")'),
 	"from?": type("string").describe("wait: only accept a message from this agent id"),
-	"ids?": type("string[]").describe("wait: job ids to watch (omit = all running jobs); cancel: job ids to kill"),
-	"timeoutMs?": type("number").describe("wait (messages/jobs): timeout in milliseconds (0 waits indefinitely)"),
+	"ids?": type("string[]").describe("cancel: job ids to kill"),
+	"timeoutMs?": type("number").describe("wait (messages): timeout in milliseconds (0 waits indefinitely)"),
 	"peek?": type("boolean").describe("inbox: list messages without consuming them"),
 	"name?": type("string <= 48").describe("process ops: stable project-scoped launch name"),
 	"application?": type("string > 0").describe("start: executable or application path"),
@@ -123,8 +110,6 @@ interface MessagingDeps {
 	settings: ToolSession["settings"];
 }
 
-const PROGRESS_INTERVAL_MS = 500;
-
 /** Mutating process ops require exec approval; messaging, jobs, and inspection are read-only. */
 function hubApproval(params: unknown): ToolApprovalDecision {
 	if (typeof params !== "object" || params === null || !("op" in params)) return "exec";
@@ -155,7 +140,7 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 	readonly name = "hub";
 	readonly approval = hubApproval;
 	readonly label = "Hub";
-	readonly summary = "Message peer agents, control background jobs, and supervise long-running processes";
+	readonly summary = "Message peer agents, snapshot/cancel background jobs, and supervise long-running processes";
 	readonly description: string;
 	readonly parameters = hubSchema;
 	readonly strict = true;
@@ -187,10 +172,7 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 				await: true,
 			},
 		},
-		{
-			caption: "Completely blocked: wait for the first finished job or incoming message",
-			call: { op: "wait" },
-		},
+
 		{
 			caption: "Block until a specific peer answers",
 			call: { op: "wait", from: "AuthLoader", timeoutMs: 60000 },
@@ -247,7 +229,7 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 		_toolCallId: string,
 		params: HubParams,
 		signal?: AbortSignal,
-		onUpdate?: AgentToolUpdateCallback<HubDetails>,
+		_onUpdate?: AgentToolUpdateCallback<HubDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<HubDetails>> {
 		switch (params.op) {
@@ -276,7 +258,7 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 			}
 			case "wait":
 				if (params.name?.trim()) return this.#launch(params, "wait", signal);
-				return this.#executeWait(params, signal, onUpdate);
+				return this.#executeWait(params, signal);
 			case "cancel": {
 				const manager = this.session.asyncJobManager;
 				if (!manager) return this.#asyncDisabled("cancel");
@@ -326,157 +308,45 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 		const { op: _hubOp, ...rest } = params;
 		return executeLaunch(this.session, { ...rest, op }, signal);
 	}
-
 	/**
-	 * Unified wait: race the caller's running jobs against incoming peer
-	 * messages. Returns on the FIRST settled job, the first matching message,
-	 * window expiry, or abort — never "when everything finishes"; the model
-	 * re-issues to keep waiting. With no job legs it degrades to a pure
-	 * message wait; with no messaging it is exactly the old job poll.
+	 * Wait for a peer message (`from`). Background-job waiting is disabled:
+	 * a bare `wait` or `wait` with `ids` returns an immediate error.
 	 */
-	async #executeWait(
-		params: HubParams,
-		signal?: AbortSignal,
-		onUpdate?: AgentToolUpdateCallback<HubDetails>,
-	): Promise<AgentToolResult<HubDetails>> {
+	async #executeWait(params: HubParams, signal?: AbortSignal): Promise<AgentToolResult<HubDetails>> {
+		// Reject job-wait shapes before any message-wait routing.
+		if (params.ids !== undefined) {
+			return hubErrorResult(
+				"Background-job waiting is disabled; job results auto-deliver. " +
+					"A `wait` with `ids` cannot block on jobs. " +
+					"No independent work remains? End the turn immediately without prose or tool calls.",
+				{ op: "wait" },
+			);
+		}
+
 		const messaging = this.#messaging();
-		const manager = this.session.asyncJobManager;
-		const ownerId = this.#ownerId();
 		const from = params.from?.trim() || undefined;
 
-		// A message already buffered on the session satisfies the wait first.
+		if (!from) {
+			// Bare `wait` — nothing to wait for.
+			return hubErrorResult(
+				"Background-job waiting is disabled; job results auto-deliver. " +
+					"A bare `hub wait` cannot block on jobs. " +
+					"No independent work remains? End the turn immediately without prose or tool calls.",
+				{ op: "wait" },
+			);
+		}
+
+		// Message wait: check for a message already buffered.
 		if (messaging) {
 			const pending = drainPendingInbox(messaging.registry, messaging.senderId, from);
 			if (pending) return messageResult(messaging.senderId, pending);
 		}
 
-		// Resolve which jobs to watch:
-		// - explicit `ids` → exactly those (owner-scoped; missing ids corrected);
-		// - omitted → every running job the caller owns.
-		const ids = params.ids;
-		const jobsToWatch = manager
-			? ids?.length
-				? visibleJobs(manager, ids, ownerId)
-				: manager.getRunningJobs(ownerId ? { ownerId } : undefined)
-			: [];
-		if (manager && ids?.length && jobsToWatch.length === 0) {
-			return noMatchingJobsResult(this.session, ids);
-		}
-		const runningJobs = jobsToWatch.filter(j => j.status === "running");
-		if (manager && jobsToWatch.length > 0 && runningJobs.length === 0) {
-			// Every explicitly watched job already settled — immediate snapshot.
-			return buildJobResult(this.session, manager, "wait", jobsToWatch, []);
+		if (!messaging) {
+			return hubErrorResult("Peer messaging is unavailable in this session.", { op: "wait" });
 		}
 
-		if (!manager || runningJobs.length === 0) {
-			// No job legs: pure message wait — or nothing to block on at all.
-			if (!messaging) return nothingToWaitForResult(this.session);
-			if (!from) {
-				// A bare wait can only be satisfied by a running peer eventually
-				// sending something; with none, return the snapshot immediately
-				// instead of blocking a full message-timeout window.
-				const hasRunningPeer = messaging.registry
-					.listVisibleTo(messaging.senderId)
-					.some(ref => ref.status === "running");
-				if (!hasRunningPeer) return nothingToWaitForResult(this.session);
-			}
-			return executeMessageWait(messaging, { from, timeoutMs: params.timeoutMs }, signal);
-		}
-
-		// Wait window: explicit timeout wins (0 = no window); otherwise the
-		// `async.pollWaitDuration` fixed value or smart ladder. The ladder
-		// starts at the floor and climbs as the agent waits in a tight loop,
-		// then resets once it steps away (see AsyncJobManager.nextPollWaitMs).
-		const window = resolvePollWindow(this.session, manager, ownerId);
-		const windowMs = params.timeoutMs !== undefined ? normalizeIrcTimeoutMs(params.timeoutMs) : window.waitMs;
-		const usedSmartWindow = window.smart && params.timeoutMs === undefined;
-
-		const racePromises: Promise<unknown>[] = runningJobs.map(j => j.promise);
-
-		// Message leg: park a bus waiter with no timeout of its own — the race
-		// window governs. Cancelled via sentinel so late losers do not reject.
-		const busAbort = messaging ? new AbortController() : undefined;
-		const busCancelled = new Error("hub wait settled");
-		let removeBusAbortListener: (() => void) | undefined;
-		const busLeg =
-			messaging && busAbort
-				? IrcBus.global()
-						.wait(messaging.senderId, { from }, 0, busAbort.signal)
-						.then(
-							message => ({ message, error: null as Error | null }),
-							error => ({
-								message: null,
-								error:
-									error === busCancelled ? null : error instanceof Error ? error : new Error(String(error)),
-							}),
-						)
-				: undefined;
-		if (busLeg) racePromises.push(busLeg);
-		if (busAbort && signal) {
-			if (signal.aborted) {
-				busAbort.abort(signal.reason instanceof Error ? signal.reason : new Error("hub wait aborted"));
-			} else {
-				const onAbort = (): void => {
-					busAbort.abort(signal.reason instanceof Error ? signal.reason : new Error("hub wait aborted"));
-				};
-				signal.addEventListener("abort", onAbort, { once: true });
-				removeBusAbortListener = () => signal.removeEventListener("abort", onAbort);
-			}
-		}
-
-		const { promise: timeoutPromise, resolve: timeoutResolve } = Promise.withResolvers<void>();
-		const timeoutHandle = windowMs > 0 ? setTimeout(() => timeoutResolve(), windowMs) : undefined;
-		if (timeoutHandle) racePromises.push(timeoutPromise);
-
-		const watchedJobIds = runningJobs.map(job => job.id);
-		manager.watchJobs(watchedJobIds);
-
-		const emitProgress = () => {
-			if (!onUpdate) return;
-			onUpdate({
-				content: [{ type: "text", text: "" }],
-				details: { op: "wait", jobs: snapshotJobs(this.session, jobsToWatch) },
-			});
-		};
-		const progressTimer = onUpdate ? setInterval(emitProgress, PROGRESS_INTERVAL_MS) : undefined;
-		emitProgress();
-
-		try {
-			if (signal) {
-				const { promise: abortPromise, resolve: abortResolve } = Promise.withResolvers<void>();
-				const onAbort = () => abortResolve();
-				signal.addEventListener("abort", onAbort, { once: true });
-				racePromises.push(abortPromise);
-				try {
-					await Promise.race(racePromises);
-				} finally {
-					signal.removeEventListener("abort", onAbort);
-				}
-			} else {
-				await Promise.race(racePromises);
-			}
-		} finally {
-			manager.unwatchJobs(watchedJobIds);
-			if (timeoutHandle) clearTimeout(timeoutHandle);
-			if (progressTimer) clearInterval(progressTimer);
-			busAbort?.abort(busCancelled);
-			removeBusAbortListener?.();
-			if (usedSmartWindow) {
-				// Reset the idle-gap clock: escalate if the agent waits again soon,
-				// drop back to the floor once it goes quiet for a while.
-				manager.recordPollWaitEnd(ownerId);
-			}
-		}
-
-		// A message consumed by the bus waiter must never be dropped — it wins
-		// even a photo-finish race (job results re-deliver themselves; a
-		// dequeued message would otherwise be lost).
-		if (busLeg && messaging) {
-			const settled = await busLeg;
-			if (settled.message) return messageResult(messaging.senderId, settled.message);
-		}
-
-		return buildJobResult(this.session, manager, "wait", jobsToWatch, []);
+		return executeMessageWait(messaging, { from, timeoutMs: params.timeoutMs }, signal);
 	}
 }
 
@@ -500,14 +370,12 @@ function isLaunchStyleArgs(args: HubRenderArgs | undefined): boolean {
 	return (args.op === "send" || args.op === "wait") && !!args.name && !args.to && !args.from;
 }
 
-/** Job-style call: job ops, or a `wait` that does not target a peer or process. */
+/** Job-style call: job ops only (cancel, jobs). */
 function isJobStyleArgs(args: HubRenderArgs | undefined): boolean {
 	switch (args?.op) {
 		case "jobs":
 		case "cancel":
 			return true;
-		case "wait":
-			return !!args.ids?.length || (!args.from && !args.name);
 		default:
 			return false;
 	}

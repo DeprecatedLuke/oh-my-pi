@@ -1,8 +1,8 @@
 /**
- * The `job` tool's snapshot contract: `list` and bare invocations must never
- * come back as empty text, and they must surface running subagents that have
- * no backing job (irc-woken/revived agents, spawns owned by another agent) so
- * the tool's picture matches the UI's running-agent count. Regression for the
+ * The `hub` tool's jobs snapshot contract: snapshots must never come back as
+ * empty text, and they must surface running subagents that have no backing job
+ * (irc-woken/revived agents, spawns owned by another agent) so its picture
+ * matches the UI's running-agent count. Regression for the
  * QA report "job list returned no status output despite known running
  * background jobs and subagents".
  */
@@ -120,44 +120,6 @@ describe("hub jobs snapshot", () => {
 
 		expect((result.details as CoordinationDetails)?.jobs?.find(job => job.id === "AgentB")?.status).toBe("completed");
 		expect((result.details as CoordinationDetails)?.agents?.map(agent => agent.id)).toEqual(["AgentB"]);
-	});
-});
-
-describe("hub wait with no matching jobs", () => {
-	test("bare wait with nothing running stays a useless no-op message", async () => {
-		const tool = new HubTool(createToolSession({ manager: createManager(), agentId: "Main" }));
-
-		const result = await tool.execute("call", { op: "wait" });
-
-		expect(resultText(result)).toBe("No running background jobs to wait for.");
-		expect((result.details as CoordinationDetails)?.jobs).toEqual([]);
-	});
-
-	test("bare wait reports running agents outside job control", async () => {
-		const registry = new AgentRegistry();
-		registerRunningSub(registry, "Worker");
-		const tool = new HubTool(createToolSession({ manager: createManager(), registry }));
-
-		const result = await tool.execute("call", { op: "wait" });
-
-		const text = resultText(result);
-		expect(text).toContain("Running Agents (1)");
-		expect(text).toContain("Worker");
-		expect((result.details as CoordinationDetails)?.agents?.map(agent => agent.id)).toEqual(["Worker"]);
-		expect(result.useless).toBeUndefined();
-	});
-
-	test("waiting on an agent id that has no job explains the agent's state", async () => {
-		const registry = new AgentRegistry();
-		registerRunningSub(registry, "Worker");
-		const tool = new HubTool(createToolSession({ manager: createManager(), registry, agentId: "Main" }));
-
-		const result = await tool.execute("call", { op: "wait", ids: ["Worker"] });
-
-		const text = resultText(result);
-		expect(text).toContain("No matching jobs found for IDs: Worker");
-		expect(text).toContain("running agent with no job entry");
-		expect(text).toContain("history://Worker");
 	});
 });
 

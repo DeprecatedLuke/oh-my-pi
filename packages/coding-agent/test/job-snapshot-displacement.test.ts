@@ -1,14 +1,12 @@
 /**
- * Repeated `hub` waits must not stack "waiting on N jobs" frames in the
- * transcript: a wait whose watched jobs are all still running stays live
- * (displaceable) and the next `hub` call replaces it — one persistent wait.
+ * Repeated `hub` jobs snapshots must not stack stale frames in the transcript:
+ * an all-running snapshot stays displaceable and a later hub call replaces it.
  *
  * Contracts under test:
- *  - ToolExecutionComponent: a waiting-poll result keeps the block
- *    un-finalized and displaceable; a settled/cancelled/error result
- *    finalizes normally; seal() always freezes.
- *  - EventController: a follow-up `hub` call removes the tracked waiting
- *    poll from the transcript; any other tool seals it in place.
+ *  - ToolExecutionComponent: an all-running jobs snapshot stays un-finalized and
+ *    displaceable; settled/error results finalize normally; seal() always freezes.
+ *  - EventController: a follow-up `hub` call removes the tracked jobs snapshot;
+ *    any other tool seals it in place.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
@@ -26,12 +24,12 @@ const uiStub = { requestRender() {}, requestComponentRender() {} } as unknown as
 
 type JobStatus = "running" | "completed" | "failed" | "cancelled";
 
-function pollResult(statuses: JobStatus[], extra: { cancelled?: boolean; isError?: boolean } = {}) {
+function jobsResult(statuses: JobStatus[], extra: { isError?: boolean } = {}) {
 	return {
 		content: [{ type: "text" as const, text: "" }],
 		isError: extra.isError,
 		details: {
-			op: "wait" as const,
+			op: "jobs" as const,
 			jobs: statuses.map((status, i) => ({
 				id: `j${i}`,
 				type: "task" as const,
@@ -39,7 +37,6 @@ function pollResult(statuses: JobStatus[], extra: { cancelled?: boolean; isError
 				label: `job ${i}`,
 				durationMs: 1_000,
 			})),
-			...(extra.cancelled ? { cancelled: [{ id: "j0", status: "cancelled" as const }] } : {}),
 		},
 	};
 }
@@ -67,7 +64,7 @@ function trackComponent(components: ToolExecutionComponent[], component: ToolExe
 	return component;
 }
 
-describe("hub waiting-poll block lifecycle", () => {
+describe("hub jobs snapshot block lifecycle", () => {
 	const created: ToolExecutionComponent[] = [];
 
 	beforeEach(async () => {
@@ -85,15 +82,12 @@ describe("hub waiting-poll block lifecycle", () => {
 	});
 
 	function makeJobComponent() {
-		return trackComponent(
-			created,
-			new ToolExecutionComponent("hub", { op: "wait", ids: ["j0", "j1"] }, {}, undefined, uiStub),
-		);
+		return trackComponent(created, new ToolExecutionComponent("hub", { op: "jobs" }, {}, undefined, uiStub));
 	}
 
-	it("keeps an all-running poll live and displaceable until sealed", () => {
+	it("keeps an all-running jobs snapshot live and displaceable until sealed", () => {
 		const component = makeJobComponent();
-		component.updateResult(pollResult(["running", "running"]), false);
+		component.updateResult(jobsResult(["running", "running"]), false);
 
 		expect(component.isDisplaceableBlock()).toBe(true);
 		expect(component.isTranscriptBlockFinalized()).toBe(false);
@@ -103,24 +97,21 @@ describe("hub waiting-poll block lifecycle", () => {
 		expect(component.isTranscriptBlockFinalized()).toBe(true);
 	});
 
-	it("finalizes a poll that observed a settled job", () => {
+	it("finalizes a jobs snapshot that observed a settled job", () => {
 		const component = makeJobComponent();
-		component.updateResult(pollResult(["completed", "running"]), false);
+		component.updateResult(jobsResult(["completed", "running"]), false);
 
 		expect(component.isDisplaceableBlock()).toBe(false);
 		expect(component.isTranscriptBlockFinalized()).toBe(true);
 	});
 
-	it("finalizes a poll that carried cancel outcomes or an error", () => {
-		const cancelled = makeJobComponent();
-		cancelled.updateResult(pollResult(["running"], { cancelled: true }), false);
-		expect(cancelled.isDisplaceableBlock()).toBe(false);
-
-		const errored = makeJobComponent();
-		errored.updateResult(pollResult(["running"], { isError: true }), false);
-		expect(errored.isDisplaceableBlock()).toBe(false);
-		expect(errored.isTranscriptBlockFinalized()).toBe(true);
+	it("finalizes a jobs snapshot that carries an error", () => {
+		const component = makeJobComponent();
+		component.updateResult(jobsResult(["running"], { isError: true }), false);
+		expect(component.isDisplaceableBlock()).toBe(false);
+		expect(component.isTranscriptBlockFinalized()).toBe(true);
 	});
+
 	it("keeps successful todo snapshots live for replacement", () => {
 		const component = trackComponent(
 			created,
@@ -183,12 +174,12 @@ describe("EventController displaces consecutive todo snapshots", () => {
 		return { controller: new EventController(ctx), children, pendingTools };
 	}
 
-	async function runPoll(controller: EventController, children: Component[], toolCallId: string) {
+	async function runJobsSnapshot(controller: EventController, children: Component[], toolCallId: string) {
 		await controller.handleEvent({
 			type: "tool_execution_start",
 			toolCallId,
 			toolName: "hub",
-			args: { op: "wait", ids: ["j0"] },
+			args: { op: "jobs" },
 		});
 		const component = children[children.length - 1] as ToolExecutionComponent;
 		trackComponent(created, component);
@@ -196,7 +187,7 @@ describe("EventController displaces consecutive todo snapshots", () => {
 			type: "tool_execution_end",
 			toolCallId,
 			toolName: "hub",
-			result: pollResult(["running", "running"]),
+			result: jobsResult(["running", "running"]),
 			isError: false,
 		});
 		return component;
@@ -220,26 +211,26 @@ describe("EventController displaces consecutive todo snapshots", () => {
 		return component;
 	}
 
-	it("removes the previous waiting poll when the next hub call starts", async () => {
+	it("removes the previous jobs snapshot when the next hub call starts", async () => {
 		const { controller, children } = createFixture();
 
-		const first = await runPoll(controller, children, "t1");
+		const first = await runJobsSnapshot(controller, children, "t1");
 		expect(children).toContain(first);
 
-		const second = await runPoll(controller, children, "t2");
+		const second = await runJobsSnapshot(controller, children, "t2");
 
-		// The stale "waiting" frame is gone; only the fresh poll remains.
+		// The stale snapshot frame is gone; only the fresh snapshot remains.
 		expect(children).not.toContain(first);
 		expect(children).toContain(second);
 		// The displaced block is sealed so its spinner interval is stopped.
 		expect(first.isTranscriptBlockFinalized()).toBe(true);
 	});
 
-	it("seals the waiting poll in place when a different tool runs next", async () => {
+	it("seals the jobs snapshot in place when a different tool runs next", async () => {
 		const { controller, children } = createFixture();
 
-		const poll = await runPoll(controller, children, "t1");
-		expect(poll.isTranscriptBlockFinalized()).toBe(false);
+		const snapshot = await runJobsSnapshot(controller, children, "t1");
+		expect(snapshot.isTranscriptBlockFinalized()).toBe(false);
 
 		await controller.handleEvent({
 			type: "tool_execution_start",
@@ -249,10 +240,10 @@ describe("EventController displaces consecutive todo snapshots", () => {
 		});
 		trackComponent(created, children[children.length - 1] as ToolExecutionComponent);
 
-		// The poll frame stays — it is final history now, not displaceable.
-		expect(children).toContain(poll);
-		expect(poll.isTranscriptBlockFinalized()).toBe(true);
-		expect(poll.isDisplaceableBlock()).toBe(false);
+		// The snapshot stays — it is final history now, not displaceable.
+		expect(children).toContain(snapshot);
+		expect(snapshot.isTranscriptBlockFinalized()).toBe(true);
+		expect(snapshot.isDisplaceableBlock()).toBe(false);
 	});
 	it("removes the previous todo snapshot when a later todo update lands in the same turn", async () => {
 		const { controller, children } = createFixture();
@@ -368,27 +359,27 @@ describe("EventController displaces consecutive todo snapshots", () => {
 		expect(first.isTranscriptBlockFinalized()).toBe(false);
 	});
 
-	it("does not displace a poll that observed completions", async () => {
+	it("does not displace a jobs snapshot that observed completions", async () => {
 		const { controller, children } = createFixture();
 
 		await controller.handleEvent({
 			type: "tool_execution_start",
 			toolCallId: "t1",
 			toolName: "hub",
-			args: { op: "wait", ids: ["j0"] },
+			args: { op: "jobs" },
 		});
 		const settled = trackComponent(created, children[children.length - 1] as ToolExecutionComponent);
 		await controller.handleEvent({
 			type: "tool_execution_end",
 			toolCallId: "t1",
 			toolName: "hub",
-			result: pollResult(["completed", "running"]),
+			result: jobsResult(["completed", "running"]),
 			isError: false,
 		});
 
-		const next = await runPoll(controller, children, "t2");
+		const next = await runJobsSnapshot(controller, children, "t2");
 
-		// A poll that carried real results is kept as history.
+		// A snapshot that carried real results is kept as history.
 		expect(children).toContain(settled);
 		expect(children).toContain(next);
 	});

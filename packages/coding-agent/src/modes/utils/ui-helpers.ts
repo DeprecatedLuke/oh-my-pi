@@ -331,15 +331,15 @@ export class UiHelpers {
 			pendingUsageTtft = undefined;
 			pendingUsageTimestamp = undefined;
 		};
-		// Rebuild-time mirror of the event controller's displaceable-poll
-		// bookkeeping: a `hub` wait that found every watched job still running is
-		// superseded by the next `hub` call, so a rebuilt transcript collapses a
-		// repeated-poll run to its final snapshot instead of replaying the spam.
-		let waitingPoll: ToolExecutionComponent | null = null;
-		const resolveWaitingPoll = (nextToolName?: string) => {
-			const previous = waitingPoll;
+		// Rebuild-time mirror of the event controller's refreshable jobs-snapshot
+		// bookkeeping: a `hub jobs` result whose jobs are all still running is
+		// superseded by the next `hub` call, so rebuilt transcripts retain only
+		// the latest inspection frame.
+		let refreshableHubSnapshot: ToolExecutionComponent | null = null;
+		const resolveRefreshableHubSnapshot = (nextToolName?: string) => {
+			const previous = refreshableHubSnapshot;
 			if (!previous) return;
-			waitingPoll = null;
+			refreshableHubSnapshot = null;
 			if (
 				nextToolName === "hub" &&
 				previous.isDisplaceableBlock() &&
@@ -347,7 +347,7 @@ export class UiHelpers {
 			) {
 				this.ctx.chatContainer.removeChild(previous);
 			}
-			// Sealing freezes the block and stops the waiting-poll spinner that
+			// Sealing freezes the block and stops the running-jobs spinner that
 			// updateResult armed.
 			previous.seal();
 		};
@@ -441,7 +441,7 @@ export class UiHelpers {
 						appendAssistantSegment(afterToolSegment);
 						continue;
 					}
-					resolveWaitingPoll(content.name);
+					resolveRefreshableHubSnapshot(content.name);
 
 					if (content.name === "read" && readArgsCollapseIntoGroup(content.arguments)) {
 						if (hasErrorStop && errorMessage) {
@@ -608,7 +608,7 @@ export class UiHelpers {
 						component instanceof ToolExecutionComponent &&
 						component.isDisplaceableBlock()
 					) {
-						waitingPoll = component;
+						refreshableHubSnapshot = component;
 					} else if (
 						message.toolName === "todo" &&
 						component instanceof ToolExecutionComponent &&
@@ -623,7 +623,7 @@ export class UiHelpers {
 				}
 			} else {
 				// A user prompt closes the todo displacement window, same as the live path.
-				if (message.role === "user") resolveWaitingPoll();
+				if (message.role === "user") resolveRefreshableHubSnapshot();
 				if (message.role === "user") resolveTodoSnapshot();
 				// All other messages use standard rendering
 				this.ctx.addMessageToChat(message, options);
@@ -635,9 +635,9 @@ export class UiHelpers {
 		// rebuilt group freezes (even with a never-persisted result) and commits to
 		// native scrollback like every other historical block.
 		readGroup?.seal();
-		// A trailing waiting poll is final history on rebuild; seal it so its
+		// A trailing jobs snapshot is final history on rebuild; seal it so its
 		// spinner timer stops like every other historical block.
-		resolveWaitingPoll();
+		resolveRefreshableHubSnapshot();
 		// A trailing todo snapshot is live state, not history: when the rebuild
 		// runs mid-turn (settings overlay close, focus attach during streaming),
 		// hand it back to the controller so a follow-up `todo` update keeps

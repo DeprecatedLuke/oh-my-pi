@@ -186,10 +186,10 @@ describe("ToolExecutionComponent live preview spinners", () => {
 		}
 	});
 
-	it("pins the displaceable hub waiting poll and releases it once jobs settle", () => {
+	it("pins a live hub jobs snapshot and releases it once the snapshot settles", () => {
 		const component = new ToolExecutionComponent(
 			"hub",
-			{ op: "wait" },
+			{ op: "jobs" },
 			{},
 			undefined,
 			{ requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI,
@@ -200,19 +200,19 @@ describe("ToolExecutionComponent live preview spinners", () => {
 		const runningJob = { id: "job_1", type: "task", status: "running", label: "Pr6450", durationMs: 12_600 };
 
 		try {
-			// Streaming waiting snapshot: every watched job still running.
+			// A live inspection snapshot keeps every running job visible.
 			component.updateResult(
-				{ content: [{ type: "text", text: "waiting" }], details: { jobs: [runningJob] } },
+				{ content: [{ type: "text", text: "running" }], details: { op: "jobs", jobs: [runningJob] } },
 				true,
 			);
 			transcript.render(80);
 			expect(transcript.isNativeScrollbackLiveRegionPinned()).toBe(true);
 
-			// Final snapshot with a settled job is a real result, not a poll frame.
+			// A snapshot with a settled job is a real result, not a live frame.
 			component.updateResult(
 				{
 					content: [{ type: "text", text: "1 job settled" }],
-					details: { jobs: [{ ...runningJob, status: "completed" }] },
+					details: { op: "jobs", jobs: [{ ...runningJob, status: "completed" }] },
 				},
 				false,
 			);

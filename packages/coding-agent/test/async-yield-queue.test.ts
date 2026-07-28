@@ -109,14 +109,6 @@ function createHarness(initialStreaming: boolean) {
 	};
 }
 
-async function waitUntil(predicate: () => boolean, message: string): Promise<void> {
-	const deadline = Date.now() + 2_000;
-	while (!predicate()) {
-		if (Date.now() >= deadline) throw new Error(message);
-		await Bun.sleep(5);
-	}
-}
-
 afterEach(async () => {
 	const manager = AsyncJobManager.instance();
 	if (manager) {
@@ -126,15 +118,15 @@ afterEach(async () => {
 });
 
 describe("async result yield queue delivery", () => {
-	test("job list acknowledgement suppresses already staged completion", async () => {
+	test("job snapshot acknowledgement suppresses already staged completion", async () => {
 		const harness = createHarness(true);
 		const jobId = harness.manager.register("bash", "race job", async () => "inline result");
 
 		await harness.manager.waitForAll();
-		await waitUntil(() => harness.queue.has("async-result"), "Timed out waiting for staged async result");
+		await harness.manager.drainDeliveries();
 
 		const tool = new HubTool(createToolSession(harness.manager));
-		const result = await tool.execute("tool-call", { op: "wait", ids: [jobId] });
+		const result = await tool.execute("tool-call", { op: "jobs" });
 		expect((result.details as CoordinationDetails)?.jobs?.find(job => job.id === jobId)?.status).toBe("completed");
 
 		await harness.queue.flush("streaming");
@@ -148,7 +140,7 @@ describe("async result yield queue delivery", () => {
 		const secondJobId = harness.manager.register("task", "second", async () => "second result");
 
 		await harness.manager.waitForAll();
-		expect(await harness.manager.drainDeliveries({ timeoutMs: 2_000 })).toBe(true);
+		expect(await harness.manager.drainDeliveries()).toBe(true);
 		await harness.queue.flush("streaming");
 
 		expect(harness.followUps).toHaveLength(1);
@@ -163,7 +155,7 @@ describe("async result yield queue delivery", () => {
 		const jobId = harness.manager.register("bash", "idle job", async () => "idle result");
 
 		await harness.manager.waitForAll();
-		expect(await harness.manager.drainDeliveries({ timeoutMs: 2_000 })).toBe(true);
+		expect(await harness.manager.drainDeliveries()).toBe(true);
 
 		expect(harness.scheduledFlushes).toHaveLength(1);
 		expect(harness.prompts).toHaveLength(0);

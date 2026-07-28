@@ -1896,15 +1896,15 @@ async function driveSessionToYield(
 		// pending owner work left is terminal — the isolation runner captures
 		// and destroys the worktree right after this run resolves, so no
 		// owner job that could still re-wake the session may outlive it.
-		// Suppressed (acknowledged / hub-watched) jobs never re-wake the run
+		// Suppressed (acknowledged / snapshotted) jobs never re-wake the run
 		// and are reaped at teardown.
 		//
-		// Before blocking on running jobs, tell the model ONCE what it is
-		// waiting on so it can `hub` wait/cancel instead of sitting silent
-		// until the jobs (or the runtime limit) expire. Runs that never yield
-		// (ladder exhausted / terminal model error) skip the barrier — more
-		// injected turns just multiply the failure noise; the teardown reap
-		// still cancels and awaits their jobs before worktree capture.
+		// Before passively settling running jobs, tell the model ONCE to keep
+		// doing real independent work, cancel only abandoned work, or end the
+		// turn immediately without status text or delay calls. Runs that never
+		// yield (ladder exhausted / terminal model error) skip the barrier —
+		// more injected turns just multiply the failure noise; teardown still
+		// cancels and awaits their jobs before worktree capture.
 		let asyncPendingNoticeSent = false;
 		while (!abortSignal.aborted) {
 			if (!monitor.yieldCalled()) {
@@ -1938,8 +1938,8 @@ async function driveSessionToYield(
 							error: err instanceof Error ? err.message : String(err),
 						});
 					}
-					// Re-evaluate: the notice turn may have cancelled, watched, or
-					// absorbed the jobs — or already re-yielded.
+					// Re-evaluate: the notice turn may have cancelled or
+					// snapshotted the jobs, or already re-yielded.
 					continue;
 				}
 			}

@@ -1662,7 +1662,7 @@ function b() {
 	});
 
 	describe("HubTool", () => {
-		it("should wait for jobs and acknowledge deliveries to prevent race conditions", async () => {
+		it("should snapshot completed jobs and acknowledge deliveries to prevent race conditions", async () => {
 			const manager = new AsyncJobManager({
 				onJobComplete: async () => {},
 			});
@@ -1674,18 +1674,15 @@ function b() {
 			const jobId = manager.register("bash", "test job", async () => "success");
 			await manager.waitForAll();
 
-			// Job is running, call poll
-			const resultPromise = jobTool.execute("test-call-poll-1", { op: "wait", ids: [jobId] });
-
-			// Ensure poll finished
-			const result = await resultPromise;
+			const result = await jobTool.execute("test-call-jobs-1", { op: "jobs" });
 			expect(getTextOutput(result)).toContain("Completed");
+			expect(getTextOutput(result)).toContain(jobId);
 
 			await manager.drainDeliveries({ timeoutMs: 100 });
 			expect(manager.hasPendingDeliveries()).toBe(false);
 		});
 
-		it("flags still-waiting polls and all-running snapshots as contextually useless", async () => {
+		it("flags all-running job snapshots as useless until completion", async () => {
 			const manager = new AsyncJobManager({
 				onJobComplete: async () => {},
 			});
@@ -1696,33 +1693,17 @@ function b() {
 			const gate = Promise.withResolvers<string>();
 			const jobId = manager.register("bash", "long job", () => gate.promise);
 
-			// Poll cut short while the job is still running: a pure "still
-			// waiting" snapshot carries no information once consumed.
-			const controller = new AbortController();
-			const pollPromise = jobTool.execute("test-call-useless-poll", { op: "wait", ids: [jobId] }, controller.signal);
-			controller.abort();
-			const polled = await pollPromise;
-			expect(polled.useless).toBe(true);
-
-			// A list snapshot showing only running jobs is equally uneventful.
-			const listed = await jobTool.execute("test-call-useless-list", { op: "jobs" });
+			const listed = await jobTool.execute("test-call-useless-jobs", { op: "jobs" });
 			expect(listed.useless).toBe(true);
+			expect(getTextOutput(listed)).toContain("Still Running");
+			expect(getTextOutput(listed)).toContain(jobId);
 
-			// Once the job settles, the result is informative — flag absent.
 			gate.resolve("done");
-			const settled = await jobTool.execute("test-call-useless-settled", { op: "wait", ids: [jobId] });
+			await manager.waitForAll();
+			const settled = await jobTool.execute("test-call-settled-jobs", { op: "jobs" });
 			expect(getTextOutput(settled)).toContain("Completed");
+			expect(getTextOutput(settled)).toContain("done");
 			expect(settled.useless).toBeUndefined();
-
-			// Nothing left to wait for: noise once consumed.
-			const idle = await jobTool.execute("test-call-useless-idle", { op: "wait" });
-			expect(getTextOutput(idle)).toContain("No running background jobs");
-			expect(idle.useless).toBe(true);
-
-			// A poll naming unknown ids found nothing — equally uneventful.
-			const missing = await jobTool.execute("test-call-useless-missing", { op: "wait", ids: ["no-such-job"] });
-			expect(getTextOutput(missing)).toContain("No matching jobs found");
-			expect(missing.useless).toBe(true);
 		});
 	});
 

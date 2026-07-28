@@ -21,7 +21,7 @@ import { getThemeEpoch, theme } from "../../modes/theme/theme";
 import { BASH_DEFAULT_PREVIEW_LINES } from "../../tools/bash";
 import { formatDefaultToolExecution } from "../../tools/default-renderer";
 import { EVAL_DEFAULT_PREVIEW_LINES } from "../../tools/eval";
-import { isWaitingPollDetails } from "../../tools/hub";
+import { isRefreshableJobsSnapshotDetails } from "../../tools/hub";
 import { formatStatusIcon, replaceTabs, resolveImageOptions } from "../../tools/render-utils";
 import { type FirstResultViewportRepaint, toolRenderers } from "../../tools/renderers";
 import { TODO_STRIKE_TOTAL_FRAMES, type TodoToolDetails } from "../../tools/todo";
@@ -78,7 +78,9 @@ function displaceableToolName(
 	isPartial: boolean,
 ): DisplaceableToolName | undefined {
 	if (result.isError === true) return undefined;
-	if (toolName === "hub" && isWaitingPollDetails(result.details)) return "hub";
+	// All-running `hub jobs` snapshots displace each other so repeated
+	// calls replace the previous frame instead of stacking.
+	if (toolName === "hub" && isRefreshableJobsSnapshotDetails(result.details)) return "hub";
 	if (toolName === "todo" && !isPartial && isTodoToolDetails(result.details)) return "todo";
 	return undefined;
 }
@@ -784,12 +786,12 @@ export class ToolExecutionComponent extends Container implements NativeScrollbac
 
 	/**
 	 * Keeps in-flight TV-wall frames out of immutable native scrollback: the
-	 * `vibe_wait` wall and displaceable snapshots (`hub` waiting polls, `todo`
-	 * lists). Their frames replace each other rather than append, and their
-	 * rows mutate every spinner tick — an unpinned commit records a per-tick
-	 * frozen snapshot AND force-seals the block (see TranscriptContainer's
-	 * committed-snapshot seal), so the next poll stacks a new frame instead of
-	 * displacing this one.
+	 * `vibe_wait` wall and displaceable snapshots (`hub jobs`, `todo` lists).
+	 * Their frames replace each other rather than append, and their rows mutate
+	 * every spinner tick — an unpinned commit records a per-tick frozen snapshot
+	 * AND force-seals the block (see TranscriptContainer's committed-snapshot
+	 * seal), so the next refresh stacks a new frame instead of displacing this
+	 * one.
 	 */
 	isNativeScrollbackLiveRegionPinned(): boolean {
 		if (this.isTranscriptBlockFinalized()) return false;

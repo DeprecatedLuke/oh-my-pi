@@ -1,6 +1,6 @@
 /**
  * Hub jobs half — lifecycle control for async background jobs (bash scripts,
- * subagents) owned by the calling agent: wait/cancel/snapshot plus the
+ * subagents) owned by the calling agent: cancel/snapshot plus the
  * running-agents roster for activity with no job entry.
  */
 
@@ -27,41 +27,6 @@ import {
 	type ToolUIStatus,
 } from "../render-utils";
 import type { AgentActivitySnapshot, CancelOutcome, CoordinationDetails, HubRenderArgs, JobSnapshot } from "./types";
-
-const WAIT_DURATION_MS: Record<string, number> = {
-	"5s": 5_000,
-	"10s": 10_000,
-	"30s": 30_000,
-	"1m": 60_000,
-	"5m": 5 * 60_000,
-};
-
-/**
- * A wait snapshot where every watched job is still running and nothing was
- * cancelled — pure "still waiting" noise once a newer wait exists. The TUI
- * keeps such a block un-finalized (displaceable) so a follow-up `hub` call
- * replaces it instead of stacking another waiting frame in the transcript.
- */
-export function isWaitingPollDetails(details: unknown): boolean {
-	const d = details as CoordinationDetails | undefined;
-	if (!d || !Array.isArray(d.jobs) || d.jobs.length === 0) return false;
-	if (d.cancelled?.length) return false;
-	return d.jobs.every(job => job?.status === "running");
-}
-
-/** Poll window for a job-watching wait: `async.pollWaitDuration` fixed value or smart ladder. */
-export function resolvePollWindow(
-	session: ToolSession,
-	manager: AsyncJobManager,
-	ownerId: string | undefined,
-): { waitMs: number; smart: boolean } {
-	const pollSetting = session.settings.get("async.pollWaitDuration");
-	const smart = pollSetting === "smart";
-	const waitMs = smart
-		? manager.nextPollWaitMs(ownerId)
-		: ((pollSetting ? WAIT_DURATION_MS[pollSetting] : undefined) ?? WAIT_DURATION_MS["30s"]);
-	return { waitMs, smart };
-}
 
 /**
  * Resolve a list of job ids to job records visible to the calling agent.
@@ -180,10 +145,24 @@ export function snapshotJobs(session: ToolSession, jobs: TrackedJobLike[]): JobS
 	});
 }
 
+/**
+ * Whether a `hub jobs` snapshot is refreshable: `op === "jobs"`, non-empty
+ * jobs array, no cancellations, and every job still running. Such a block
+ * carries no new terminal information and should be displaced by a follow-up
+ * hub call rather than stacking in the transcript.
+ */
+export function isRefreshableJobsSnapshotDetails(details: unknown): boolean {
+	const d = details as CoordinationDetails | undefined;
+	if (d?.op !== "jobs") return false;
+	if (!Array.isArray(d.jobs) || d.jobs.length === 0) return false;
+	if (d.cancelled?.length) return false;
+	return d.jobs.every(job => job?.status === "running");
+}
+
 export function buildJobResult(
 	session: ToolSession,
 	manager: AsyncJobManager,
-	op: "wait" | "cancel" | "jobs",
+	op: "cancel" | "jobs",
 	jobs: TrackedJobLike[],
 	cancelOutcomes: CancelOutcome[],
 	agents: AgentActivitySnapshot[] = [],
@@ -252,55 +231,9 @@ export function buildJobResult(
 	return {
 		content: [{ type: "text", text: lines.join("\n").trimEnd() }],
 		details,
-		// A wait where everything is still running carries no new information
-		// once a later wait exists — same predicate the TUI uses to displace
-		// stale waiting frames.
-		...(isWaitingPollDetails(details) ? { useless: true } : {}),
-	};
-}
-
-/** `wait` with explicit ids that matched nothing visible: correct the caller, surface live agents. */
-export function noMatchingJobsResult(session: ToolSession, ids: string[]): AgentToolResult<CoordinationDetails> {
-	// Zero pollable jobs is not necessarily "nothing running": agents woken
-	// via hub messages or owned by another agent run with no job entry.
-	// Report them so the snapshot matches the UI's running-agent count
-	// (task job ids are agent ids, so a stale id often names one).
-	const agents = runningAgentsOutsideJobs(session);
-	const lines: string[] = [`No matching jobs found for IDs: ${ids.join(", ")}`];
-	const registry = session.agentRegistry;
-	for (const id of ids) {
-		const ref = registry?.get(id);
-		if (!ref) continue;
-		lines.push(
-			ref.status === "running"
-				? `- \`${id}\` is a running agent with no job entry — message it via \`hub\` send; transcript at history://${id}`
-				: `- \`${id}\` is a ${ref.status} agent (its job is gone) — transcript at history://${id}`,
-		);
-	}
-	if (agents.length > 0) {
-		lines.push("", ...describeAgents(agents));
-	}
-	return {
-		content: [{ type: "text", text: lines.join("\n") }],
-		details: { op: "wait", jobs: [], ...(agents.length ? { agents } : {}) },
-		// Nothing found is noise once consumed — the follow-up call has already
-		// corrected course. Running agents are real state the model may act on,
-		// so keep those results.
-		...(agents.length === 0 ? { useless: true } : {}),
-	};
-}
-
-/** Bare `wait` with no running jobs and nobody who could message: nothing to block on. */
-export function nothingToWaitForResult(session: ToolSession): AgentToolResult<CoordinationDetails> {
-	const agents = runningAgentsOutsideJobs(session);
-	const lines: string[] = ["No running background jobs to wait for."];
-	if (agents.length > 0) {
-		lines.push("", ...describeAgents(agents));
-	}
-	return {
-		content: [{ type: "text", text: lines.join("\n") }],
-		details: { op: "wait", jobs: [], ...(agents.length ? { agents } : {}) },
-		...(agents.length === 0 ? { useless: true } : {}),
+		// All-running `jobs` snapshots are displaceable — a follow-up hub call
+		// replaces the frame instead of stacking another in the transcript.
+		...(isRefreshableJobsSnapshotDetails(details) ? { useless: true } : {}),
 	};
 }
 
@@ -410,17 +343,14 @@ export function executeJobsSnapshot(
 // =============================================================================
 
 interface JobRenderArgs {
-	poll?: string[];
 	cancel?: string[];
 	list?: boolean;
 }
 
-/** Hub args → legacy job-renderer arg shape, preserving the exact frame titles. */
+/** Map unified hub args to the compact jobs-renderer shape. */
 function toJobRenderArgs(args: HubRenderArgs | undefined): JobRenderArgs | undefined {
 	if (!args) return undefined;
 	switch (args.op) {
-		case "wait":
-			return { poll: args.ids };
 		case "cancel":
 			return { cancel: args.ids ?? [] };
 		case "jobs":
@@ -491,26 +421,22 @@ function flattenStructuredPreview(text: string): string {
 
 function describeTarget(args: JobRenderArgs | undefined): string {
 	if (args?.list) return "background jobs";
-	const poll = args?.poll ?? [];
 	const cancel = args?.cancel ?? [];
 	const parts: string[] = [];
 	if (cancel.length > 0) {
 		parts.push(cancel.length === 1 ? `cancel ${cancel[0]}` : `cancel ${cancel.length} jobs`);
 	}
-	if (poll.length > 0) {
-		parts.push(poll.length === 1 ? `poll ${poll[0]}` : `poll ${poll.length} jobs`);
-	}
-	if (parts.length === 0) return "all running jobs";
+	if (parts.length === 0) return "jobs";
 	return parts.join(", ");
 }
 
-/** Pending-call frame for job ops (wait/cancel/jobs). */
+/** Pending-call frame for job snapshot/cancel ops. */
 export function jobsRenderCall(args: HubRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 	const text = renderStatusLine({ icon: "pending", title: describeTarget(toJobRenderArgs(args)) || "Job" }, uiTheme);
 	return new Text(text, 0, 0);
 }
 
-/** Result frame for job snapshots (wait/cancel/jobs and the agents roster). */
+/** Result frame for job snapshots, cancellations, and the agent roster. */
 export function jobsRenderResult(
 	result: { content: Array<{ type: string; text?: string }>; details?: CoordinationDetails; isError?: boolean },
 	options: RenderResultOptions,
@@ -518,7 +444,7 @@ export function jobsRenderResult(
 	hubArgs?: HubRenderArgs,
 ): Component {
 	const args = toJobRenderArgs(hubArgs);
-	let jobs = result.details?.jobs ?? [];
+	const jobs = result.details?.jobs ?? [];
 	const agents = result.details?.agents ?? [];
 
 	if (jobs.length === 0 && agents.length === 0) {
@@ -527,23 +453,11 @@ export function jobsRenderResult(
 		return new Text([header, formatEmptyMessage(fallback, uiTheme)].join("\n"), 0, 0);
 	}
 
-	const isPollCall = args ? !args.list && (!args.cancel || args.cancel.length === 0 || args.poll !== undefined) : true;
-
-	// Agent-carrying results (jobs snapshot / empty-wait roster) are real
-	// snapshots, not displaceable waiting frames — only agentless waits
-	// collapse their still-running rows once sealed.
-	if (!options.isPartial && isPollCall && agents.length === 0) {
-		jobs = jobs.filter(job => job.status !== "running");
-		if (jobs.length === 0) {
-			return new Text("", 0, 0);
-		}
-	}
-
 	const counts = { completed: 0, failed: 0, cancelled: 0, running: 0 };
 	for (const job of jobs) counts[job.status]++;
 
 	// The title already carries the running count, so meta lists only the
-	// settled categories — "waiting on 19 of 19 · 19 running" read awkward.
+	// settled categories — "18 running · 3 done" avoids redundancy.
 	const meta: string[] = [];
 	if (counts.completed > 0) meta.push(uiTheme.fg("success", `${counts.completed} done`));
 	if (counts.failed > 0) meta.push(uiTheme.fg("error", `${counts.failed} failed`));
@@ -560,8 +474,8 @@ export function jobsRenderResult(
 			? `${agents.length} running agent${agents.length === 1 ? "" : "s"} — no jobs`
 			: counts.running > 0
 				? counts.running === jobs.length
-					? `waiting on ${jobs.length} ${jobsNoun}`
-					: `waiting on ${counts.running} of ${jobs.length} ${jobsNoun}`
+					? `${jobs.length} ${jobsNoun} running`
+					: `${counts.running} running of ${jobs.length} ${jobsNoun}`
 				: `${jobs.length} ${jobsNoun} settled`;
 
 	const header = renderStatusLine(
@@ -679,7 +593,7 @@ export function jobsRenderResult(
 			);
 
 			// Agents run outside job control; render them as their own tree so
-			// they never skew the job counts or the "waiting on N jobs" title.
+			// they never skew the job counts or the status summary title.
 			const agentLines =
 				agents.length === 0
 					? []

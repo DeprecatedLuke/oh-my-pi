@@ -5,11 +5,14 @@ Agents marked BLOCKING run inline — results return in this call; non-blocking 
 {{#if asyncEnabled}}
 
 # Async Job Contract
-- Results auto-deliver. A settled `hub jobs`/`hub wait` snapshot is the delivery; no duplicate `async-result` follows.
+- Results auto-deliver. A settled `hub jobs` snapshot is the delivery; no duplicate `async-result` follows.
 - Job IDs are process-local and expire roughly five minutes after settlement. Afterward, use the agent ID with `hub send`, `agent://<id>`, or `history://<id>`.
 - `completed` means successful yield/job exit, not artifact acceptance. Verify claimed changes.
 {{/if}}
 
+{{#if asyncEnabled}}- Spawning is non-blocking: the call returns immediately with the agent id{{#if batchEnabled}}s{{/if}} and job id{{#if batchEnabled}}s{{/if}}; each result is delivered automatically when that agent yields.{{else}}- Spawning blocks your turn: the call returns only when the subagent finishes.{{/if}}
+- Parallelism = {{#if batchEnabled}}multiple `tasks[]` items in ONE call. To launch several subagents, you MUST batch them into a single call's `tasks[]` — they share `context` once instead of duplicating it. Separate `task` calls in one message are ONLY for spawns needing a different `agent` type or unrelated `context`{{else}}multiple `task` calls in one assistant message{{/if}}. Concurrency is bounded at {{MAX_CONCURRENCY}} running subagents per session.
+{{#if asyncEnabled}}- When you have nothing left to do but spawned tasks are still running, end your turn immediately — produce NO prose, status, filler, or progress tokens, invoke NO wait/sleep/poll/status/unrelated tool call. Their results are delivered automatically as a follow-up turn once they finish. `hub cancel` terminates a task and **cannot carry a message** — only for stalled/abandoned work.{{/if}}
 # Task Design
 - **Agent typing:** Pick each item's `agent` type. Read-only research MUST use `agent: "scout"` (faster model). Use default worker only when no specialist fits.
 - **No overhead:** Each `task` MUST instruct its agent to skip formatters, linters, and project-wide test suites. Run those once at the end.

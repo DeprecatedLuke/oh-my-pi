@@ -778,11 +778,11 @@ describe("IRC", () => {
 		});
 
 		it("op=send await=true preserves the delivery receipt when the wait is interrupted", async () => {
-			// Regression: the tool is marked interruptible so `job poll` / `irc wait` return
-			// early on incoming messages, but `send await:true` also runs the reply wait under
-			// the same signal. If the abort lands after the message was delivered, the tool
-			// must surface a successful receipt so the agent loop keeps the tool as "sent"
-			// and does not report it as skipped — which would prompt a duplicate resend.
+			// Regression: the message wait is interruptible and `send await:true` also
+			// runs the reply wait under the same signal. If the abort lands after the
+			// message was delivered, the tool must surface a successful receipt so the
+			// agent loop keeps the tool as "sent" and does not report it as skipped —
+			// which would prompt a duplicate resend.
 			const sub = makeFakeSession();
 			registry.register({ id: "0-Sub", displayName: "task", kind: "sub", session: sub.session });
 
@@ -829,20 +829,12 @@ describe("IRC", () => {
 			const fake = makeFakeSession();
 			registry.register({ id: "0-Sub", displayName: "sub", kind: "sub", session: fake.session, status: "running" });
 			const tool = new HubTool(makeToolSession(registry, "0-Main"));
-			const result = await tool.execute("call-1", { op: "wait", timeoutMs: 5 });
+			const result = await tool.execute("call-1", { op: "wait", from: "0-Sub", timeoutMs: 5 });
 			expect(result.isError).toBeFalsy();
 			const details = result.details as CoordinationDetails | undefined;
 			expect(details?.waited).toBeNull();
 			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 			expect(text).toContain("No message");
-		});
-
-		it("op=wait returns a clean result if no active agents exist", async () => {
-			const tool = new HubTool(makeToolSession(registry, "0-Main"));
-			const result = await tool.execute("call-1", { op: "wait", timeoutMs: 5 });
-			expect(result.isError).toBeFalsy();
-			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-			expect(text).toContain("No running background jobs to wait for.");
 		});
 
 		it("op=wait returns an error if the requested specific 'from' agent is not active", async () => {
@@ -872,7 +864,11 @@ describe("IRC", () => {
 			const tool = new HubTool(makeToolSession(registry, "0-Running"));
 			const controller = new AbortController();
 			controller.abort(new Error("queued IRC interrupt"));
-			const result = await tool.execute("call-1", { op: "wait", timeoutMs: 30_000 }, controller.signal);
+			const result = await tool.execute(
+				"call-1",
+				{ op: "wait", from: "0-Main", timeoutMs: 30_000 },
+				controller.signal,
+			);
 
 			expect(result.isError).toBeFalsy();
 			const details = result.details as CoordinationDetails | undefined;
