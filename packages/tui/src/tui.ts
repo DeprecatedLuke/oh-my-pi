@@ -830,64 +830,48 @@ const RESYNC_TAIL_SAMPLES = 8;
  * re-anchor the commit index when it does not. Returns the resync row index,
  * or -1 when no resync is needed.
  *
- * Zones (verifiedTo ≤ finalTo ≤ prefix.length):
- *   [0, verifiedTo)         VERIFIED exact rows — sampled with tolerance.
- *   [verifiedTo, finalTo)   NEWLY-FINAL rows — frozen visual snapshots whose
- *       source just became declared-final (the block finalized / a barrier
- *       cleared). Hard-scanned in FULL with no tolerance: any content change
- *       (a pending header settling, a preview replaced by its result, a tail
- *       shifting up after a barrier removal) re-anchors so the engine can
- *       erase-and-replay history with the final content exactly once (or, on
- *       ED3-unsafe multiplexers, recommit it below the frozen snapshot —
- *       duplication, never loss) instead of committing it nowhere and
- *       painting it nowhere.
- *   [finalTo, prefix.length) FROZEN visual snapshots of still-live rows —
- *       exempt: their drift is expected (a collapsing preview, a ticking
- *       progress tree) and must never spray re-anchors mid-run.
- *
- * The verified zone's sampled check exploits the asymmetry between the two
- * mutation classes: an in-place edit/restyle disturbs only the touched rows
- * (alignment below stays intact; the stale copy in history is the accepted
- * artifact), while an insertion/deletion shifts EVERY row below it. Up to 8
- * non-blank rows within the last 24 verified rows are compared SGR-stripped
- * (theme changes stay quiet), tolerating a SINGLE mismatch. The tolerance is
- * load-bearing for roots that report NO seam: an animated row already in
- * history would otherwise re-anchor on every glyph tick.
- *
- * Highly repetitive tails (identical filler rows) can mask a shift in the tail
- * sample, in which case the skipped rows are content-identical to the committed
- * ones — observationally harmless. Exported for the render-stress harness, whose
- * shadow commit ledger must mirror the engine's law exactly.
+ * The committed prefix may contain an exempt window of durable live snapshots.
+ * Every row outside that window remains audited, including volatile rows that
+ * were force-committed after scrolling above the viewport. A full hard scan
+ * covers forced rows that just became permanent; otherwise a bounded tail
+ * sample distinguishes a shifted block from a legitimate one-row live edit.
  */
 export function findCommittedPrefixResync(
 	frame: readonly string[],
 	prefix: readonly string[],
-	verifiedTo: number = prefix.length,
-	finalTo: number = verifiedTo,
+	auditTo: number = prefix.length,
+	exemptFrom: number = auditTo,
+	exemptTo: number = exemptFrom,
+	permanentEnd = 0,
 ): number {
-	const verified = Math.min(prefix.length, Math.max(0, Math.trunc(verifiedTo)));
-	const hardEnd = Math.min(prefix.length, Math.max(verified, Math.trunc(finalTo)));
-	if (hardEnd === 0) return -1;
-	if (frame.length >= hardEnd) {
-		// 1. Hard scan: frozen snapshots whose source just became final. Full
-		// scan, no tolerance — a finalized row that changed must re-anchor.
+	const committed = Math.min(prefix.length, Math.max(0, Math.trunc(auditTo)));
+	if (committed === 0) return -1;
+	const exFrom = Math.max(0, Math.min(committed, Math.trunc(exemptFrom)));
+	const exTo = Math.max(exFrom, Math.min(committed, Math.trunc(exemptTo)));
+	const audited = (index: number): boolean => index < exFrom || index >= exTo;
+	if (frame.length >= committed) {
+		const hardEnd = Math.min(committed, Math.max(0, Math.trunc(permanentEnd)));
 		let hardMismatch = false;
-		for (let i = verified; i < hardEnd; i++) {
-			if (!rowsEquivalent(frame[i]!, prefix[i]!)) {
+		for (let index = exTo; index < hardEnd; index++) {
+			if (!rowsEquivalent(frame[index]!, prefix[index]!)) {
 				hardMismatch = true;
 				break;
 			}
 		}
 		if (!hardMismatch) {
-			// 2. Tail sample over the verified zone (only when the hard scan is
-			// clean): walk up from its end until LOOKBACK rows or SAMPLES
-			// non-blank comparisons.
 			let samples = 0;
 			let mismatches = 0;
-			for (let j = 1; j <= verified && j <= RESYNC_TAIL_LOOKBACK && samples < RESYNC_TAIL_SAMPLES; j++) {
-				const idx = verified - j;
-				const row = frame[idx]!;
-				const old = prefix[idx]!;
+			let scanned = 0;
+			for (
+				let distance = 1;
+				distance <= committed && scanned < RESYNC_TAIL_LOOKBACK && samples < RESYNC_TAIL_SAMPLES;
+				distance++
+			) {
+				const index = committed - distance;
+				if (!audited(index)) continue;
+				scanned++;
+				const row = frame[index]!;
+				const old = prefix[index]!;
 				if (row === old) {
 					if (!isBlankRow(row)) samples++;
 					continue;
@@ -896,18 +880,15 @@ export function findCommittedPrefixResync(
 				samples++;
 				if (!rowsEquivalent(row, old)) mismatches++;
 			}
-			// No signal (all-blank tail) or at most one edited row: aligned.
 			if (samples === 0 || mismatches <= 1) return -1;
 		}
 	}
-	// Misaligned (hard mismatch, tail-sample shift, or the frame no longer
-	// covers the checked zones): re-anchor at the first row whose content
-	// changed.
-	const limit = Math.min(hardEnd, frame.length);
-	for (let i = 0; i < limit; i++) {
-		if (!rowsEquivalent(frame[i]!, prefix[i]!)) return i;
+	const limit = Math.min(committed, frame.length);
+	for (let index = 0; index < limit; index++) {
+		if (!audited(index)) continue;
+		if (!rowsEquivalent(frame[index]!, prefix[index]!)) return index;
 	}
-	return limit < hardEnd ? limit : -1;
+	return limit < committed ? limit : -1;
 }
 
 /**
@@ -2989,35 +2970,22 @@ export class TUI extends Container {
 			(resizeEventOccurred && this.#previousHeight > 0);
 		const geometryChanged = widthChanged || heightChanged;
 
-		// Committed-prefix audit. Rows below the audit mark are hard-verified
-		// exact bytes; rows between the mark and the current exactness boundary
-		// are frozen snapshots whose source JUST became final and must be
-		// verified once (a pending header settling, a barrier clearing above a
-		// shifted tail); rows past the boundary are still-live frozen snapshots,
-		// exempt so a collapsing preview can never spray re-anchors mid-run. A
-		// divergence re-anchors — feeding the divergenceRebuild erase-and-replay
-		// below (mux fallback: recommit below the stale copy; duplication, never
-		// loss) — instead of silently skipping rows (committed nowhere, painted
-		// nowhere). Skipped on geometry frames (a rewrap legitimately reflows
-		// every row), and skipped when the composed frame's stable prefix
-		// covers every verified row and no rows newly became final.
+		// Audit both exact rows and volatile rows force-committed above the
+		// viewport. The latter stay live, so a one-row edit is tolerated, but a
+		// wholesale replacement must re-anchor and recommit instead of silently
+		// dropping every changed offscreen row.
 		let committedRowsResynced = false;
 		const newlyFinalEnd = Math.min(this.#committedRows, finalBoundary);
-		// The exactness boundary can RETREAT (a markdown rewind, a mermaid fence
-		// appearing, a fast-path reset re-opening a block): rows verified under
-		// the old boundary have a live source again. Demote them to frozen
-		// snapshots instead of auditing content that is expected to change —
-		// their committed bytes stay as the visual record, and the next boundary
-		// rise strict-verifies them once like any other frozen row.
 		if (this.#committedPrefixAuditRows > newlyFinalEnd) {
 			this.#committedPrefixAuditRows = newlyFinalEnd;
 		}
+		const auditUpper =
+			this.#committedPrefixAuditRows < this.#committedRows ? this.#committedRows : this.#committedPrefixAuditRows;
 		const auditRan =
 			this.#hasEverRendered &&
 			!geometryChanged &&
 			!this.#clearScrollbackOnNextRender &&
-			(this.#renderStablePrefixRows < this.#committedPrefixAuditRows ||
-				newlyFinalEnd > this.#committedPrefixAuditRows);
+			(this.#renderStablePrefixRows < auditUpper || newlyFinalEnd > this.#committedPrefixAuditRows);
 		if (auditRan) {
 			const committedRowsBeforeAudit = this.#committedRows;
 			this.#auditCommittedPrefix(rawFrame, newlyFinalEnd);
@@ -3264,7 +3232,14 @@ export class TUI extends Container {
 	#auditCommittedPrefix(rawFrame: readonly string[], newlyFinalEnd: number): void {
 		const prefix = this.#committedPrefix;
 		if (prefix.length === 0) return;
-		const resyncTo = findCommittedPrefixResync(rawFrame, prefix, this.#committedPrefixAuditRows, newlyFinalEnd);
+		const resyncTo = findCommittedPrefixResync(
+			rawFrame,
+			prefix,
+			prefix.length,
+			this.#committedPrefixAuditRows,
+			this.#committedPrefixAuditRows,
+			newlyFinalEnd,
+		);
 		if (resyncTo < 0) return;
 		this.#committedRows = resyncTo;
 		this.#committedPrefixAuditRows = Math.min(this.#committedPrefixAuditRows, resyncTo);

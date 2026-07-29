@@ -48,8 +48,9 @@ import { DebugTool } from "./debug";
 import { EvalTool } from "./eval";
 import { resolveEvalBackends } from "./eval-backends";
 import { GithubTool } from "./gh";
-import { GlobTool } from "./glob";
-import { GrepTool } from "./grep";
+import { GitTool } from "./git";
+import { FindTool } from "./glob";
+import { SearchTool } from "./grep";
 import { HubTool, isIrcEnabled } from "./hub";
 import { InspectImageTool } from "./inspect-image";
 import { IrcTool } from "./irc";
@@ -63,6 +64,7 @@ import { MemoryRecallTool } from "./memory-recall";
 import { MemoryReflectTool } from "./memory-reflect";
 import { MemoryRetainTool } from "./memory-retain";
 import { wrapToolWithMetaNotice } from "./output-meta";
+import { PatchTool } from "./patch";
 import { ReadTool } from "./read";
 import type { PlanProposalHandler } from "./resolve";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
@@ -91,6 +93,7 @@ export * from "./essential-tools";
 export * from "./eval";
 export * from "./eval-backends";
 export * from "./gh";
+export * from "./git";
 export * from "./glob";
 export * from "./grep";
 export { HubTool, hubToolRenderer, isRefreshableJobsSnapshotDetails } from "./hub";
@@ -118,6 +121,7 @@ export * from "./memory-edit";
 export * from "./memory-recall";
 export * from "./memory-reflect";
 export * from "./memory-retain";
+export * from "./patch";
 export * from "./read";
 export * from "./report-tool-issue";
 export * from "./resolve";
@@ -429,6 +433,55 @@ export interface ToolSession {
 
 export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
 
+export type BuiltinToolLoadMode = "essential" | "discoverable";
+
+/** Default essential tool names when tools.essentialOverride is empty. */
+export const DEFAULT_ESSENTIAL_TOOL_NAMES: readonly string[] = [
+	"read",
+	"bash",
+	"launch",
+	"edit",
+	"write",
+	"find",
+	"eval",
+] as const;
+
+/** Resolve the active essential built-in tool names from settings. */
+export function computeEssentialBuiltinNames(settings: Settings): string[] {
+	const override = settings.get("tools.essentialOverride") ?? [];
+	const cleaned = normalizeToolNames(override.map(name => name.trim()).filter(Boolean));
+	if (cleaned.length > 0) {
+		return cleaned.filter(name => name in BUILTIN_TOOLS);
+	}
+	return [...DEFAULT_ESSENTIAL_TOOL_NAMES];
+}
+
+/**
+ * Hide discoverable built-ins on initial load unless another active contract
+ * explicitly requires them.
+ */
+export function filterInitialToolsForDiscoveryAll(
+	initialToolNames: string[],
+	opts: {
+		loadModeOf: (name: string) => BuiltinToolLoadMode | undefined;
+		essentialNames: ReadonlySet<string>;
+		explicitlyRequested: ReadonlySet<string>;
+		restored: ReadonlySet<string>;
+		forceActive: ReadonlySet<string>;
+	},
+): string[] {
+	return initialToolNames.filter(name => {
+		const loadMode = opts.loadModeOf(name);
+		if (!loadMode) return true;
+		if (loadMode === "essential") return true;
+		if (opts.essentialNames.has(name)) return true;
+		if (opts.explicitlyRequested.has(name)) return true;
+		if (opts.restored.has(name)) return true;
+		if (opts.forceActive.has(name)) return true;
+		return false;
+	});
+}
+
 /**
  * Public callable factory map. External callers may invoke `BUILTIN_TOOLS.read(session)` or
  * `BUILTIN_TOOLS[name](session)` to construct a tool directly.
@@ -445,8 +498,10 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	eval: s => new EvalTool(s),
 	ssh: loadSshTool,
 	github: GithubTool.createIf,
-	glob: s => new GlobTool(s, { rootPathAlias: true }),
-	grep: s => new GrepTool(s),
+	git: GitTool.createIf,
+	patch: PatchTool.createIf,
+	find: s => new FindTool(s),
+	search: s => new SearchTool(s),
 	lsp: LspTool.createIf,
 	inspect_image: s => new InspectImageTool(s),
 	browser: s => new BrowserTool(s),
@@ -454,6 +509,9 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
 	task: s => TaskTool.create(s),
+	job: s => new JobTool(s),
+	irc: IrcTool.createIf,
+	issues: IssuesTool.createIf,
 	hub: s => new HubTool(s),
 	todo: s => new TodoTool(s),
 	web_search: s => new WebSearchTool(s),
@@ -609,8 +667,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "debug") return session.settings.get("debug.enabled");
 		if (name === "todo")
 			return (!includeYield || session.prewalkArmed === true) && session.settings.get("todo.enabled");
-		if (name === "glob") return session.settings.get("glob.enabled");
-		if (name === "grep") return session.settings.get("grep.enabled");
+		if (name === "find") return session.settings.get("find.enabled");
+		if (name === "search") return session.settings.get("search.enabled");
 		if (name === "github") return session.settings.get("github.enabled");
 		if (name === "ast_grep") return session.settings.get("astGrep.enabled");
 		if (name === "ast_edit") return session.settings.get("astEdit.enabled");

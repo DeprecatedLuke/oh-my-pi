@@ -1,5 +1,5 @@
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { supportsAllTurnsReasoningContext, supportsCodexReasoningSummary } from "@oh-my-pi/pi-catalog/identity";
+import { supportsAllTurnsReasoningContext } from "@oh-my-pi/pi-catalog/identity";
 import { requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import { $env } from "@oh-my-pi/pi-utils";
 import type { Model } from "../../types";
@@ -150,7 +150,7 @@ function getReasoningConfig(
 	// "Unsupported parameter: 'reasoning.summary' is not supported with this model".
 	// Mirrors the all_turns gate: an explicit summary is suppressed on unsupported
 	// ids, letting the server skip the human-readable summary stream.
-	if (options.reasoningSummary !== null && supportsCodexReasoningSummary(model.id)) {
+	if (options.reasoningSummary !== null && supportsAllTurnsReasoningContext(model.id)) {
 		config.summary = options.reasoningSummary ?? "detailed";
 	}
 	return config;

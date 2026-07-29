@@ -166,16 +166,6 @@ function registerPostmortemTerminalRestore(): void {
 	});
 }
 
-let terminalRestoreRegistered = false;
-
-function registerPostmortemTerminalRestore(): void {
-	if (terminalRestoreRegistered) return;
-	terminalRestoreRegistered = true;
-	postmortem.register("terminal-restore", () => {
-		emergencyTerminalRestore();
-	});
-}
-
 /** Record alternate-screen state (called by the TUI on `?1049h`/`?1049l` writes). */
 export function setAltScreenActive(active: boolean): void {
 	altScreenActive = active;

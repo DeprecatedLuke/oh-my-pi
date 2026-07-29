@@ -28,7 +28,7 @@ function abortedSignal(): AbortSignal {
 async function capturePayload(
 	model: Model<"openai-completions">,
 	tools?: Tool[],
-	_reasoning: "high" | "max" = "high",
+	reasoning: "high" | "max" = "high",
 ): Promise<Record<string, unknown>> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
 	streamOpenAICompletions(model, contextWithTools(tools), {

@@ -82,8 +82,5 @@ python/robomp/.env
 packages/coding-agent/bench/boot-baseline.json
 
 # Bazel
-/bazel-bin
-/bazel-out
-/bazel-testlogs
-/bazel-pi
+/bazel-*
 /.bazelrc.user

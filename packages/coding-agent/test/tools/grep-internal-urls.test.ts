@@ -185,15 +185,15 @@ describe("SearchTool internal URL resolution", () => {
 	it("walks bare skill:// roots for search and find", async () => {
 		await registerSkillDirectory();
 		const session = createSession({ hasEditTool: true });
-		const searchTool = new GrepTool(session);
-		const findTool = new GlobTool(session);
+		const searchTool = new SearchTool(session);
+		const findTool = new FindTool(session);
 
 		const searchResult = await searchTool.execute("test-search", {
 			pattern: "deep needle",
-			path: "skill://demo",
+			paths: ["skill://demo"],
 		});
 		const findResult = await findTool.execute("test-find", {
-			path: "skill://demo",
+			paths: ["skill://demo"],
 		});
 
 		expect(getResultText(searchResult)).toContain("deep needle");
@@ -320,15 +320,16 @@ describe("SearchTool internal URL resolution", () => {
 		);
 	});
 
-	it("rejects an RE2-unsupported pattern on a pure-virtual search (dialect parity)", async () => {
+	it("supports a PCRE2 lookbehind pattern on a pure-virtual search (dialect parity)", async () => {
 		registerVirtualDocs(new Map([["doc.md", "alpha line\nbeta line\n"]]));
 		const session = createSession();
 		const tool = new SearchTool(session);
-		// Lookbehind is valid JS RegExp but unsupported by the native RE2 dialect;
-		// the pure-virtual probe must reject it consistently with native search.
-		await expect(tool.execute("re2", { pattern: "(?<=alpha)line", paths: ["virtual://doc.md"] })).rejects.toThrow(
-			/Invalid regex/i,
-		);
+		// Lookbehind is supported by native PCRE2; pure-virtual resources use the
+		// same pattern dialect and must return the matching line.
+		const result = await tool.execute("re2", { pattern: "(?<=alpha )line", paths: ["virtual://doc.md"] });
+		const text = getResultText(result);
+		expect(text).toContain("alpha line");
+		expect(text).not.toContain("beta line");
 	});
 
 	it("expands omp:// root to grep embedded documentation files", async () => {

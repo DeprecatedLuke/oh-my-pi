@@ -115,7 +115,6 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		}
 
 		const cancelIds = params.cancel ?? [];
-		}
 
 		const cancelOutcomes: CancelOutcome[] = [];
 		for (const id of cancelIds) {
@@ -420,7 +419,6 @@ export const jobToolRenderer = {
 	): Component {
 		const jobs = result.details?.jobs ?? [];
 		const agents = result.details?.agents ?? [];
-
 
 		if (jobs.length === 0) {
 			const fallback = result.content?.find(c => c.type === "text")?.text || "No jobs to process";

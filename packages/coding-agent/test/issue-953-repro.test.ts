@@ -22,6 +22,7 @@ function createCtx(usage: Partial<SegmentContext["usageStats"]>): SegmentContext
 		prewalk: null,
 		loopMode: null,
 		goalMode: null,
+		vibeMode: null,
 		collab: null,
 		usageStats: {
 			input: 0,

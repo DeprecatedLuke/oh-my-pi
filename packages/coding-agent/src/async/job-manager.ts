@@ -418,7 +418,6 @@ export class AsyncJobManager {
 		return removed;
 	}
 
-
 	acknowledgeDeliveries(jobIds: string[]): number {
 		const uniqueJobIds = Array.from(new Set(jobIds.map(id => id.trim()).filter(id => id.length > 0)));
 		if (uniqueJobIds.length === 0) return 0;

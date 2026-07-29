@@ -5,11 +5,9 @@ import { runWokenTurnTracked } from "@oh-my-pi/pi-coding-agent/session/woken-tur
 
 function makeManager(maxRunningJobs = 15) {
 	const completions: { jobId: string; text: string }[] = [];
-	const manager = new AsyncJobManager({
-		maxRunningJobs,
-		onJobComplete: batch => {
-			for (const c of batch) completions.push({ jobId: c.jobId, text: c.text });
-		},
+	const manager = new AsyncJobManager({ maxRunningJobs });
+	manager.registerDeliverySink(MAIN_AGENT_ID, (jobId, text) => {
+		completions.push({ jobId, text });
 	});
 	return { manager, completions };
 }

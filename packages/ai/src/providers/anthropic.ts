@@ -453,7 +453,6 @@ export function clearAnthropicFastModeFallback(
 	}
 }
 
-
 function hasStrictAnthropicTools(params: MessageCreateParamsStreaming): boolean {
 	return params.tools?.some(tool => tool.strict === true) ?? false;
 }
@@ -1141,15 +1140,6 @@ export interface AnthropicOptions extends StreamOptions {
 	 * including SDK clients such as `AnthropicVertex`.
 	 */
 	client?: AnthropicMessagesClientLike;
-	/**
-	 * Server-side fallback beta chain (`server-side-fallback-2026-06-01`).
-	 * When set, `fallbacks` is forwarded on the request body and the beta
-	 * header is auto-attached; the response parser then honors mid-stream
-	 * `fallback` content blocks and `usage.iterations` for served-model
-	 * promotion and per-attempt pricing. Opt-in ONLY — leaving this
-	 * undefined preserves the pre-fallback behavior on every code path.
-	 */
-	fallbacks?: FallbackParam[];
 }
 
 export type AnthropicClientOptionsArgs = {

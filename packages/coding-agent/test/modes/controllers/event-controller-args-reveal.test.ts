@@ -13,8 +13,8 @@ import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/componen
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { STREAMING_REVEAL_FRAME_MS } from "@oh-my-pi/pi-coding-agent/modes/controllers/streaming-reveal";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
+import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 
 beforeAll(async () => {
@@ -158,9 +158,7 @@ describe("EventController paces streamed tool args", () => {
 	it("reveals deobfuscated final edit input after a redacted streaming preview", async () => {
 		await Settings.init({ inMemory: true, cwd: process.cwd() });
 		const updateArgsSpy = vi.spyOn(ToolExecutionComponent.prototype, "updateArgs");
-		const obfuscator = new SecretObfuscator([
-			{ type: "plain", content: "allocator", friendlyName: "allocRegion" },
-		]);
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: "allocator", friendlyName: "allocRegion" }]);
 		const sourcePath = "libs/embedded-allocator/src/allocator.rs";
 		const input = `[${sourcePath}#ABCD]\nDEL 1`;
 		const maskedInput = obfuscator.obfuscate(input);

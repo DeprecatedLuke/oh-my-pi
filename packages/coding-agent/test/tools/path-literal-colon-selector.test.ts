@@ -17,7 +17,7 @@ import { GrepOutputMode } from "@oh-my-pi/pi-natives";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { runGrepCommand } from "../../src/cli/grep-cli";
 import { initTheme } from "../../src/modes/theme/theme";
-import { GrepTool } from "../../src/tools/grep";
+import { SearchTool } from "../../src/tools/grep";
 
 function getText(result: { content: Array<{ type: string; text?: string }> }): string {
 	return result.content
@@ -49,7 +49,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			hasUI: false,
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
-			settings: Settings.isolated({ "grep.contextBefore": 0, "grep.contextAfter": 0 }),
+			settings: Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 }),
 			...overrides,
 		};
 	}
@@ -229,10 +229,10 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const absolute = path.join(tmpDir, literal);
 			await Bun.write(absolute, "needle\n");
 
-			const tool = new GrepTool(createSession());
+			const tool = new SearchTool(createSession());
 			const result = await tool.execute("grep-literal", {
 				pattern: "needle",
-				path: absolute,
+				paths: [absolute],
 			});
 			const output = getText(result);
 
@@ -244,10 +244,10 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			await fs.mkdir(path.join(tmpDir, "dir"), { recursive: true });
 			await Bun.write(path.join(tmpDir, "dir", "a b:1-2"), "escaped literal needle\n");
 
-			const tool = new GrepTool(createSession());
+			const tool = new SearchTool(createSession());
 			const result = await tool.execute("grep-escaped-literal", {
 				pattern: "needle",
-				path: "dir/a\\ b:1-2",
+				paths: ["dir/a\\ b:1-2"],
 			});
 			const output = getText(result);
 
@@ -261,10 +261,10 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const literal = path.join(tmpDir, "a;b:1-2");
 			await Bun.write(literal, "delimited literal needle\n");
 
-			const tool = new GrepTool(createSession());
+			const tool = new SearchTool(createSession());
 			const result = await tool.execute("grep-literal-semicolon-selector", {
 				pattern: "needle",
-				path: literal,
+				paths: [literal],
 			});
 			const output = getText(result);
 
@@ -280,10 +280,10 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const literal = path.join(tmpDir, "data.zip:1-2");
 			await Bun.write(literal, "literal archive needle\n");
 
-			const tool = new GrepTool(createSession());
+			const tool = new SearchTool(createSession());
 			const result = await tool.execute("grep-literal-zip-selector", {
 				pattern: "needle",
-				path: literal,
+				paths: [literal],
 			});
 			const output = getText(result);
 
@@ -294,10 +294,10 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const absolute = path.join(tmpDir, "notes.txt");
 			await Bun.write(absolute, "one\ntwo\nthree\nfour\n");
 
-			const tool = new GrepTool(createSession());
+			const tool = new SearchTool(createSession());
 			const rangedResult = await tool.execute("grep-range-filter", {
 				pattern: ".",
-				path: `${absolute}:1-2`,
+				paths: [`${absolute}:1-2`],
 			});
 			const rangedOutput = getText(rangedResult);
 
@@ -340,8 +340,8 @@ describe("leading-colon path recovery (issue #5508)", () => {
 			getSessionId: () => null,
 			getPlanModeState: () => undefined,
 			settings: Settings.isolated({
-				"grep.contextBefore": 0,
-				"grep.contextAfter": 0,
+				"search.contextBefore": 0,
+				"search.contextAfter": 0,
 				"edit.mode": "patch",
 			}),
 			...overrides,
@@ -406,9 +406,9 @@ describe("leading-colon path recovery (issue #5508)", () => {
 		const abs = path.join(tmpDir, "colon-grep.txt");
 		await Bun.write(abs, "needle here\nsecond line\n");
 
-		const result = await new GrepTool(createSession()).execute("grep-leading-colon", {
+		const result = await new SearchTool(createSession()).execute("grep-leading-colon", {
 			pattern: "needle",
-			path: `:${abs}`,
+			paths: [`:${abs}`],
 		});
 		const output = getText(result);
 

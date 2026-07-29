@@ -24,7 +24,6 @@ import { GrepTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import { AdviseTool } from "../src/advisor/advise-tool";
-import { SearchTool } from "../src/tools/grep";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
 	return {

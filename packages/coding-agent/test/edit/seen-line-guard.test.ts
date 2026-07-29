@@ -9,7 +9,7 @@ import { DEFAULT_MAX_BYTES } from "@oh-my-pi/pi-coding-agent/session/streaming-o
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
-import { GrepTool } from "../../src/tools/grep";
+import { SearchTool } from "../../src/tools/grep";
 
 function createSession(cwd: string): ToolSession {
 	return {
@@ -385,7 +385,7 @@ describe("search → edit seen-line guard", () => {
 		await Bun.write(file, `${lines.join("\n")}\n`);
 		const session = searchSession(tmpDir);
 
-		const search = await new GrepTool(session).execute("s1", { pattern: "NEEDLE", path: file });
+		const search = await new SearchTool(session).execute("s1", { pattern: "NEEDLE", paths: [file] });
 		const tag = tagFromOutput(resultText(search));
 
 		const seen = getFileSnapshotStore(session).byHash(canonicalSnapshotKey(file), tag)?.seenLines;
@@ -403,7 +403,7 @@ describe("search → edit seen-line guard", () => {
 		await Bun.write(file, `${lines.join("\n")}\n`);
 		const session = searchSession(tmpDir);
 
-		const search = await new GrepTool(session).execute("s1", { pattern: "NEEDLE", path: file });
+		const search = await new SearchTool(session).execute("s1", { pattern: "NEEDLE", paths: [file] });
 		const tag = tagFromOutput(resultText(search));
 
 		await expect(executeHashlineSingle(execOptions(`[code.txt#${tag}]\nSWAP 8.=8:\n+X`, session))).rejects.toThrow(

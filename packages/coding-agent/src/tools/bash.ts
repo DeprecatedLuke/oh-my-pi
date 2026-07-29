@@ -111,21 +111,6 @@ function shellBuiltinsDisabled(settings: Settings): boolean {
  * pick via `settings.getShellConfig()`, preserving bash tool semantics for
  * shell operators, environment expansion, quoting, and login-shell setup.
  */
-export function wrapShellLineForClientTerminal(
-	line: string,
-	shellConfig: { shell: string; args: string[]; prefix?: string | undefined },
-): { command: string; args: string[] } {
-	const finalLine = shellConfig.prefix ? `${shellConfig.prefix} ${line}` : line;
-	return { command: shellConfig.shell, args: [...shellConfig.args, finalLine] };
-}
-
-/**
- * Bash patterns flagged as safety critical for approval policy.
- *
- * Kept intentionally tight — the cost of a false negative is data loss or a compromised host,
- * while false positives remain actionable through user policy control.
- * New patterns should target shapes that are virtually never legitimate in automation.
- */
 export const CRITICAL_BASH_PATTERNS = [
 	// Recursive destruction.
 	/\brm\s+-[a-z]*[rRfF][a-z]*\s+\//i, // rm -rf /, rm -fr /, rm -r /, rm -f /…
@@ -461,7 +446,6 @@ function formatExitCodeNotice(exitCode: number): string {
 	return `Command exited with code ${exitCode}`;
 }
 
-
 function formatBackgroundNotice(jobId: string): string {
 	return `Backgrounded as job ${jobId}; result will be delivered automatically.`;
 }
@@ -549,8 +533,8 @@ export class BashTool implements AgentTool<typeof bashSchemaBase | typeof bashSc
 			autoBackgroundThresholdSeconds: Math.max(0, Math.floor(this.#autoBackgroundThresholdMs / 1000)),
 			hasAstGrep: isToolActive("ast_grep", this.session.settings.get("astGrep.enabled")),
 			hasAstEdit: isToolActive("ast_edit", this.session.settings.get("astEdit.enabled")),
-			hasGrep: isToolActive("grep", this.session.settings.get("grep.enabled")),
-			hasGlob: isToolActive("glob", this.session.settings.get("glob.enabled")),
+			hasGrep: isToolActive("search", this.session.settings.get("search.enabled")),
+			hasGlob: isToolActive("find", this.session.settings.get("find.enabled")),
 			hasRead: isToolActive("read", true),
 			hasLaunch: isToolActive("hub", this.session.settings.get("launch.enabled")),
 			hasEval: isToolActive(

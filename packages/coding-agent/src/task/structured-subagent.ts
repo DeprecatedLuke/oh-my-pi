@@ -12,7 +12,6 @@ import { resolveAgentModelPatterns } from "../config/model-resolver";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { registerArtifactsDir } from "../internal-urls/registry-helpers";
 import { MCPManager } from "../mcp/manager";
-import type { TaskEffort } from "../thinking";
 import {
 	applyNativePatch,
 	createNativePatch,
@@ -27,6 +26,7 @@ import { loadOverallPlanReference } from "../plan-mode/plan-handoff";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import { MAIN_AGENT_ID } from "../registry/agent-registry";
+import type { TaskEffort } from "../thinking";
 import type { ToolSession } from "../tools";
 import { isIrcEnabled } from "../tools/hub";
 import { buildOutputValidator } from "../tools/output-schema-validator";

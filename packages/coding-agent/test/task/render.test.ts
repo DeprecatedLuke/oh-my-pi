@@ -4,6 +4,7 @@ import { getThemeByName, setThemeInstance, type Theme } from "../../src/modes/th
 import { renderResult } from "../../src/task/render";
 import { taskToolRenderer } from "../../src/task/renderer";
 import type { AgentProgress, SingleResult, TaskToolDetails } from "../../src/task/types";
+
 const strip = (lines: readonly string[]): string =>
 	lines
 		.join("\n")

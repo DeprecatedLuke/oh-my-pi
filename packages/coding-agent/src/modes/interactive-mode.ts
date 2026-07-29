@@ -37,7 +37,6 @@ import {
 	TUI,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
-import { isInsideTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import {
 	$env,
 	APP_NAME,
@@ -76,7 +75,6 @@ import type {
 	ExtensionWidgetOptions,
 } from "../extensibility/extensions";
 import type { CompactOptions } from "../extensibility/extensions/types";
-import type { Skill } from "../extensibility/skills";
 import { loadSlashCommands } from "../extensibility/slash-commands";
 import type { Goal, GoalModeState } from "../goals/state";
 import { resolveLocalUrlToPath } from "../internal-urls";
@@ -96,6 +94,7 @@ import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compa
 	type: "text",
 };
 import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { isRefusalMessage } from "../secrets/fix-refusal";
 import {
 	type AgentSession,
 	type AgentSessionEvent,
@@ -109,6 +108,12 @@ import { getRecentSessions } from "../session/session-listing";
 import type { SessionManager } from "../session/session-manager";
 import type { ShakeMode } from "../session/shake-types";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
+import {
+	createTuiFixRefusalUi,
+	executeFixRefusal,
+	latestUserPromptText,
+	resolveRefusalModelPattern,
+} from "../slash-commands/helpers/fix-refusal";
 import { formatDuration } from "../slash-commands/helpers/format";
 import { STTController, type SttState } from "../stt";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
@@ -374,6 +379,7 @@ const MODEL_CYCLE_TRACK_CLEAR_MS = 4000;
 
 const SUBAGENT_HUD_VISIBLE_LIMIT = 8;
 const SUBAGENT_OBSERVER_UI_COALESCE_MS = 100;
+const AUTO_FIX_REFUSAL_MAX_ROUNDS = 2;
 
 /**
  * Build the anchored subagent HUD block: a bold accent "Subagents" header plus
@@ -543,7 +549,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	lastStatusSpacer: Spacer | undefined = undefined;
 	lastStatusText: Text | undefined = undefined;
 	fileSlashCommands: Set<string> = new Set();
-	skillCommands: Map<string, Skill> = new Map();
+	skillCommands: Map<string, string> = new Map();
 	oauthManualInput: OAuthManualInputManager = new OAuthManualInputManager();
 	collabHost?: CollabHost;
 	collabGuest?: CollabGuestLink;
@@ -593,6 +599,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #eventController: EventController;
 	get eventController(): EventController {
 		return this.#eventController;
+	}
+
+	describeSubagentJob(id: string): string | undefined {
+		const progress = this.#observerRegistry.getSessions().find(session => session.id === id)?.progress;
+		return progress?.lastIntent?.trim() || progress?.description?.trim() || progress?.task?.trim() || undefined;
 	}
 	get eventBus(): EventBus | undefined {
 		return this.#eventBus;
@@ -1124,22 +1135,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 		// Set up theme file watcher
 		this.#eventBusUnsubscribers.push(
-			onThemeChange(event => {
+			onThemeChange(() => {
 				this.#clearWorkingMessageAccentCache();
 				clearRenderCache();
 				clearMermaidCache();
 				this.ui.invalidate();
 				this.updateEditorBorderColor();
-				if (event.ephemeral || isInsideTerminalMultiplexer()) {
-					// Theme previews and multiplexer panes cannot safely replace native
-					// scrollback: previews must stay non-destructive, and multiplexers
-					// suppress ED3 so a forced replay would duplicate transcript history.
-					this.ui.requestRender();
-					return;
-				}
-				// Rows already committed to native scrollback are immutable; replay them
-				// after a theme swap so a reader scrolled up sees the same palette.
-				this.ui.requestRender(true, { clearScrollback: true });
+				this.ui.requestRender();
 			}),
 		);
 
@@ -1176,7 +1178,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.session.skillsSettings?.enableSkillCommands !== false) {
 			for (const skill of this.session.skills) {
 				const commandName = `skill:${skill.name}`;
-				this.skillCommands.set(commandName, skill);
+				this.skillCommands.set(commandName, skill.filePath);
 				commands.push({ name: commandName, description: skill.description });
 			}
 		}
@@ -1727,6 +1729,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
+	updateEditorTopBorder(): void {
+		const availableWidth = this.editor.getTopBorderAvailableWidth(this.ui.terminal.columns);
+		this.editor.setTopBorder(this.statusLine.getTopBorder(availableWidth));
+	}
+
 	/** Refresh the running-subagents status badge from the active local or collab registry. */
 	syncRunningSubagentBadge(options: { requestRender?: boolean } = {}): void {
 		const registry = getRunningSubagentBadgeRegistry(this.collabGuest);
@@ -1739,6 +1746,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		const count = countRunningSubagentBadgeAgents(registry);
 		this.statusLine.setSubagentCount(count);
+		this.updateEditorTopBorder();
 		if (options.requestRender !== false) this.ui.requestRender();
 	}
 
@@ -2392,41 +2400,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
-	/**
-	 * When a turn ends on a refusal, dump the session the same way `/dump` does
-	 * (transcript text + LLM request JSON sidecar) to
-	 * `~/.omp/agent/refusals/<timestamp>.txt` so the refusal is preserved for
-	 * later analysis. Fires on every refusal-ending `agent_end`, independent of
-	 * `secrets.autoFixRefusal`.
-	 */
-	async #saveRefusalDump(event: AgentSessionEvent): Promise<void> {
-		if (event.type !== "agent_end") return;
-		if (!isRefusalMessage(this.session.getLastAssistantMessage())) return;
-		try {
-			const formatted = this.session.formatSessionAsText();
-			if (!formatted) return;
-			// LLM request JSON sidecar — best-effort, same as /dump.
-			let sidecarPath: string | undefined;
-			try {
-				sidecarPath = await this.session.dumpLlmRequestToTmpDir();
-			} catch {
-				// Sidecar is best-effort; the transcript is still saved below.
-			}
-			const doc = sidecarPath
-				? `${formatted}\n\n---\nLLM request JSON: ${sidecarPath}\nThis file persists on disk and may contain raw context/secrets — treat accordingly.`
-				: formatted;
-			const refusalsDir = path.join(getAgentDir(), "refusals");
-			await fs.mkdir(refusalsDir, { recursive: true });
-			const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -1);
-			const filePath = path.join(refusalsDir, `${stamp}.txt`);
-			await Bun.write(filePath, `${doc}\n`);
-			const statusParts = [`Refusal saved to ${filePath}`];
-			if (sidecarPath) statusParts.push(`LLM request JSON: ${sidecarPath}`);
-			this.showStatus(statusParts.join("\n"));
-		} catch (err) {
-			logger.warn("Failed to save refusal dump", { error: err instanceof Error ? err.message : String(err) });
-		}
-	}
 	async #applyPlanModeModel(): Promise<void> {
 		const resolved = this.session.resolveRoleModelWithThinking("plan");
 		if (!resolved.model) return;
@@ -4426,6 +4399,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 	}
 
+	stopLoadingAnimation(): void {
+		this.#stopLoadingAnimation(true);
+	}
+
 	setWorkingMessage(message?: string): void {
 		if (message === undefined) {
 			this.#pendingWorkingMessage = undefined;
@@ -4451,6 +4428,24 @@ export class InteractiveMode implements InteractiveModeContext {
 		const message = this.#pendingWorkingMessage;
 		this.#pendingWorkingMessage = undefined;
 		this.setWorkingMessage(message);
+	}
+
+	beginFixRefusal(): AbortSignal {
+		this.#fixRefusalAbort?.abort();
+		this.#fixRefusalAbort = new AbortController();
+		return this.#fixRefusalAbort.signal;
+	}
+
+	endFixRefusal(): void {
+		this.#fixRefusalAbort = undefined;
+	}
+
+	isFixingRefusal(): boolean {
+		return !!this.#fixRefusalAbort && !this.#fixRefusalAbort.signal.aborted;
+	}
+
+	abortFixRefusal(): void {
+		this.#fixRefusalAbort?.abort();
 	}
 
 	showNewVersionNotification(newVersion: string): void {

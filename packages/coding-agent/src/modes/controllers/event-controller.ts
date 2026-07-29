@@ -1,7 +1,7 @@
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { type Component, Loader, TERMINAL } from "@oh-my-pi/pi-tui";
+import { type Component, Loader, TERMINAL, Text, visibleWidth } from "@oh-my-pi/pi-tui";
 import { logger, prompt, sanitizeText } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { extractTextContent } from "../../commit/utils";
@@ -22,14 +22,16 @@ import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import idleRecapPrompt from "../../prompts/system/recap-user.md" with { type: "text" };
 import { deobfuscateToolArguments } from "../../secrets/obfuscator";
-import type { AgentSessionEvent } from "../../session/agent-session";
+import type { AgentSessionEvent, AsyncJobSnapshotItem } from "../../session/agent-session";
 import { isSilentAbort, readQueueChipText, resolveAbortLabel } from "../../session/messages";
+import { formatTaskId } from "../../task/render";
 import { type ApprovalMode, resolveApproval } from "../../tools/approval";
-import { previewLine, TRUNCATE_LENGTHS } from "../../tools/render-utils";
+import { previewLine, replaceTabs, TRUNCATE_LENGTHS } from "../../tools/render-utils";
 import { PROPOSE_DEVICE_NAME, writeDeviceDispatch } from "../../tools/resolve";
 import { nextActionableTask } from "../../tools/todo";
 import { SpeechEnhancer } from "../../tts/speech-enhancer";
 import { vocalizer } from "../../tts/vocalizer";
+import { Ellipsis, truncateToWidth } from "../../tui";
 import { canonicalizeMessage } from "../../utils/thinking-display";
 import { setTerminalTitleState } from "../../utils/title-generator";
 import { interruptHint } from "../shared";
@@ -202,6 +204,17 @@ export class EventController {
 	// Insertion-ordered IRC cards not yet retired; values are the transcript
 	// components each card contributed (see #retireIrcCard for the guard).
 	#liveIrcCards = new Map<string, Component[]>();
+	// Background jobs panel state: running jobs, settled tracking, and the
+	// anchored Text component rendered in subagentContainer. Jobs started outside
+	// an agent turn (slash commands like /knowledge compact) keep the panel live
+	// through a 1-second tick; when no jobs run the timer stops and the Text is
+	// cleared. Completion notifications are deferred while background jobs remain.
+	#pendingJobsTimer?: NodeJS.Timeout;
+	#pendingJobsText?: Text;
+	#pendingJobsTracked = new Set<string>();
+	#pendingJobsSettled = new Map<string, "completed" | "failed" | "cancelled">();
+	#completionNotificationDeferred = false;
+	#pendingCompletionEvent: Extract<AgentSessionEvent, { type: "agent_end" }> | undefined;
 	// Most recent all-running `hub jobs` snapshot. Kept live so the next `hub`
 	// call replaces it instead of stacking status frames, then sealed when
 	// anything else lands below it.
@@ -307,6 +320,9 @@ export class EventController {
 		}
 		this.#ircExpiryTimers.clear();
 		this.#liveIrcCards.clear();
+		this.#cancelBackgroundJobsTracking();
+		this.#completionNotificationDeferred = false;
+		this.#pendingCompletionEvent = undefined;
 	}
 
 	#resetReadGroup(): void {
@@ -527,6 +543,8 @@ export class EventController {
 			this.ctx.statusContainer.disposeChildren();
 		}
 		this.#cancelIdleCompaction();
+		this.#completionNotificationDeferred = false;
+		this.refreshBackgroundJobs();
 		this.#cancelIdleRecap();
 		this.ctx.statusLine.markActivityStart();
 		this.#setTerminalProgress(true);
@@ -862,7 +880,6 @@ export class EventController {
 					renderArgs = this.#toolArgsReveal.setTarget(content.id, partialJson, {
 						rawInput,
 						exposeRawPartialJson: exposesRawPartialJson(content.name, rawInput, tool),
-						fullArgs: displayArgs,
 						streamingStringKeys: streamingStringKeysForTool(content.name, rawInput),
 					});
 				} else {
@@ -1419,7 +1436,8 @@ export class EventController {
 		this.#scheduleIdleCompaction();
 		this.#scheduleIdleRecap();
 		this.sendErrorNotification(event);
-		this.sendCompletionNotification(event);
+		this.#scheduleCompletionNotification(event);
+		this.refreshBackgroundJobs();
 	}
 
 	/**
@@ -1789,6 +1807,139 @@ export class EventController {
 		return this.ctx.viewSession.getContextUsage()?.tokens ?? 0;
 	}
 
+	/**
+	 * Refresh the anchored Background Jobs panel from the current async job
+	 * snapshot. When running jobs exist, starts a 1-second tick timer to keep
+	 * their ages live; otherwise clears the panel, cancels the timer, and flushes
+	 * any deferred completion notification.
+	 */
+	refreshBackgroundJobs(): void {
+		if (this.#renderBackgroundJobs()) {
+			this.#ensureBackgroundJobsTimer();
+		} else {
+			this.#flushDeferredCompletion();
+			this.#cancelBackgroundJobsTracking();
+		}
+	}
+
+	/**
+	 * Defer completion notification while any process-global async work can still
+	 * wake the session (including jobs owned by nested subagents). The latest
+	 * terminal event is retained for the eventual notification after the anchored
+	 * jobs HUD settles.
+	 */
+	#scheduleCompletionNotification(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
+		if (event.isTerminal === false) {
+			this.#completionNotificationDeferred = false;
+			this.#pendingCompletionEvent = undefined;
+			return;
+		}
+		this.#pendingCompletionEvent = event;
+		if (this.#isWaitingForUserInput()) {
+			this.#completionNotificationDeferred = false;
+			this.#pendingCompletionEvent = undefined;
+			this.sendCompletionNotification(event);
+			return;
+		}
+		this.#completionNotificationDeferred = this.#hasPendingAsyncWork();
+	}
+
+	#hasPendingAsyncWork(): boolean {
+		const snapshot = this.ctx.session.getAsyncJobSnapshot({ scope: "all" });
+		if (!snapshot) return false;
+		return (
+			snapshot.running.length > 0 ||
+			snapshot.delivery.queued > 0 ||
+			snapshot.delivery.delivering ||
+			snapshot.delivery.pendingJobIds.length > 0
+		);
+	}
+
+	#isWaitingForUserInput(): boolean {
+		if (this.ctx.session.queuedMessageCount > 0 || this.ctx.session.isStreaming) return false;
+		if (this.ctx.session.isCompacting || this.ctx.session.isGeneratingHandoff) return false;
+		return !this.#hasPendingAsyncWork();
+	}
+
+	#ensureBackgroundJobsTimer(): void {
+		if (this.#pendingJobsTimer) return;
+		this.#pendingJobsTimer = setInterval(() => {
+			if (!this.#renderBackgroundJobs()) {
+				this.#flushDeferredCompletion();
+				this.#cancelBackgroundJobsTracking();
+			}
+		}, 1000);
+	}
+
+	#flushDeferredCompletion(): void {
+		if (!this.#completionNotificationDeferred) return;
+		if (!this.#isWaitingForUserInput()) return;
+		this.#completionNotificationDeferred = false;
+		const event = this.#pendingCompletionEvent;
+		this.#pendingCompletionEvent = undefined;
+		if (event) this.sendCompletionNotification(event);
+	}
+
+	#cancelBackgroundJobsTracking(): void {
+		if (this.#pendingJobsTimer) {
+			clearInterval(this.#pendingJobsTimer);
+			this.#pendingJobsTimer = undefined;
+		}
+		this.#clearBackgroundJobsText();
+		this.#pendingJobsTracked.clear();
+		this.#pendingJobsSettled.clear();
+	}
+
+	#clearBackgroundJobsText(): void {
+		if (!this.#pendingJobsText) return;
+		this.ctx.subagentContainer.removeChild(this.#pendingJobsText);
+		this.#pendingJobsText = undefined;
+		this.ctx.ui.requestRender();
+	}
+
+	/**
+	 * Build and display the background-jobs panel from the current async job
+	 * snapshot. Returns true when running jobs are still being tracked (panel
+	 * stays live), false when no jobs remain (caller should tear down the timer
+	 * and Text).
+	 */
+	#renderBackgroundJobs(): boolean {
+		const snapshot = this.ctx.viewSession.getAsyncJobSnapshot();
+		const running = snapshot?.running ?? [];
+		const recent = snapshot?.recent ?? [];
+		const delivery = snapshot?.delivery;
+		const hasPendingDelivery = delivery ? delivery.queued > 0 || delivery.delivering : false;
+		for (const job of running) this.#pendingJobsTracked.add(job.id);
+		for (const job of recent) {
+			if (!this.#pendingJobsTracked.has(job.id) || this.#pendingJobsSettled.has(job.id)) continue;
+			if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+				this.#pendingJobsSettled.set(job.id, job.status);
+			}
+		}
+		if (running.length === 0 || this.ctx.focusedAgentId) {
+			this.#clearBackgroundJobsText();
+			return this.ctx.focusedAgentId ? true : hasPendingDelivery;
+		}
+		const now = Date.now();
+		const rows: BackgroundJobRow[] = running.map(job => ({
+			type: job.type,
+			agentType: job.agentType,
+			id: job.type === "task" ? formatTaskId(job.id) : "",
+			summary: (job.type === "task" ? this.ctx.describeSubagentJob(job.id) : undefined) || job.label,
+			ageMs: now - job.startTime,
+		}));
+		const settled = { completed: 0, failed: 0, cancelled: 0 };
+		for (const status of this.#pendingJobsSettled.values()) settled[status]++;
+		const rendered = renderBackgroundJobsLines(rows, settled, this.ctx.ui.terminal.columns).join("\n");
+		if (this.#pendingJobsText) this.#pendingJobsText.setText(rendered);
+		else {
+			this.#pendingJobsText = new Text(rendered, 1, 0);
+			this.ctx.subagentContainer.addChild(this.#pendingJobsText);
+		}
+		this.ctx.ui.requestRender();
+		return true;
+	}
+
 	sendErrorNotification(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
 		// A running async job or queued delivery will wake the session again, so
 		// its current agent_end is a scheduling pause rather than a user-visible
@@ -1834,6 +1985,9 @@ export class EventController {
 	}
 
 	sendCompletionNotification(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
+		// A nonterminal agent_end (scheduled continuation) must never produce a
+		// completion notification — the turn is still in progress.
+		if (event.isTerminal === false) return;
 		const notify = settings.get("completion.notify");
 		if (notify === "off") return;
 

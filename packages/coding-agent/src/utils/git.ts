@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { $which, hasFsCode, isEisdir, isEnoent, isEnotdir, Snowflake } from "@oh-my-pi/pi-utils";
+import type { Subprocess } from "bun";
 import {
 	parseDiffHunks as parseCommitDiffHunks,
 	parseFileDiffs,
@@ -191,6 +192,16 @@ const AMBIENT_GIT_ENV = {
 	GIT_OBJECT_DIRECTORY: undefined,
 	GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
 } satisfies Record<string, undefined>;
+const GIT_NON_INTERACTIVE_ENV = {
+	GIT_ASKPASS: "true",
+	GIT_EDITOR: "true",
+	GIT_TERMINAL_PROMPT: "0",
+	SSH_ASKPASS: "/usr/bin/false",
+} satisfies Record<string, string>;
+const GH_NON_INTERACTIVE_ENV = {
+	...GIT_NON_INTERACTIVE_ENV,
+	GH_PROMPT_DISABLED: "1",
+} satisfies Record<string, string>;
 
 /** Default deadline for git and gh subprocesses spawned by the coding agent. */
 export const GIT_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;

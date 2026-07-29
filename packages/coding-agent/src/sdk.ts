@@ -34,7 +34,7 @@ import {
 	formatActiveRepoWatchdogPrompt,
 	formatAdvisorContextPrompt,
 } from "./advisor";
-import { AsyncJobManager } from "./async";
+import { AsyncJobManager, forwardAsyncJobChanges } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
 import { createAutoresearchExtension } from "./autoresearch";
 import { loadCapability } from "./capability";
@@ -217,8 +217,6 @@ import { EventBus } from "./utils/event-bus";
 import { buildNamedToolChoice } from "./utils/tool-choice";
 import { VibeSessionRegistry } from "./vibe/runtime";
 import { buildWorkspaceTree, type WorkspaceTree } from "./workspace-tree";
-
-
 
 type McpNotificationEntry = {
 	serverName: string;
@@ -1597,6 +1595,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					deliveryBatchMaxWaitMs: asyncBatchSettleMs,
 				})
 			: undefined;
+	const unsubscribeAsyncJobChanges = asyncJobManager ? forwardAsyncJobChanges(asyncJobManager, eventBus) : undefined;
 
 	const scopedAsyncJobManager = asyncJobManager ?? (options.parentTaskPrefix ? AsyncJobManager.instance() : undefined);
 
@@ -3284,6 +3283,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				} finally {
 					unregisterUnlessParked();
 					unsubscribeCredentialDisabled?.();
+					unsubscribeAsyncJobChanges?.();
 				}
 			};
 		}
@@ -3523,6 +3523,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				if (hasRegistered) unregisterUnlessParked();
 			} else {
 				if (hasRegistered) unregisterUnlessParked();
+				unsubscribeAsyncJobChanges?.();
 				if (asyncJobManager) {
 					if (AsyncJobManager.instance() === asyncJobManager) {
 						AsyncJobManager.setInstance(undefined);

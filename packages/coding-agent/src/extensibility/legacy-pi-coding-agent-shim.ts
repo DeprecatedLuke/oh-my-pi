@@ -45,7 +45,7 @@ import {
 	truncateHead,
 	truncateTail,
 } from "../session/streaming-output";
-import { BUILTIN_TOOLS, type Tool, type ToolSession } from "../tools";
+import type { Tool, ToolSession } from "../tools";
 import { BashTool } from "../tools/bash";
 import { FindTool } from "../tools/glob";
 import { SearchTool } from "../tools/grep";
@@ -345,13 +345,6 @@ async function executeLegacyBashOperations(
 	}
 }
 
-function createBuiltinTool(cwd: string, name: LegacyCodingToolName): Tool {
-	const tool = BUILTIN_TOOLS[name](legacyToolSession(cwd));
-	if (tool instanceof Promise) {
-		throw new Error(`Built-in ${name} tool factory unexpectedly returned a promise.`);
-	}
-}
-
 async function executeBuiltinTool(
 	cwd: string,
 	name: LegacyCodingToolName,
@@ -379,137 +372,6 @@ function legacyBuiltinTool(cwd: string, name: LegacyCodingToolName): ToolDefinit
 		[LEGACY_BUILTIN_TOOL_MARKER]: true,
 	};
 	return markToolDefinition(definition);
-}
-
-function stringField(value: unknown, key: string): string | undefined {
-	if (value === null || typeof value !== "object") return undefined;
-	const field = Reflect.get(value, key);
-	return typeof field === "string" ? field : undefined;
-}
-
-function numberField(value: unknown, key: string): number | undefined {
-	if (value === null || typeof value !== "object") return undefined;
-	const field = Reflect.get(value, key);
-	return typeof field === "number" ? field : undefined;
-}
-
-function booleanField(value: unknown, key: string): boolean | undefined {
-	if (value === null || typeof value !== "object") return undefined;
-	const field = Reflect.get(value, key);
-	return typeof field === "boolean" ? field : undefined;
-}
-
-function isLegacyThemeLike(value: unknown): value is LegacyThemeLike {
-	if (value === null || typeof value !== "object") return false;
-	return typeof Reflect.get(value, "fg") === "function" && typeof Reflect.get(value, "bold") === "function";
-}
-
-function renderTheme(second: unknown, third: unknown): LegacyThemeLike | undefined {
-	if (isLegacyThemeLike(second)) return second;
-	if (isLegacyThemeLike(third)) return third;
-	return undefined;
-}
-
-function themedTitle(theme: LegacyThemeLike | undefined, title: string): string {
-	return theme ? theme.fg("toolTitle", theme.bold(title)) : title;
-}
-
-function themedMuted(theme: LegacyThemeLike | undefined, text: string): string {
-	return theme ? theme.fg("toolOutput", text) : text;
-}
-
-function textResult(result: AgentToolResult<unknown> | undefined): string {
-	return result?.content.find(block => block.type === "text")?.text ?? "";
-}
-
-function legacyRenderResult(result: AgentToolResult<unknown>, _options: unknown, themeArg: unknown): Text {
-	const theme = renderTheme(themeArg, undefined);
-	const output = textResult(result);
-	return new Text(output ? `\n${themedMuted(theme, output)}` : "", 0, 0);
-}
-
-function lineRangePath(readPath: string, offset: number | undefined, limit: number | undefined): string {
-	if (offset === undefined && limit === undefined) return readPath;
-	const start = Math.max(1, Math.floor(offset ?? 1));
-	if (limit === undefined) return `${readPath}:${start}`;
-	const end = Math.max(start, start + Math.max(1, Math.floor(limit)) - 1);
-	return `${readPath}:${start}-${end}`;
-}
-
-function escapeRegexLiteral(value: string): string {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function joinLegacyGlob(searchPath: string, pattern: string): string {
-	if (path.isAbsolute(pattern)) return pattern;
-	if (!searchPath || searchPath === ".") return pattern;
-	return path.join(searchPath, pattern);
-}
-
-function normalizeLegacyLimit(limit: number | undefined, fallback: number): number {
-	if (limit === undefined || !Number.isFinite(limit)) return fallback;
-	return Math.max(1, Math.floor(limit));
-}
-
-function appendStatus(text: string, status: string): string {
-	return text ? `${text}\n\n${status}` : status;
-}
-
-function legacyBashSnapshot(output: string): { text: string; details?: { truncation: TruncationResult } } {
-	const truncation = truncateTail(output, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
-	if (!truncation.truncated) {
-		return { text: truncation.content };
-	}
-	const startLine = truncation.totalLines - (truncation.outputLines ?? 0) + 1;
-	const note =
-		truncation.truncatedBy === "lines"
-			? `Showing lines ${startLine}-${truncation.totalLines} of ${truncation.totalLines}`
-			: `Showing lines ${startLine}-${truncation.totalLines} of ${truncation.totalLines} (${formatBytes(DEFAULT_MAX_BYTES)} limit)`;
-	return {
-		text: `${truncation.content}\n\n[${note}]`,
-		details: { truncation },
-	};
-}
-
-async function executeLegacyBashOperations(
-	operations: BashOperations,
-	spawn: BashSpawnContext,
-	timeout: number | undefined,
-	signal: AbortSignal | undefined,
-	onUpdate: AgentToolUpdateCallback | undefined,
-): Promise<AgentToolResult> {
-	let output = "";
-	const onData = (data: Buffer) => {
-		output += data.toString("utf8");
-		if (onUpdate) {
-			const snapshot = legacyBashSnapshot(output);
-			onUpdate({ content: [{ type: "text", text: snapshot.text }], details: snapshot.details });
-		}
-	};
-	try {
-		const result = await operations.exec(spawn.command, spawn.cwd, {
-			onData,
-			signal,
-			timeout,
-			env: spawn.env,
-		});
-		const snapshot = legacyBashSnapshot(output);
-		const text = snapshot.text || "(no output)";
-		if (result.exitCode !== 0 && result.exitCode !== null) {
-			throw new Error(appendStatus(text, `Command exited with code ${result.exitCode}`));
-		}
-		return { content: [{ type: "text", text }], details: snapshot.details };
-	} catch (err) {
-		const snapshot = legacyBashSnapshot(output);
-		const text = snapshot.text;
-		if (err instanceof Error && err.message === "aborted") {
-			throw new Error(appendStatus(text, "Command aborted"));
-		}
-		if (err instanceof Error && err.message.startsWith("timeout:")) {
-			throw new Error(appendStatus(text, `Command timed out after ${err.message.slice("timeout:".length)} seconds`));
-		}
-		throw err;
-	}
 }
 
 /** Format the active shortcut for legacy extensions that render keybinding hints. */

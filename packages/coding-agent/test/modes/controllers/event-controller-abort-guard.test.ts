@@ -85,6 +85,8 @@ function makeTurnEndContext(options: { lastAssistantMessage?: AssistantMessage }
 		messages: [] as AssistantMessage[],
 		getLastAssistantMessage: () => options.lastAssistantMessage,
 		getContextUsage: () => undefined,
+		hasPendingBackgroundJobs: () => false,
+		getAsyncJobSnapshot: () => null,
 	};
 	return {
 		isInitialized: true,
@@ -105,6 +107,7 @@ function makeTurnEndContext(options: { lastAssistantMessage?: AssistantMessage }
 		sessionManager: { getSessionName: () => "test-session" },
 		clearPinnedError: () => {},
 		ensureLoadingAnimation: () => {},
+		updateEditorTopBorder: () => {},
 		showError: () => {},
 		session,
 		viewSession: session,
@@ -237,6 +240,43 @@ describe("EventController.sendErrorNotification", () => {
 });
 
 describe("EventController — notifications through the real turn-end path (#handleAgentEnd)", () => {
+	it("suppresses a nonterminal normal stop and notifies exactly once on the terminal settle in desktop mode", async () => {
+		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		settings.override("completion.notify", "on");
+		const controller = new EventController(makeTurnEndContext());
+
+		await controller.handleEvent({
+			...makeAgentEndEvent([makeAssistantMessage("stop")]),
+			isTerminal: false,
+		} as Extract<AgentSessionEvent, { type: "agent_end" }>);
+		expect(notify).not.toHaveBeenCalled();
+
+		await controller.handleEvent({
+			...makeAgentEndEvent([makeAssistantMessage("stop")]),
+			isTerminal: true,
+		} as Extract<AgentSessionEvent, { type: "agent_end" }>);
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect(notify).toHaveBeenCalledWith(expect.objectContaining({ body: "Complete", type: "completion" }));
+	});
+
+	it("suppresses a nonterminal normal stop and rings exactly once on the legacy terminal settle in bell mode", async () => {
+		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const bell = vi.spyOn(TERMINAL, "ringBell").mockImplementation(() => {});
+		settings.override("completion.notify", "bell");
+		const controller = new EventController(makeTurnEndContext());
+
+		await controller.handleEvent({
+			...makeAgentEndEvent([makeAssistantMessage("stop")]),
+			isTerminal: false,
+		} as Extract<AgentSessionEvent, { type: "agent_end" }>);
+		expect(bell).not.toHaveBeenCalled();
+		expect(notify).not.toHaveBeenCalled();
+
+		// Undefined isTerminal is the legacy terminal event shape.
+		await controller.handleEvent(makeAgentEndEvent([makeAssistantMessage("stop")]));
+		expect(bell).toHaveBeenCalledTimes(1);
+		expect(notify).not.toHaveBeenCalled();
+	});
 	it("fires the error notification when the dispatched turn settles with stopReason === 'error', even with a stale active-context snapshot", async () => {
 		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
 		settings.override("error.notify", "on");

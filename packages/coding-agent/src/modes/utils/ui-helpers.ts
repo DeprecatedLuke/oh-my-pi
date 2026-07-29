@@ -351,26 +351,6 @@ export class UiHelpers {
 			// updateResult armed.
 			previous.seal();
 		};
-		// Rebuild-time mirror of the event controller's displaceable-poll
-		// bookkeeping: a `job` poll that found every watched job still running is
-		// superseded by the next `job` call, so a rebuilt transcript collapses a
-		// repeated-poll run to its final snapshot instead of replaying the spam.
-		let waitingPoll: ToolExecutionComponent | null = null;
-		const resolveWaitingPoll = (nextToolName?: string) => {
-			const previous = waitingPoll;
-			if (!previous) return;
-			waitingPoll = null;
-			if (
-				nextToolName === "job" &&
-				previous.isDisplaceableBlock() &&
-				this.ctx.chatContainer.isBlockUncommitted(previous)
-			) {
-				this.ctx.chatContainer.removeChild(previous);
-			}
-			// Sealing freezes the block and stops the waiting-poll spinner that
-			// updateResult armed.
-			previous.seal();
-		};
 		let todoSnapshot: ToolExecutionComponent | null = null;
 		const resolveTodoSnapshot = (nextToolName?: string) => {
 			const previous = todoSnapshot;

@@ -63,12 +63,6 @@ const SEEN_LINE_REVEAL_CAP = 40;
  */
 const SEEN_LINE_REVEAL_MAX_COLUMNS = 512;
 
-/** Maximum number of unseen anchor lines to reveal inline in the guard error. */
-const SEEN_LINE_REVEAL_CAP = 40;
-
-/** Maximum characters revealed per anchor line in the guard error. */
-const SEEN_LINE_REVEAL_MAX_COLUMNS = 512;
-
 export interface PatcherOptions {
 	/** Storage backend used for all reads and writes. */
 	fs: Filesystem;

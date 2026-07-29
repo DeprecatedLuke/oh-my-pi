@@ -3722,7 +3722,7 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// Grep, glob, and AST tools
-	"glob.enabled": {
+	"find.enabled": {
 		type: "boolean",
 		default: true,
 		ui: {
@@ -3733,7 +3733,48 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"grep.enabled": {
+	"issues.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Issues",
+			description:
+				"Enable the issues tool and the issues:// URL for project-local issue tracking under .omp/issues/. The reviewer subagent files findings here.",
+		},
+	},
+
+	"issues.reminders": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Issue Reminders",
+			description:
+				"Remind the agent before it ends a turn while issues are still marked in-progress (only when no background jobs are running).",
+		},
+	},
+
+	"issues.reminders.max": {
+		type: "number",
+		default: 3,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Issue Reminder Limit",
+			description: "Maximum number of in-progress issue reminders before giving up.",
+			options: [
+				{ value: "1", label: "1 reminder" },
+				{ value: "2", label: "2 reminders" },
+				{ value: "3", label: "3 reminders" },
+				{ value: "5", label: "5 reminders" },
+			],
+		},
+	},
+
+	"search.enabled": {
 		type: "boolean",
 		default: true,
 		ui: {
@@ -3744,7 +3785,7 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"grep.contextBefore": {
+	"search.contextBefore": {
 		type: "number",
 		default: 1,
 		ui: {
@@ -3762,7 +3803,7 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"grep.contextAfter": {
+	"search.contextAfter": {
 		type: "number",
 		default: 3,
 		ui: {
@@ -4160,6 +4201,7 @@ export const SETTINGS_SCHEMA = {
 		type: "number",
 		default: 100,
 	},
+
 	"async.batchSettleMs": {
 		type: "number",
 		default: 300_000,
@@ -4170,7 +4212,6 @@ export const SETTINGS_SCHEMA = {
 				"Defer dispatching a completed background job while other background jobs are still running, up to this many ms, so sibling completions arrive in one user turn. Jobs from the same task fan-out extend the hold while a sibling is alive and reporting progress; the cap then acts as a silence (hang) bound. 0 disables.",
 		},
 	},
-
 
 	"irc.timeoutMs": {
 		type: "number",
@@ -4298,7 +4339,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			group: "Discovery & MCP",
 			label: "MCP Tool Discovery",
-			description: "Legacy MCP discovery toggle retained for compatibility with existing settings callers."
+			description: "Legacy MCP discovery toggle retained for compatibility with existing settings callers.",
 		},
 	},
 
@@ -5016,16 +5057,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"speech.enhanced": {
-		type: "boolean",
-		default: false,
-		ui: {
-			tab: "providers",
-			group: "Services",
-			label: "Enhanced Speech",
-			description: "Rewrite assistant output into natural spoken prose before synthesis",
-		},
-	},
 	"speech.mode": {
 		type: "enum",
 		values: ["all", "assistant", "yield"] as const,

@@ -233,7 +233,7 @@ describe("SecretObfuscator regex behavior", () => {
 		const obfuscator = new SecretObfuscator([{ type: "regex", content: "Alpha" }]);
 		const masked = obfuscator.obfuscate("Tell me about Alpha here.");
 		expect(masked).not.toContain("Alpha");
-		expect(masked).toMatch(/\$\$[A-Z0-9]{4}(?::[ULCM])?\$\$/);
+		expect(masked).toMatch(/\$\$[A-Z0-9]{12}(?::[ULCM])?\$\$/);
 		expect(obfuscator.deobfuscate(masked)).toBe("Tell me about Alpha here.");
 	});
 });
@@ -336,7 +336,7 @@ describe("SecretObfuscator redacted thinking blocks", () => {
 });
 
 describe("SecretObfuscator case hints", () => {
-	it("uses a shared base token with capitalization hints for case variants", () => {
+	it("uses exact-value keyed bases with capitalization hints for case variants", () => {
 		const obfuscator = new SecretObfuscator([
 			{ type: "plain", content: "password" },
 			{ type: "plain", content: "PASSWORD" },
@@ -345,11 +345,14 @@ describe("SecretObfuscator case hints", () => {
 		]);
 		const original = "password PASSWORD Password PassWord";
 		const obfuscated = obfuscator.obfuscate(original);
-		const tokens = obfuscated.match(/\$\$[A-Z0-9]{4}:[ULCM]\$\$/g);
+		const tokens = obfuscated.match(/\$\$[A-Z0-9]{12}:[ULCM]\$\$/g);
 		if (!tokens) throw new Error("Expected capitalization-hinted placeholders");
 
 		expect(tokens).toHaveLength(4);
-		expect(new Set(tokens.map(token => token.slice(2, 6))).size).toBe(1);
+		// Case hints remain model-visible labels, but exact-value keying keeps
+		// case-only siblings on independent bases to prevent provider-side hint swaps.
+		const bases = tokens.map(token => /^\$\$([A-Z0-9]{12}):/.exec(token)?.[1]);
+		expect(new Set(bases).size).toBe(4);
 		expect(tokens[0]?.endsWith(":L$$")).toBe(true);
 		expect(tokens[1]?.endsWith(":U$$")).toBe(true);
 		expect(tokens[2]?.endsWith(":C$$")).toBe(true);
@@ -364,7 +367,7 @@ describe("SecretObfuscator case hints", () => {
 		]);
 		const original = "SeCretpw SecRetpw";
 		const obfuscated = obfuscator.obfuscate(original);
-		const tokens = obfuscated.match(/\$\$[A-Z0-9]{4}:M\$\$/g);
+		const tokens = obfuscated.match(/\$\$[A-Z0-9]{12}:M\$\$/g);
 		if (!tokens) throw new Error("Expected mixed-case placeholders");
 
 		expect(tokens).toHaveLength(2);
@@ -378,24 +381,25 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		const obf = new SecretObfuscator([{ type: "plain", content: "hunter22", friendlyName: "GitHub Token" }]);
 		const input = "login with hunter22 now";
 		const masked = obf.obfuscate(input);
-		const token = masked.match(/\$\$GITHUBTOKEN_[A-Z0-9]{4}(?::[ULCM])?\$\$/)?.[0];
+		const token = masked.match(/\$\$GITHUBTOKEN_[A-Z0-9]{12}(?::[ULCM])?\$\$/)?.[0];
 		if (!token) throw new Error("Expected a friendlyName-prefixed placeholder");
 		expect(masked).not.toContain("hunter22");
 		expect(obf.deobfuscate(masked)).toBe(input);
 	});
 
-	it("shares one casing hash across case variants under a friendlyName prefix", () => {
+	it("uses distinct exact-value keyed bases for case variants under a friendlyName prefix", () => {
 		const obf = new SecretObfuscator([
 			{ type: "plain", content: "password", friendlyName: "pw" },
 			{ type: "plain", content: "PASSWORD", friendlyName: "pw" },
 		]);
 		const input = "password PASSWORD";
 		const masked = obf.obfuscate(input);
-		const tokens = masked.match(/\$\$PW_[A-Z0-9]{4}:[ULCM]\$\$/g);
+		const tokens = masked.match(/\$\$PW_[A-Z0-9]{12}:[ULCM]\$\$/g);
 		if (!tokens) throw new Error("Expected a friendlyName-prefixed hinted placeholder");
 		expect(tokens).toHaveLength(2);
-		const bases = tokens.map(token => /\$\$PW_([A-Z0-9]{4})/.exec(token)?.[1]);
-		expect(new Set(bases).size).toBe(1);
+		const bases = tokens.map(token => /\$\$PW_([A-Z0-9]{12})/.exec(token)?.[1]);
+		// A friendlyName must not weaken exact-value keying for case-only siblings.
+		expect(new Set(bases).size).toBe(2);
 		expect(tokens[0]?.endsWith(":L$$")).toBe(true);
 		expect(tokens[1]?.endsWith(":U$$")).toBe(true);
 		expect(obf.deobfuscate(masked)).toBe(input);
@@ -405,16 +409,18 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 		const obf = new SecretObfuscator([{ type: "regex", content: "tok_[a-z0-9]+", friendlyName: "API Key" }]);
 		const input = "use tok_abc123 please";
 		const masked = obf.obfuscate(input);
-		expect(masked).toMatch(/\$\$APIKEY_[A-Z0-9]{4}(?::[ULCM])?\$\$/);
+		expect(masked).toMatch(/\$\$APIKEY_[A-Z0-9]{12}(?::[ULCM])?\$\$/);
 		expect(masked).not.toContain("tok_abc123");
 		expect(obf.deobfuscate(masked)).toBe(input);
 	});
 
-	it("preserves a hashline filename placeholder across repeated provider-context masking", () => {
+	it("drops a friendlyName that matches a configured regex while preserving the hashline placeholder", () => {
 		const obf = new SecretObfuscator([{ type: "regex", content: "alloc", flags: "i", friendlyName: "AllocRegion" }]);
 		const input = "[libs/embedded-allocator/src/allocator.rs#ED09]";
 		const once = obf.obfuscate(input);
-		expect(once).toMatch(/\$\$ALLOCREGION_[A-Z0-9]{4}:L\$\$/);
+		// `alloc` matches the configured regex, so the friendlyName is dropped.
+		expect(once).toMatch(/\$\$[A-Z0-9]{12}:L\$\$/);
+		expect(once).not.toContain("ALLOCREGION_");
 		expect(obf.obfuscate(once)).toBe(once);
 		expect(obf.deobfuscate(once)).toBe(input);
 	});
@@ -422,9 +428,9 @@ describe("SecretObfuscator friendlyName placeholders", () => {
 	it("leaves the placeholder unprefixed when no friendlyName is set", () => {
 		const obf = new SecretObfuscator([{ type: "plain", content: "hunter22" }]);
 		const masked = obf.obfuscate("login with hunter22 now");
-		expect(masked).toMatch(/\$\$[A-Z0-9]{4}(?::[ULCM])?\$\$/);
+		expect(masked).toMatch(/\$\$[A-Z0-9]{12}(?::[ULCM])?\$\$/);
 
-		expect(masked).not.toMatch(/\$\$[A-Z0-9]+_[A-Z0-9]{4}/);
+		expect(masked).not.toMatch(/\$\$[A-Z0-9]+_[A-Z0-9]{12}/);
 		expect(obf.deobfuscate(masked)).toBe("login with hunter22 now");
 	});
 });

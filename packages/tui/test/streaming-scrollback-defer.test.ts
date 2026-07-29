@@ -24,12 +24,15 @@ class LineList implements Component {
 		this.#lines = [...lines];
 	}
 }
+class SeamLineList extends LineList implements NativeScrollbackLiveRegion {
+	seam: number | undefined = 0;
 
-class LiveLineList extends LineList implements NativeScrollbackLiveRegion {
 	getNativeScrollbackLiveRegionStart(): number | undefined {
-		return 0;
+		return this.seam;
 	}
 }
+
+class LiveLineList extends SeamLineList {}
 
 /**
  * A live block whose rendered rows only grow at the bottom and never re-layout
@@ -152,6 +155,7 @@ describe("streaming scrollback defer", () => {
 			"CMUX_PANEL_ID",
 			"CMUX_TAB_ID",
 			"TERM",
+			"PI_TUI_SCROLLBACK_REBUILD",
 		]) {
 			savedTerminalEnv[key] = Bun.env[key];
 			if (key === "TERM") Bun.env[key] = "xterm-256color";

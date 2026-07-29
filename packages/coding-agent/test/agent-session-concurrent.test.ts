@@ -1117,7 +1117,6 @@ describe("AgentSession concurrent prompt guard", () => {
 		const asyncJobManager = new AsyncJobManager({
 			maxRunningJobs: 3,
 			retentionMs: 1_000,
-
 		});
 		AsyncJobManager.setInstance(asyncJobManager);
 
@@ -1168,6 +1167,9 @@ describe("AgentSession concurrent prompt guard", () => {
 			await waitFor(() => asyncJobManager.getDeliveryState({ ownerId: "acp-session-b" }).queued > 0);
 
 			expect(sessionB.getAsyncJobSnapshot()?.delivery.pendingJobIds).not.toContain("job-a");
+			// The explicit all-owner scope is for process-global observers such as
+			// completion notification gating, not the owner-scoped ACP drain/render view.
+			expect(sessionB.getAsyncJobSnapshot({ scope: "all" })?.delivery.pendingJobIds).toContain("job-a");
 			await expect(sessionB.drainAsyncJobDeliveriesForAcp({ timeoutMs: 1_000 })).resolves.toBe(true);
 			expect(delivered).toEqual(["job-b"]);
 		} finally {
@@ -1176,7 +1178,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		}
 	});
 
-	it("reports pending background jobs while one runs and clears once settled", async () => {
+	it("reports pending background jobs while one runs and until its queued result is consumed", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-pending-bg.db"));
 		authStorages.push(authStorage);
@@ -1217,7 +1219,11 @@ describe("AgentSession concurrent prompt guard", () => {
 			release.resolve();
 			await asyncJobManager.waitForAll();
 			expect(await asyncJobManager.drainDeliveries({ timeoutMs: 1_000 })).toBe(true);
-			// Settled and delivered: the gate clears so reruns may proceed.
+			// Delivery enqueues an async-result follow-up, so the gate remains pending
+			// until that queued result is consumed by the session.
+			expect(session.hasPendingBackgroundJobs()).toBe(true);
+			session.yieldQueue.clear("async-result");
+			// Once the queued follow-up is consumed, the gate clears.
 			expect(session.hasPendingBackgroundJobs()).toBe(false);
 		} finally {
 			release.resolve();
