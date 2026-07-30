@@ -3722,7 +3722,7 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// Grep, glob, and AST tools
-	"find.enabled": {
+	"glob.enabled": {
 		type: "boolean",
 		default: true,
 		ui: {
@@ -3774,7 +3774,7 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"search.enabled": {
+	"grep.enabled": {
 		type: "boolean",
 		default: true,
 		ui: {
@@ -3785,7 +3785,7 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"search.contextBefore": {
+	"grep.contextBefore": {
 		type: "number",
 		default: 1,
 		ui: {
@@ -3803,7 +3803,7 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"search.contextAfter": {
+	"grep.contextAfter": {
 		type: "number",
 		default: 3,
 		ui: {

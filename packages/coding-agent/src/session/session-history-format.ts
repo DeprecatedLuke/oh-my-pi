@@ -124,7 +124,7 @@ export function formatToolCallPrimaryArg(name: string, args: Record<string, unkn
 		if (note) return oneLine(note);
 		if (severity) return oneLine(severity);
 	}
-	if (name === "search" || name === "grep") {
+	if (name === "grep") {
 		const pattern = primaryArgValue(args.pattern);
 		const paths = primaryArgValue(args.paths) || primaryArgValue(args.path);
 		if (pattern && paths) return oneLine(`${pattern} @ ${paths}`);
@@ -146,7 +146,7 @@ export function formatToolCallPrimaryArg(name: string, args: Record<string, unkn
 			if (pattern) return oneLine(pattern);
 		}
 	}
-	if (name === "find") {
+	if (name === "glob") {
 		const paths = primaryArgValue(args.paths);
 		if (paths) return oneLine(paths);
 	}

@@ -49,8 +49,8 @@ import { EvalTool } from "./eval";
 import { resolveEvalBackends } from "./eval-backends";
 import { GithubTool } from "./gh";
 import { GitTool } from "./git";
-import { FindTool } from "./glob";
-import { SearchTool } from "./grep";
+import { GlobTool } from "./glob";
+import { GrepTool } from "./grep";
 import { HubTool, isIrcEnabled } from "./hub";
 import { InspectImageTool } from "./inspect-image";
 import { IrcTool } from "./irc";
@@ -442,7 +442,7 @@ export const DEFAULT_ESSENTIAL_TOOL_NAMES: readonly string[] = [
 	"launch",
 	"edit",
 	"write",
-	"find",
+	"glob",
 	"eval",
 ] as const;
 
@@ -500,8 +500,8 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	github: GithubTool.createIf,
 	git: GitTool.createIf,
 	patch: PatchTool.createIf,
-	find: s => new FindTool(s),
-	search: s => new SearchTool(s),
+	glob: s => new GlobTool(s),
+	grep: s => new GrepTool(s),
 	lsp: LspTool.createIf,
 	inspect_image: s => new InspectImageTool(s),
 	browser: s => new BrowserTool(s),
@@ -667,8 +667,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "debug") return session.settings.get("debug.enabled");
 		if (name === "todo")
 			return (!includeYield || session.prewalkArmed === true) && session.settings.get("todo.enabled");
-		if (name === "find") return session.settings.get("find.enabled");
-		if (name === "search") return session.settings.get("search.enabled");
+		if (name === "glob") return session.settings.get("glob.enabled");
+		if (name === "grep") return session.settings.get("grep.enabled");
 		if (name === "github") return session.settings.get("github.enabled");
 		if (name === "ast_grep") return session.settings.get("astGrep.enabled");
 		if (name === "ast_edit") return session.settings.get("astEdit.enabled");

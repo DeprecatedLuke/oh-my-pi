@@ -88,7 +88,7 @@ const searchSchema = type({
 		.describe("files to skip before collecting results — use to paginate when the prior call hit the file limit"),
 });
 
-export type SearchToolInput = typeof searchSchema.infer;
+export type GrepToolInput = typeof searchSchema.infer;
 
 /** Maximum number of distinct files surfaced in a single response. The
  * agent paginates further pages via `skip`. */
@@ -883,7 +883,7 @@ async function resolveInternalSearchInputs(opts: {
 	};
 }
 
-export interface SearchToolDetails {
+export interface GrepToolDetails {
 	truncation?: TruncationResult;
 	fileLimitReached?: number;
 	perFileLimitReached?: number;
@@ -915,13 +915,13 @@ export interface SearchToolDetails {
 
 type SearchParams = typeof searchSchema.infer;
 
-export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDetails> {
-	readonly name = "search";
+export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails> {
+	readonly name = "grep";
 	readonly approval = (args: unknown): ToolTier =>
 		toPathList((args as { paths?: string | string[] }).paths).some(pathTargetsSsh) ? "exec" : "read";
-	readonly label = "Search";
+	readonly label = "Grep";
 	readonly loadMode = "discoverable";
-	readonly summary = "Search file contents using ripgrep (fast regex search)";
+	readonly summary = "Grep file contents using ripgrep (fast regex search)";
 	readonly description: string;
 	readonly parameters = searchSchema;
 	readonly strict = true;
@@ -938,9 +938,9 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 		_toolCallId: string,
 		params: SearchParams,
 		signal?: AbortSignal,
-		_onUpdate?: AgentToolUpdateCallback<SearchToolDetails>,
+		_onUpdate?: AgentToolUpdateCallback<GrepToolDetails>,
 		_toolContext?: AgentToolContext,
-	): Promise<AgentToolResult<SearchToolDetails>> {
+	): Promise<AgentToolResult<GrepToolDetails>> {
 		const { pattern, paths: rawPaths, case: caseSensitive, gitignore, skip } = params;
 
 		return untilAborted(signal, async () => {
@@ -1014,8 +1014,8 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 							`or pass a UTF-8 text member.`,
 					);
 				}
-				const normalizedContextBefore = this.session.settings.get("search.contextBefore");
-				const normalizedContextAfter = this.session.settings.get("search.contextAfter");
+				const normalizedContextBefore = this.session.settings.get("grep.contextBefore");
+				const normalizedContextAfter = this.session.settings.get("grep.contextAfter");
 				const ignoreCase = !(caseSensitive ?? true);
 				const useGitignore = gitignore ?? true;
 				const patternHasNewline = normalizedPattern.includes("\n") || normalizedPattern.includes("\\n");
@@ -1406,7 +1406,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 						.filter((s): s is string => Boolean(s))
 						.join("\n") || undefined;
 				if (selectedMatches.length === 0) {
-					const details: SearchToolDetails = {
+					const details: GrepToolDetails = {
 						scopePath,
 						searchPath,
 						cwd: this.session.cwd,
@@ -1541,7 +1541,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				const truncated = Boolean(
 					fileLimitReached || perFileLimitReached || result.limitReached || truncation.truncated || linesTruncated,
 				);
-				const details: SearchToolDetails = {
+				const details: GrepToolDetails = {
 					scopePath,
 					searchPath,
 					cwd: this.session.cwd,
@@ -1578,7 +1578,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 // TUI Renderer
 // =============================================================================
 
-interface SearchRenderArgs {
+interface GrepRenderArgs {
 	pattern: string;
 	paths?: string | string[];
 	case?: boolean;
@@ -1594,7 +1594,7 @@ const EXPANDED_TEXT_LIMIT = PREVIEW_LIMITS.EXPANDED_LINES * 2;
 
 const SEARCH_CODE_FRAME_LINE_RE = /^\s*\*?(\d+)│/;
 
-function searchScopeMeta(details: SearchToolDetails | undefined): string | undefined {
+function searchScopeMeta(details: GrepToolDetails | undefined): string | undefined {
 	if (!details?.scopePath) return undefined;
 	const label = details.searchPath ? fileHyperlink(details.searchPath, details.scopePath) : details.scopePath;
 	return `in ${label}`;
@@ -1748,7 +1748,7 @@ function grepStatusIcon(uiTheme: Theme): string {
 
 export const grepToolRenderer = {
 	inline: true,
-	renderCall(args: SearchRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
+	renderCall(args: GrepRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 		const paths = toPathList(args.paths);
 		const meta: string[] = [];
 		if (paths.length) meta.push(`in ${paths.join(", ")}`);
@@ -1764,10 +1764,10 @@ export const grepToolRenderer = {
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: SearchToolDetails; isError?: boolean },
+		result: { content: Array<{ type: string; text?: string }>; details?: GrepToolDetails; isError?: boolean },
 		options: RenderResultOptions,
 		uiTheme: Theme,
-		args?: SearchRenderArgs,
+		args?: GrepRenderArgs,
 	): Component {
 		const details = result.details;
 
@@ -1890,5 +1890,3 @@ export const grepToolRenderer = {
 	},
 	mergeCallAndResult: true,
 };
-/** Legacy import alias; `SearchTool` is the canonical fork name. */
-export { SearchTool as GrepTool };

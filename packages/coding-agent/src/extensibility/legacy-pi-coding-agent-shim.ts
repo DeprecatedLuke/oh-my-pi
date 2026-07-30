@@ -47,8 +47,8 @@ import {
 } from "../session/streaming-output";
 import type { Tool, ToolSession } from "../tools";
 import { BashTool } from "../tools/bash";
-import { FindTool } from "../tools/glob";
-import { SearchTool } from "../tools/grep";
+import { GlobTool } from "../tools/glob";
+import { GrepTool } from "../tools/grep";
 import { ReadTool } from "../tools/read";
 import { formatBytes } from "../tools/render-utils";
 import { WriteTool } from "../tools/write";
@@ -204,9 +204,9 @@ function createRegistryTool(
 		case "edit":
 			return new EditTool(session);
 		case "glob":
-			return new FindTool(session);
+			return new GlobTool(session);
 		case "grep":
-			return new SearchTool(session);
+			return new GrepTool(session);
 		case "read":
 			return new ReadTool(session);
 		case "write":

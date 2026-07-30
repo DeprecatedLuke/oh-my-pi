@@ -3,7 +3,7 @@ import * as os from "node:os";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/glob";
+import { GlobTool } from "@oh-my-pi/pi-coding-agent/tools/glob";
 import { resolveToolSearchScope } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 
 // Minimal ToolSession stub (ssh-url-approval.test.ts shape). The ssh:// guard
@@ -52,7 +52,7 @@ describe("ssh:// is rejected before any connection in read/write-tier tools", ()
 		const spy = vi
 			.spyOn(InternalUrlRouter.instance(), "resolve")
 			.mockRejectedValue(new Error("resolve must not run for ssh://"));
-		const tool = new FindTool(createTestToolSession(os.tmpdir()));
+		const tool = new GlobTool(createTestToolSession(os.tmpdir()));
 		await expect(tool.execute("f", { paths: ["ssh://h/x"] })).rejects.toThrow(/ssh:\/\//);
 		expect(spy).not.toHaveBeenCalled();
 	});

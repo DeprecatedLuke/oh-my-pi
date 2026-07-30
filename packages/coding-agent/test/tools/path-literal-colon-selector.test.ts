@@ -17,7 +17,7 @@ import { GrepOutputMode } from "@oh-my-pi/pi-natives";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { runGrepCommand } from "../../src/cli/grep-cli";
 import { initTheme } from "../../src/modes/theme/theme";
-import { SearchTool } from "../../src/tools/grep";
+import { GrepTool } from "../../src/tools/grep";
 
 function getText(result: { content: Array<{ type: string; text?: string }> }): string {
 	return result.content
@@ -229,7 +229,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const absolute = path.join(tmpDir, literal);
 			await Bun.write(absolute, "needle\n");
 
-			const tool = new SearchTool(createSession());
+			const tool = new GrepTool(createSession());
 			const result = await tool.execute("grep-literal", {
 				pattern: "needle",
 				paths: [absolute],
@@ -244,7 +244,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			await fs.mkdir(path.join(tmpDir, "dir"), { recursive: true });
 			await Bun.write(path.join(tmpDir, "dir", "a b:1-2"), "escaped literal needle\n");
 
-			const tool = new SearchTool(createSession());
+			const tool = new GrepTool(createSession());
 			const result = await tool.execute("grep-escaped-literal", {
 				pattern: "needle",
 				paths: ["dir/a\\ b:1-2"],
@@ -261,7 +261,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const literal = path.join(tmpDir, "a;b:1-2");
 			await Bun.write(literal, "delimited literal needle\n");
 
-			const tool = new SearchTool(createSession());
+			const tool = new GrepTool(createSession());
 			const result = await tool.execute("grep-literal-semicolon-selector", {
 				pattern: "needle",
 				paths: [literal],
@@ -280,7 +280,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const literal = path.join(tmpDir, "data.zip:1-2");
 			await Bun.write(literal, "literal archive needle\n");
 
-			const tool = new SearchTool(createSession());
+			const tool = new GrepTool(createSession());
 			const result = await tool.execute("grep-literal-zip-selector", {
 				pattern: "needle",
 				paths: [literal],
@@ -294,7 +294,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const absolute = path.join(tmpDir, "notes.txt");
 			await Bun.write(absolute, "one\ntwo\nthree\nfour\n");
 
-			const tool = new SearchTool(createSession());
+			const tool = new GrepTool(createSession());
 			const rangedResult = await tool.execute("grep-range-filter", {
 				pattern: ".",
 				paths: [`${absolute}:1-2`],
@@ -337,7 +337,7 @@ describe("grep directory line selectors", () => {
 		await Bun.write(path.join(appDir, "one.ts"), "outside one\ninside one\noutside one again\n");
 		await Bun.write(path.join(appDir, "two.ts"), "outside two\ninside two\noutside two again\n");
 
-		const result = await new SearchTool(createSession()).execute("grep-directory-selector", {
+		const result = await new GrepTool(createSession()).execute("grep-directory-selector", {
 			pattern: "inside|outside",
 			paths: ["scripts/app:2-2"],
 		});
@@ -360,7 +360,7 @@ describe("grep directory line selectors", () => {
 		).join("\n")}\n`;
 		await Bun.write(path.join(appDir, "many.ts"), content);
 
-		const result = await new SearchTool(createSession()).execute("grep-directory-selector-cap", {
+		const result = await new GrepTool(createSession()).execute("grep-directory-selector-cap", {
 			pattern: "cap-needle",
 			paths: ["scripts/hot:25-25"],
 		});
@@ -380,7 +380,7 @@ describe("grep directory line selectors", () => {
 		).join("\n")}\n`;
 		await Bun.write(path.join(appDir, "long.ts"), content);
 
-		const result = await new SearchTool(createSession()).execute("grep-directory-selector-open", {
+		const result = await new GrepTool(createSession()).execute("grep-directory-selector-open", {
 			pattern: "open-needle",
 			paths: ["scripts/tail:35-"],
 		});
@@ -489,7 +489,7 @@ describe("leading-colon path recovery (issue #5508)", () => {
 		const abs = path.join(tmpDir, "colon-grep.txt");
 		await Bun.write(abs, "needle here\nsecond line\n");
 
-		const result = await new SearchTool(createSession()).execute("grep-leading-colon", {
+		const result = await new GrepTool(createSession()).execute("grep-leading-colon", {
 			pattern: "needle",
 			paths: [`:${abs}`],
 		});

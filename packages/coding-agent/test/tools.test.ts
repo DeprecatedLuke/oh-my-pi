@@ -17,8 +17,8 @@ import * as toolTimeouts from "@oh-my-pi/pi-coding-agent/tools/tool-timeouts";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 import { unzip } from "@oh-my-pi/pi-coding-agent/utils/zip";
 import { $which, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
-import { FindTool } from "../src/tools/glob";
-import { DEFAULT_FILE_LIMIT, MULTI_FILE_PER_FILE_MATCHES, SearchTool } from "../src/tools/grep";
+import { GlobTool } from "../src/tools/glob";
+import { DEFAULT_FILE_LIMIT, GrepTool, MULTI_FILE_PER_FILE_MATCHES } from "../src/tools/grep";
 import { HubTool } from "../src/tools/hub";
 
 // Helper to extract text from content blocks
@@ -294,8 +294,8 @@ describe("Coding Agent Tools", () => {
 		writeTool = wrapToolWithMetaNotice(new WriteTool(session));
 		editTool = wrapToolWithMetaNotice(new EditTool(session));
 		bashTool = wrapToolWithMetaNotice(new BashTool(session));
-		searchTool = wrapToolWithMetaNotice(new SearchTool(session));
-		findTool = wrapToolWithMetaNotice(new FindTool(session));
+		searchTool = wrapToolWithMetaNotice(new GrepTool(session));
+		findTool = wrapToolWithMetaNotice(new GlobTool(session));
 	});
 
 	afterEach(() => {
@@ -1827,7 +1827,7 @@ function b() {
 
 			const contextSettings = Settings.isolated({ "search.contextBefore": 1, "search.contextAfter": 1 });
 			const contextSearchTool = wrapToolWithMetaNotice(
-				new SearchTool(createTestToolSession(testDir, contextSettings)),
+				new GrepTool(createTestToolSession(testDir, contextSettings)),
 			);
 			const result = await contextSearchTool.execute("test-call-12", {
 				pattern: "match",
@@ -1849,7 +1849,7 @@ function b() {
 
 			const noContextSettings = Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 });
 			const noContextSearchTool = wrapToolWithMetaNotice(
-				new SearchTool(createTestToolSession(testDir, noContextSettings)),
+				new GrepTool(createTestToolSession(testDir, noContextSettings)),
 			);
 			const result = await noContextSearchTool.execute("test-call-12-gap", {
 				pattern: "match",

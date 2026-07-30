@@ -9,8 +9,8 @@ export const BUILTIN_TOOL_NAMES = [
 	"debug",
 	"eval",
 	"github",
-	"find",
-	"search",
+	"glob",
+	"grep",
 	"lsp",
 	"inspect_image",
 	"browser",
@@ -45,8 +45,8 @@ export const HIDDEN_TOOL_NAMES = ["yield", "goal"] as const;
 export type HiddenToolName = (typeof HIDDEN_TOOL_NAMES)[number];
 
 const LEGACY_BUILTIN_TOOL_NAME_ALIASES: ReadonlyMap<string, BuiltinToolName> = new Map([
-	["glob", "find"],
-	["grep", "search"],
+	["search", "grep"],
+	["find", "glob"],
 ]);
 
 /** Return the canonical tool name for current and legacy built-in tool IDs. */

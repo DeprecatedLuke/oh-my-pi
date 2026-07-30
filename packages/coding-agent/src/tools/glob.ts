@@ -49,13 +49,13 @@ const findSchema = type({
 	"limit?": type("number").describe("max results"),
 });
 
-export type FindToolInput = typeof findSchema.infer;
+export type GlobToolInput = typeof findSchema.infer;
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 200;
 const DEFAULT_GLOB_TIMEOUT_MS = 5000;
 
-export interface FindToolDetails {
+export interface GlobToolDetails {
 	truncation?: TruncationResult;
 	resultLimitReached?: number;
 	meta?: OutputMeta;
@@ -78,7 +78,7 @@ export interface FindToolDetails {
  * Pluggable operations for the find tool.
  * Override these to delegate file search to remote systems (e.g., SSH).
  */
-export interface FindOperations {
+export interface GlobOperations {
 	/** Check if path exists */
 	exists: (absolutePath: string) => Promise<boolean> | boolean;
 	/** Optional stat for distinguishing files vs directories. */
@@ -89,9 +89,9 @@ export interface FindOperations {
 	glob: (pattern: string, cwd: string, options: { ignore: string[]; limit: number }) => Promise<string[]> | string[];
 }
 
-export interface FindToolOptions {
-	/** Custom operations for find. Default: local filesystem + rg */
-	operations?: FindOperations;
+export interface GlobToolOptions {
+	/** Custom operations for glob. Default: local filesystem + rg */
+	operations?: GlobOperations;
 }
 
 interface GlobTarget {
@@ -100,11 +100,11 @@ interface GlobTarget {
 	hasGlob: boolean;
 }
 
-export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
-	readonly name = "find";
+export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
+	readonly name = "glob";
 	readonly approval = "read" as const;
 	readonly loadMode = "essential";
-	readonly label = "Find";
+	readonly label = "Glob";
 	readonly description: string;
 	readonly parameters = findSchema;
 
@@ -128,11 +128,11 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 	];
 	readonly strict = true;
 
-	readonly #customOps?: FindOperations;
+	readonly #customOps?: GlobOperations;
 
 	constructor(
 		private readonly session: ToolSession,
-		options?: FindToolOptions,
+		options?: GlobToolOptions,
 	) {
 		this.#customOps = options?.operations;
 		this.description = prompt.render(globDescription);
@@ -142,9 +142,9 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 		_toolCallId: string,
 		params: typeof findSchema.infer,
 		signal?: AbortSignal,
-		onUpdate?: AgentToolUpdateCallback<FindToolDetails>,
+		onUpdate?: AgentToolUpdateCallback<GlobToolDetails>,
 		_context?: AgentToolContext,
-	): Promise<AgentToolResult<FindToolDetails>> {
+	): Promise<AgentToolResult<GlobToolDetails>> {
 		const { paths, limit, hidden, gitignore } = params;
 
 		return untilAborted(signal, async () => {
@@ -268,11 +268,11 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 			const buildResult = (
 				files: string[],
 				opts?: { notice?: string; forceTruncated?: boolean; timedOut?: boolean },
-			): AgentToolResult<FindToolDetails> => {
+			): AgentToolResult<GlobToolDetails> => {
 				const notice = opts?.notice;
 				const forceTruncated = opts?.forceTruncated ?? false;
 				if (files.length === 0) {
-					const details: FindToolDetails = {
+					const details: GlobToolDetails = {
 						scopePath,
 						fileCount: 0,
 						files: [],
@@ -301,7 +301,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				const rawOutput = trailingNotes.length > 0 ? `${baseOutput}\n\n${trailingNotes.join("\n")}` : baseOutput;
 				const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 
-				const details: FindToolDetails = {
+				const details: GlobToolDetails = {
 					scopePath,
 					fileCount: limited.length,
 					files: limited,
@@ -366,7 +366,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				const now = Date.now();
 				if (now - lastUpdate < updateIntervalMs) return;
 				lastUpdate = now;
-				const details: FindToolDetails = {
+				const details: GlobToolDetails = {
 					scopePath,
 					fileCount: onUpdateMatches.length,
 					files: onUpdateMatches.slice(),
@@ -497,12 +497,12 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 // TUI Renderer
 // =============================================================================
 
-interface FindRenderArgs {
+interface GlobRenderArgs {
 	paths?: string | string[];
 	limit?: number;
 }
 
-function formatGlobRenderPaths(paths: FindRenderArgs["paths"]): string | undefined {
+function formatGlobRenderPaths(paths: GlobRenderArgs["paths"]): string | undefined {
 	return Array.isArray(paths) ? paths.join(", ") : paths;
 }
 
@@ -514,7 +514,7 @@ function globStatusIcon(uiTheme: Theme): string {
 
 export const globToolRenderer = {
 	inline: true,
-	renderCall(args: FindRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
+	renderCall(args: GlobRenderArgs, _options: RenderResultOptions, uiTheme: Theme): Component {
 		const meta: string[] = [];
 		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
 
@@ -532,10 +532,10 @@ export const globToolRenderer = {
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: FindToolDetails; isError?: boolean },
+		result: { content: Array<{ type: string; text?: string }>; details?: GlobToolDetails; isError?: boolean },
 		options: RenderResultOptions,
 		uiTheme: Theme,
-		args?: FindRenderArgs,
+		args?: GlobRenderArgs,
 	): Component {
 		const details = result.details;
 
@@ -666,5 +666,3 @@ export const globToolRenderer = {
 	},
 	mergeCallAndResult: true,
 };
-/** Legacy import alias; `FindTool` is the canonical fork name. */
-export { FindTool as GlobTool };

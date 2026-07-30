@@ -10,7 +10,7 @@ Steps:
 
 1. Survey the knowledge base: read `knowledge://` and each `knowledge://<category>` listing to enumerate every file.
 2. Read every file in full — not only the ones you suspect are stale. This pass verifies the whole base.
-3. Ground each file's claims in the current repository: use `search`/`find`/`read` to confirm that paths, symbols, APIs, commands, settings, and described behavior still match the code.
+3. Ground each file's claims in the current repository: use `grep`/`glob`/`read` to confirm that paths, symbols, APIs, commands, settings, and described behavior still match the code.
 4. Act on what you find, scoped to `.omp/knowledge`:
    - CORRECT an inaccurate or outdated fact with `edit`/`write` on its `knowledge://<category>/<topic>.md` URL so it matches the code.
    - RESOLVE conflicts: when two files (or two statements) disagree, determine which the repository supports, make them consistent, and consolidate overlapping files into the single best one with `edit`/`write`, then delete the now-redundant file(s).

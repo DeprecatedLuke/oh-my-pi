@@ -37,6 +37,7 @@ import type { ModelRole } from "../config/model-roles";
 import { loadCapability } from "../discovery";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { AgentStorage } from "../session/agent-storage";
+import { normalizeToolName } from "../tools/builtin-names";
 import { AUTO_IMAGE_PROVIDER_ORDER, isImageProviderId } from "../tools/image-providers";
 import { type EditMode, normalizeEditMode } from "../utils/edit-mode";
 import { INSPECT_IMAGE_MODES } from "../utils/inspect-image-mode";
@@ -1624,9 +1625,9 @@ export class Settings {
 			delete raw["power.preventDisplaySleep"];
 		}
 
-		// Migration for renamed settings: upstream used glob.*/grep.*, fork uses find.*/search.*
-		// (per-property merge to avoid clobbering)
-		const ensureRawObject = (key: "find" | "search"): Record<string, unknown> => {
+		// Migration for renamed settings grep.* and glob.* from search.* and find.*:
+		// 1. Nested settings: find -> glob, search -> grep (per-property merge to avoid clobbering)
+		const ensureRawObject = (key: "glob" | "grep"): Record<string, unknown> => {
 			const current = raw[key];
 			if (isRecord(current)) {
 				return current;
@@ -1636,74 +1637,109 @@ export class Settings {
 			return created;
 		};
 
-		if ("glob" in raw) {
-			const globObj = raw.glob;
-			if (isRecord(globObj)) {
-				const findObj = ensureRawObject("find");
-				const globKeys: Array<"enabled"> = ["enabled"];
-				for (const key of globKeys) {
-					if (key in globObj && !(key in findObj)) {
-						findObj[key] = globObj[key];
+		if ("find" in raw) {
+			const findObj = raw.find;
+			if (isRecord(findObj)) {
+				const globObj = ensureRawObject("glob");
+				const findKeys: Array<"enabled"> = ["enabled"];
+				for (const key of findKeys) {
+					if (key in findObj && !(key in globObj)) {
+						globObj[key] = findObj[key];
 					}
 				}
 			}
-			delete raw.glob;
+			delete raw.find;
 		}
 
-		if ("grep" in raw) {
-			const grepObj = raw.grep;
-			if (isRecord(grepObj)) {
-				const searchObj = ensureRawObject("search");
-				const grepKeys: Array<"enabled" | "contextBefore" | "contextAfter"> = [
+		if ("search" in raw) {
+			const searchObj = raw.search;
+			if (isRecord(searchObj)) {
+				const grepObj = ensureRawObject("grep");
+				const searchKeys: Array<"enabled" | "contextBefore" | "contextAfter"> = [
 					"enabled",
 					"contextBefore",
 					"contextAfter",
 				];
-				for (const key of grepKeys) {
-					if (key in grepObj && !(key in searchObj)) {
-						searchObj[key] = grepObj[key];
+				for (const key of searchKeys) {
+					if (key in searchObj && !(key in grepObj)) {
+						grepObj[key] = searchObj[key];
 					}
 				}
 			}
-			delete raw.grep;
+			delete raw.search;
 		}
 
 		// 2. Flat settings keys: map them to the proper nested target so get/set resolves them correctly
-		if ("glob.enabled" in raw) {
-			const findObj = ensureRawObject("find");
-			if (!("enabled" in findObj)) {
-				findObj.enabled = raw["glob.enabled"];
+		if ("find.enabled" in raw) {
+			const globObj = ensureRawObject("glob");
+			if (!("enabled" in globObj)) {
+				globObj.enabled = raw["find.enabled"];
 			}
-			delete raw["glob.enabled"];
+			delete raw["find.enabled"];
 		}
-		if ("grep.enabled" in raw) {
-			const searchObj = ensureRawObject("search");
-			if (!("enabled" in searchObj)) {
-				searchObj.enabled = raw["grep.enabled"];
+		if ("search.enabled" in raw) {
+			const grepObj = ensureRawObject("grep");
+			if (!("enabled" in grepObj)) {
+				grepObj.enabled = raw["search.enabled"];
 			}
-			delete raw["grep.enabled"];
+			delete raw["search.enabled"];
 		}
-		if ("grep.contextBefore" in raw) {
-			const searchObj = ensureRawObject("search");
-			if (!("contextBefore" in searchObj)) {
-				searchObj.contextBefore = raw["grep.contextBefore"];
+		if ("search.contextBefore" in raw) {
+			const grepObj = ensureRawObject("grep");
+			if (!("contextBefore" in grepObj)) {
+				grepObj.contextBefore = raw["search.contextBefore"];
 			}
-			delete raw["grep.contextBefore"];
+			delete raw["search.contextBefore"];
 		}
-		if ("grep.contextAfter" in raw) {
-			const searchObj = ensureRawObject("search");
-			if (!("contextAfter" in searchObj)) {
-				searchObj.contextAfter = raw["grep.contextAfter"];
+		if ("search.contextAfter" in raw) {
+			const grepObj = ensureRawObject("grep");
+			if (!("contextAfter" in grepObj)) {
+				grepObj.contextAfter = raw["search.contextAfter"];
 			}
-			delete raw["grep.contextAfter"];
+			delete raw["search.contextAfter"];
 		}
 
-		// Also clean up any empty nested objects we might have created or left behind
-		if (raw.glob && typeof raw.glob === "object" && Object.keys(raw.glob).length === 0) {
-			delete raw.glob;
+		// 3. Tool-name arrays use wire IDs too. Preserve user overrides across
+		// the rename without duplicating entries if they already added grep/glob.
+		const migrateToolNameList = (names: unknown): unknown => {
+			if (!Array.isArray(names)) return names;
+			const out: unknown[] = [];
+			const seen = new Set<string>();
+			for (const name of names) {
+				const migrated = typeof name === "string" ? normalizeToolName(name) : name;
+				if (typeof migrated === "string") {
+					if (seen.has(migrated)) continue;
+					seen.add(migrated);
+				}
+				out.push(migrated);
+			}
+			return out;
+		};
+		const ensureToolsObject = (): Record<string, unknown> => {
+			const current = raw.tools;
+			if (isRecord(current)) return current;
+			const created: Record<string, unknown> = {};
+			raw.tools = created;
+			return created;
+		};
+		const toolsObj = isRecord(raw.tools) ? raw.tools : undefined;
+		if (toolsObj && "essentialOverride" in toolsObj) {
+			toolsObj.essentialOverride = migrateToolNameList(toolsObj.essentialOverride);
 		}
-		if (raw.grep && typeof raw.grep === "object" && Object.keys(raw.grep).length === 0) {
-			delete raw.grep;
+		if ("tools.essentialOverride" in raw) {
+			const nestedToolsObj = ensureToolsObject();
+			if (!("essentialOverride" in nestedToolsObj)) {
+				nestedToolsObj.essentialOverride = migrateToolNameList(raw["tools.essentialOverride"]);
+			}
+			delete raw["tools.essentialOverride"];
+		}
+
+		// Also clean up any empty nested objects we might have created or left behind.
+		if (isRecord(raw.find) && Object.keys(raw.find).length === 0) {
+			delete raw.find;
+		}
+		if (isRecord(raw.search) && Object.keys(raw.search).length === 0) {
+			delete raw.search;
 		}
 		// readHashLines: removed. Hashline anchors are now driven solely by
 		// edit.mode === "hashline"; the separate read toggle only ever produced

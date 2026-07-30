@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import * as os from "node:os";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { SearchTool } from "@oh-my-pi/pi-coding-agent/tools/grep";
+import { GrepTool } from "@oh-my-pi/pi-coding-agent/tools/grep";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 
@@ -40,7 +40,7 @@ describe("ssh:// tools require exec-tier approval", () => {
 	});
 
 	it("grep: an ssh:// entry flattened into a delimited path still trips exec", () => {
-		const tool = new SearchTool(createTestToolSession(os.tmpdir()));
+		const tool = new GrepTool(createTestToolSession(os.tmpdir()));
 		// The delimited string is one entry at approval time (expansion happens
 		// later), so an anchored check would miss it — the substring scan must not.
 		expect(callApproval(tool, { paths: "src,ssh://icaro/etc/hosts" })).toBe("exec");

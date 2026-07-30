@@ -8,7 +8,7 @@ import { parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls/parse"
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 import { SshProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/ssh-protocol";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { SearchTool } from "@oh-my-pi/pi-coding-agent/tools/grep";
+import { GrepTool } from "@oh-my-pi/pi-coding-agent/tools/grep";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
 
@@ -220,7 +220,7 @@ describe.skipIf(!SSH_OK)("ssh:// through the real read/grep/write tools (localho
 
 	it("SearchTool reports matches under the ssh:// URL with no scratch-temp leak", async () => {
 		mockEmptyHosts();
-		const tool = new SearchTool(createSession());
+		const tool = new GrepTool(createSession());
 		const result = await tool.execute("s", { pattern: "beta", paths: [`ssh://localhost${TMP}/read.txt`] });
 		const out = textOf(result);
 		expect(out).toContain("beta");

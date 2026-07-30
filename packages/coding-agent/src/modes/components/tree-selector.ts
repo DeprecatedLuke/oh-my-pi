@@ -757,12 +757,12 @@ class TreeList implements Component {
 							: undefined;
 				const paths = toPathList(searchPathsInput);
 				const scope = paths.length > 0 ? paths.join(", ") : ".";
-				return `[search: /${pattern}/ in ${shortenPath(scope)}]`;
+				return `[grep: /${pattern}/ in ${shortenPath(scope)}]`;
 			}
 			case "glob":
 			case "find": {
 				const paths = Array.isArray(args.paths) ? args.paths.join(", ") : String(args.pattern || ".");
-				return `[find: ${shortenPath(paths)}]`;
+				return `[glob: ${shortenPath(paths)}]`;
 			}
 			case "ls": {
 				const path = shortenPath(String(args.path || "."));

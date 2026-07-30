@@ -6650,7 +6650,7 @@ export class AgentSession {
 				? "Maintain the project knowledge base toward a goal."
 				: "Prune and consolidate the project knowledge base.",
 			systemPrompt: prompt.render(knowledgeCompactTemplate, { goal }),
-			tools: goal ? ["read", "write", "edit", "bash", "search", "find"] : ["read", "write", "edit", "bash"],
+			tools: goal ? ["read", "write", "edit", "bash", "grep", "glob"] : ["read", "write", "edit", "bash"],
 			task: goal ?? "Compact the project knowledge base.",
 			noun: "Knowledge compaction",
 			successVerb: "Compacted",
@@ -6676,7 +6676,7 @@ export class AgentSession {
 			sourceTitle: opts?.sourceTitle ?? (focus ? `/knowledge update ${focus}` : "/knowledge update"),
 			description: "Verify and reconcile the project knowledge base.",
 			systemPrompt: prompt.render(knowledgeUpdateTemplate, { focus }),
-			tools: ["read", "write", "edit", "bash", "search", "find"],
+			tools: ["read", "write", "edit", "bash", "grep", "glob"],
 			task: focus
 				? `Verify and reconcile the project knowledge base (focus: ${focus}).`
 				: "Verify and reconcile the project knowledge base.",
@@ -6704,7 +6704,7 @@ export class AgentSession {
 			sourceTitle: opts?.sourceTitle ?? (focus ? `/knowledge build ${focus}` : "/knowledge build"),
 			description: "Explore the project and author the knowledge base.",
 			systemPrompt: prompt.render(knowledgeBuildTemplate, { focus }),
-			tools: ["read", "write", "edit", "bash", "search", "find"],
+			tools: ["read", "write", "edit", "bash", "grep", "glob"],
 			task: focus
 				? `Explore the project and build the knowledge base (focus: ${focus}).`
 				: "Explore the project and build the knowledge base.",
