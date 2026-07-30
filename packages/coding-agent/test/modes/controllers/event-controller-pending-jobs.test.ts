@@ -51,6 +51,13 @@ function makeCtx(opts: {
 	const addChild = vi.fn();
 	const removeChild = vi.fn();
 	const state = { focusedAgentId: opts.focusedAgentId };
+	const snapshotSession = {
+		getAsyncJobSnapshot: () => ({
+			running: opts.running ?? [],
+			recent: opts.recent ?? [],
+			delivery: { queued: 0, delivering: false, pendingJobIds: [] },
+		}),
+	};
 	const ctx = {
 		subagentContainer: { addChild, removeChild, clear: vi.fn() },
 		ui: { requestRender: vi.fn(), terminal: { columns: 200 } },
@@ -59,13 +66,8 @@ function makeCtx(opts: {
 		get focusedAgentId() {
 			return state.focusedAgentId;
 		},
-		session: {
-			getAsyncJobSnapshot: () => ({
-				running: opts.running ?? [],
-				recent: opts.recent ?? [],
-				delivery: { queued: 0, delivering: false, pendingJobIds: [] },
-			}),
-		},
+		session: snapshotSession,
+		viewSession: snapshotSession,
 	} as unknown as InteractiveModeContext;
 	return { ctx, addChild, removeChild, state };
 }
@@ -80,6 +82,20 @@ describe("renderBackgroundJobsLines", () => {
 		const header = lines.find(line => line.includes("Background Jobs")) ?? "";
 		expect(header).toMatch(/^Background Jobs \(1 running\):/);
 		expect(lines.join("\n")).toContain("[task] SomeTask: summarized current action - 1m23s");
+	});
+
+	it("does not repeat a task id when the spawn label equals the id", () => {
+		const out = Bun.stripANSI(
+			renderBackgroundJobsLines(
+				[taskRow({ id: "TrackerEntityRepair", summary: "TrackerEntityRepair" })],
+				NO_SETTLED,
+				120,
+			).join("\n"),
+		);
+		const row = out.split("\n").find(line => line.includes("[task]")) ?? "";
+		expect(row).toContain("[task] TrackerEntityRepair - 1m23s");
+		expect(row.match(/TrackerEntityRepair/g)).toHaveLength(1);
+		expect(row).not.toContain("TrackerEntityRepair: TrackerEntityRepair");
 	});
 
 	it("renders shell jobs as [shell] cmd - age with no id or colon", () => {

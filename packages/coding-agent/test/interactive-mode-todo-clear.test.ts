@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
+import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
@@ -8,7 +9,7 @@ import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task";
+import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "@oh-my-pi/pi-coding-agent/task";
 import type { TodoPhase } from "@oh-my-pi/pi-coding-agent/tools/todo";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import type { NativeScrollbackLiveRegion } from "@oh-my-pi/pi-tui";
@@ -44,7 +45,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		resetSettingsForTest();
 	});
 
-	async function createMode(todoClearDelay: number): Promise<void> {
+	async function createMode(todoClearDelay: number, asyncJobManager?: AsyncJobManager): Promise<void> {
 		await Settings.init({
 			inMemory: true,
 			cwd: tempDir.path(),
@@ -68,6 +69,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
 			settings: Settings.isolated({ "tasks.todoClearDelay": todoClearDelay }),
 			modelRegistry,
+			ownedAsyncJobManager: asyncJobManager,
 		});
 		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, eventBus);
 	}
@@ -134,6 +136,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		mode.setTodos(session.getTodoPhases());
 
 		await mode.init();
+		vi.useFakeTimers();
 		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			id: "ReviewFixer",
 			index: 0,
@@ -142,6 +145,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 			status: "completed",
 			detached: true,
 		});
+		vi.advanceTimersByTime(100);
 
 		expect(session.getTodoPhases()[0]?.tasks[0]?.status).toBe("completed");
 	});
@@ -176,6 +180,72 @@ describe("InteractiveMode todo HUD persistence", () => {
 		expect(task?.status).toBe("completed");
 		// The blocker note is dropped with the blocked status — the wait is over.
 		expect(task?.blocker).toBeUndefined();
+	});
+
+	it("keeps the Background Jobs panel after a detached observer refresh", async () => {
+		const manager = new AsyncJobManager({});
+		await createMode(-1, manager);
+		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
+		const jobGate = Promise.withResolvers<string>();
+		manager.register(
+			"task",
+			"TrackerEntityRepair",
+			({ signal }) => {
+				signal.addEventListener("abort", () => jobGate.resolve("aborted"), { once: true });
+				return jobGate.promise;
+			},
+			{ id: "TrackerEntityRepair", agentType: "task" },
+		);
+
+		await mode.init({ suppressWelcomeIntro: true });
+		vi.useFakeTimers();
+
+		mode.eventController.refreshBackgroundJobs();
+		expect(Bun.stripANSI(mode.subagentContainer.render(120).join("\n"))).toContain("Background Jobs (1 running):");
+
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+			id: "TrackerEntityRepair",
+			index: 0,
+			agent: "task",
+			agentSource: "user",
+			description: "TrackerEntityRepair",
+			status: "started",
+			detached: true,
+		});
+		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, {
+			index: 0,
+			agent: "task",
+			agentSource: "user",
+			task: "TrackerEntityRepair",
+			progress: {
+				index: 0,
+				id: "TrackerEntityRepair",
+				agent: "task",
+				agentSource: "user",
+				status: "running",
+				task: "TrackerEntityRepair",
+				description: "TrackerEntityRepair",
+				lastIntent: "repairing tracker entity",
+				recentTools: [],
+				recentOutput: [],
+				toolCount: 0,
+				requests: 0,
+				tokens: 0,
+				cost: 0,
+				durationMs: 0,
+			},
+			detached: true,
+		});
+		vi.advanceTimersByTime(100);
+
+		const output = Bun.stripANSI(mode.subagentContainer.render(120).join("\n"));
+		expect(output).toContain("Background Jobs (1 running):");
+		expect(output).toContain("[task] TrackerEntityRepair: repairing tracker entity");
+		expect(
+			output.split("\n").filter(line => line.includes("TrackerEntityRepair: repairing tracker entity")),
+		).toHaveLength(1);
+		expect(output).not.toContain("Subagents");
+		expect(output).not.toContain("TrackerEntityRepair: TrackerEntityRepair");
 	});
 });
 

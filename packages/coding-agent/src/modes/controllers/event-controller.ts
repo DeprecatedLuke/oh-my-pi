@@ -132,16 +132,18 @@ export function renderBackgroundJobsLines(
 	for (const job of jobs) {
 		const tag = jobTag(job);
 		const age = formatJobAge(job.ageMs);
-		const idPart = job.id ? `${job.id}: ` : "";
+		const normalizedSummary = replaceTabs(job.summary).replace(/\s+/g, " ").trim();
+		const hasSummary = normalizedSummary.length > 0 && (!job.id || normalizedSummary !== job.id);
+		const idPart = job.id ? `${job.id}${hasSummary ? ": " : ""}` : "";
 		const fixedWidth = visibleWidth(`${indent}${tag} ${idPart}`) + visibleWidth(` - ${age}`);
 		const budget = Math.max(TRUNCATE_LENGTHS.SHORT, columns - fixedWidth);
-		const summary = truncateToWidth(
-			replaceTabs(job.summary).replace(/\s+/g, " ").trim() || "(no label)",
-			budget,
-			Ellipsis.Unicode,
-		);
+		const summary = hasSummary
+			? truncateToWidth(normalizedSummary, budget, Ellipsis.Unicode)
+			: job.id
+				? ""
+				: "(no label)";
 		const head = job.id
-			? `${indent}${theme.fg("dim", tag)} ${theme.fg("accent", theme.bold(job.id))}: `
+			? `${indent}${theme.fg("dim", tag)} ${theme.fg("accent", theme.bold(job.id))}${hasSummary ? ": " : ""}`
 			: `${indent}${theme.fg("dim", tag)} `;
 		lines.push(`${head}${summary}${theme.fg("dim", ` - ${age}`)}`);
 	}

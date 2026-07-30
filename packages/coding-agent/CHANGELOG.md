@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Restored the anchored Background Jobs panel after detached subagent observer updates, replacing the duplicated Subagents tree and repeated task labels with compact live job rows.
+
 ## [17.1.8] - 2026-07-28
 
 ### Breaking Changes
