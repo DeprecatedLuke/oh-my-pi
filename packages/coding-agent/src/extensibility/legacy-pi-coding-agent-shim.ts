@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { type AuthCredential, SqliteAuthCredentialStore, type TSchema } from "@oh-my-pi/pi-ai";
+import { piEscapeRegexLiteral } from "@oh-my-pi/pi-ai/providers/cursor-pi-args";
 import { getKeybindings, type Keybinding, Text } from "@oh-my-pi/pi-tui";
 import {
 	getAgentDbPath,
@@ -269,10 +270,6 @@ function lineRangePath(readPath: string, offset: number | undefined, limit: numb
 	return `${readPath}:${start}-${end}`;
 }
 
-function escapeRegexLiteral(value: string): string {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function joinLegacyGlob(searchPath: string, pattern: string): string {
 	if (path.isAbsolute(pattern)) return pattern;
 	if (!searchPath || searchPath === ".") return pattern;
@@ -512,7 +509,7 @@ export function createGrepToolDefinition(cwd: string, options?: GrepToolOptions)
 		renderResult: legacyRenderResult,
 		execute: (toolCallId, params, signal, onUpdate) => {
 			const rawPattern = stringField(params, "pattern") ?? "";
-			const pattern = booleanField(params, "literal") ? escapeRegexLiteral(rawPattern) : rawPattern;
+			const pattern = booleanField(params, "literal") ? piEscapeRegexLiteral(rawPattern) : rawPattern;
 			const searchPath = stringField(params, "path") ?? ".";
 			const glob = stringField(params, "glob");
 			const context = numberField(params, "context");
@@ -1377,6 +1374,14 @@ export function getPackageDir(): string {
 // not forward it, so legacy extensions importing it fail Bun's static export
 // check during validation (issue #6583).
 export { estimateTokens } from "@oh-my-pi/pi-agent-core/compaction";
+
+// Same barrel gap for two more legacy package-root exports: pi re-exported the
+// `CONFIG_DIR_NAME` constant and the CLI parser `parseArgs`. In omp
+// `CONFIG_DIR_NAME` lives in `@oh-my-pi/pi-utils` and `parseArgs` in
+// `../cli/args`, neither of which the barrel below forwards, so legacy
+// extensions importing either fail Bun's static export check during validation.
+export { CONFIG_DIR_NAME } from "@oh-my-pi/pi-utils";
+export { parseArgs } from "../cli/args";
 
 export * from "../index";
 export { formatBytes as formatSize } from "../tools/render-utils";

@@ -1,11 +1,5 @@
 import { withTimeout } from "@oh-my-pi/pi-utils";
-import {
-	createWorkerHandle,
-	createWorkerSubprocess,
-	resolveWorkerSpawnCmd,
-	workerEnvFromParent,
-} from "../subprocess/worker-client";
-import { safeSend } from "../utils/ipc";
+import { workerHostEntry } from "@oh-my-pi/pi-utils/worker-host";
 import type { TerminalOutputOptions } from "./terminal-output";
 import {
 	TERMINAL_OUTPUT_WORKER_ARG,
@@ -15,40 +9,42 @@ import {
 
 const TERMINAL_OUTPUT_TIMEOUT_MS = 30_000;
 
-/** Replay legacy broker PTY bytes in a child process, never in the client address space. */
+/** Replay legacy broker PTY bytes without evaluating xterm in the client process. */
 export async function renderTerminalOutputIsolated(
 	output: string,
 	options: TerminalOutputOptions,
 ): Promise<string[] | undefined> {
-	const spawned = createWorkerSubprocess<TerminalOutputWorkerResult>({
-		spawnCommand: resolveWorkerSpawnCmd(TERMINAL_OUTPUT_WORKER_ARG),
-		env: workerEnvFromParent(),
-		exitLabel: "terminal output subprocess",
-		reportCleanExit: true,
-		unref: false,
-	});
-	const worker = createWorkerHandle<TerminalOutputWorkerRequest, TerminalOutputWorkerResult>(spawned, message =>
-		safeSend(spawned.proc, message, "terminal-output"),
-	);
-	const id = "render";
+	const hostEntry = workerHostEntry();
+	const worker = hostEntry
+		? new Worker(hostEntry, { type: "module", argv: [TERMINAL_OUTPUT_WORKER_ARG] })
+		: new Worker(new URL("./terminal-output-worker.ts", import.meta.url).href, { type: "module" });
 	const pending = Promise.withResolvers<string[] | undefined>();
-	const unsubscribeMessage = worker.onMessage(message => {
-		if (message.id !== id) return;
-		if (message.type === "result") pending.resolve(message.rows);
-		else pending.reject(new Error(message.error));
-	});
-	const unsubscribeError = worker.onError(error => pending.reject(error));
+	const onMessage = (event: MessageEvent<TerminalOutputWorkerResult>): void => {
+		if (event.data.ok) pending.resolve(event.data.rows);
+		else pending.reject(new Error(event.data.error));
+	};
+	const onError = (event: ErrorEvent): void => {
+		pending.reject(event.error instanceof Error ? event.error : new Error(event.message));
+	};
+	const onClose = (): void => {
+		pending.reject(new Error("Terminal output worker exited before responding"));
+	};
+	worker.addEventListener("message", onMessage);
+	worker.addEventListener("error", onError);
+	worker.addEventListener("close", onClose);
 	try {
-		worker.send({ type: "render", id, output, options });
+		const request: TerminalOutputWorkerRequest = { output, options };
+		worker.postMessage(request);
 		return await withTimeout(
 			pending.promise,
 			TERMINAL_OUTPUT_TIMEOUT_MS,
 			"Timed out replaying launch terminal output",
 		);
 	} finally {
-		unsubscribeMessage();
-		unsubscribeError();
-		await worker.terminate();
+		worker.removeEventListener("message", onMessage);
+		worker.removeEventListener("error", onError);
+		worker.removeEventListener("close", onClose);
+		worker.terminate();
 	}
 }
 

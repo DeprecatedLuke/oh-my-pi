@@ -12,6 +12,7 @@
  */
 import type { StreamFn } from "@oh-my-pi/pi-agent-core";
 import { type SimpleStreamOptions, streamSimple } from "@oh-my-pi/pi-ai";
+import { isAnthropicFableOrMythosModel } from "@oh-my-pi/pi-catalog/identity";
 import { type Settings, validateProviderMaxInFlightRequests } from "../config/settings";
 
 function timeoutSecondsToMs(value: number): number | undefined {
@@ -38,6 +39,14 @@ export function createSettingsAwareStreamFn(settings: Settings, base: StreamFn =
 				: undefined;
 		const streamFirstEventTimeoutMs = timeoutSecondsToMs(settings.get("providers.streamFirstEventTimeoutSeconds"));
 		const streamIdleTimeoutMs = timeoutSecondsToMs(settings.get("providers.streamIdleTimeoutSeconds"));
+		// Server-side fallback applies only to Anthropic Fable/Mythos models when enabled.
+		const serverSideFallbackEnabled =
+			settings.get("providers.anthropic.serverSideFallback") &&
+			model.api === "anthropic-messages" &&
+			model.provider === "anthropic" &&
+			isAnthropicFableOrMythosModel(model.id);
+		const fallbacks =
+			streamOptions?.fallbacks ?? (serverSideFallbackEnabled ? [{ model: "claude-opus-4-8" }] : undefined);
 		const merged: SimpleStreamOptions = {
 			...streamOptions,
 			openrouterVariant: streamOptions?.openrouterVariant ?? openrouterVariant,
@@ -46,6 +55,7 @@ export function createSettingsAwareStreamFn(settings: Settings, base: StreamFn =
 			streamFirstEventTimeoutMs: streamOptions?.streamFirstEventTimeoutMs ?? streamFirstEventTimeoutMs,
 			streamIdleTimeoutMs: streamOptions?.streamIdleTimeoutMs ?? streamIdleTimeoutMs,
 			hideThinkingSummary: streamOptions?.hideThinkingSummary ?? settings.get("omitThinking"),
+			maxRetryDelayMs: streamOptions?.maxRetryDelayMs ?? settings.get("retry.maxDelayMs"),
 			maxInFlightRequests: validateProviderMaxInFlightRequests(
 				streamOptions?.maxInFlightRequests ?? settings.get("providers.maxInFlightRequests"),
 			),
@@ -54,6 +64,7 @@ export function createSettingsAwareStreamFn(settings: Settings, base: StreamFn =
 				checkAssistantContent: settings.get("model.loopGuard.checkAssistantContent"),
 				...streamOptions?.loopGuard,
 			},
+			...(fallbacks !== undefined ? { fallbacks } : {}),
 		};
 		return base(model, context, merged);
 	};

@@ -9,6 +9,16 @@
 
 - Fixed ClinePass GLM-5.2 catalog metadata advertising the unsupported `max` reasoning effort instead of the gateway's `xhigh` top tier.
 
+## [17.2.0] - 2026-07-30
+
+### Added
+
+- Regenerated the Cursor agent protobufs (`discovery/cursor-gen/agent_pb.ts`) against the modern `agent.proto`, adding the message and enum families current Cursor CLI builds emit: Pi tool exec frames, hook queries and responses, subagents, allowlist prechecks, MCP state, smart-mode classification, canvas diagnostics, conversation search, agent-store conflicts and git diff. Purely additive — no existing exported symbol changed shape.
+
+### Fixed
+
+- Fixed an issue where LM Studio first turns failed with a 400 Invalid tool_choice error when a named tool was forced, by using the supported tool_choice: "required" string selector.
+
 ## [17.1.8] - 2026-07-28
 
 ### Added

@@ -9,7 +9,15 @@ import {
 	highlightCode as nativeHighlightCode,
 	supportsLanguage as nativeSupportsLanguage,
 } from "@oh-my-pi/pi-natives";
-import type { EditorTheme, MarkdownTheme, SelectListTheme, SettingsListTheme, SymbolTheme } from "@oh-my-pi/pi-tui";
+import type {
+	EditorTheme,
+	MarkdownTheme,
+	SelectListTheme,
+	SettingsListTheme,
+	SymbolTheme,
+	Terminal,
+	TerminalAppearance,
+} from "@oh-my-pi/pi-tui";
 import { adjustHsv, colorLuma, getCustomThemesDir, isEnoent, logger, relativeLuminance } from "@oh-my-pi/pi-utils";
 import { type } from "arktype";
 import chalk from "chalk";
@@ -161,6 +169,8 @@ export type SymbolKey =
 	| "md.hrChar"
 	| "md.bullet"
 	| "md.colorSwatch"
+	// Advisor note rail
+	| "advisor.rail"
 	// Language/file type icons
 	| "lang.default"
 	| "lang.typescript"
@@ -369,6 +379,8 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"md.hrChar": "─",
 	"md.bullet": "•",
 	"md.colorSwatch": "■",
+	// Advisor note rail (heavier than md.quoteBorder so notes read as a distinct voice)
+	"advisor.rail": "▎",
 	// Language/file icons (emoji-centric, no Nerd Font required)
 	"lang.default": "⌘",
 	"lang.typescript": "🟦",
@@ -678,6 +690,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"md.bullet": "\uf111",
 	// pick: ■ | alt:  (U+F096)
 	"md.colorSwatch": "■",
+	// pick: ▎ | alt: ┃ │
+	"advisor.rail": "▎",
 	// Language icons (nerd font devicons)
 	"lang.default": "",
 	"lang.typescript": "\u{E628}",
@@ -883,6 +897,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"md.hrChar": "-",
 	"md.bullet": "*",
 	"md.colorSwatch": "[]",
+	"advisor.rail": "|",
 	// Language icons (ASCII uses abbreviations)
 	"lang.default": "code",
 	"lang.typescript": "ts",
@@ -2172,6 +2187,11 @@ export function getCurrentThemeName(): string | undefined {
 export function fgOrPlain(color: ThemeColor, text: string, styledText: string = text): string {
 	return typeof theme === "undefined" ? text : theme.fg(color, styledText);
 }
+export interface ThemeChangeEvent {
+	/** Preview/presentation-only changes should repaint live UI without replacing native scrollback. */
+	ephemeral?: boolean;
+}
+
 var currentSymbolPresetOverride: SymbolPreset | undefined;
 var currentColorBlindMode: boolean = false;
 var themeWatcher: fs.FSWatcher | undefined;
@@ -2180,7 +2200,7 @@ var sigwinchHandler: (() => void) | undefined;
 var autoDetectedTheme: boolean = false;
 var autoDarkTheme: string = "dark";
 var autoLightTheme: string = "light";
-var onThemeChangeCallback: (() => void) | undefined;
+var onThemeChangeCallback: ((event: ThemeChangeEvent) => void) | undefined;
 var themeLoadRequestId: number = 0;
 let themeEpoch = 0;
 
@@ -2256,7 +2276,10 @@ export async function setTheme(
 	}
 }
 
-export async function previewTheme(name: string): Promise<{ success: boolean; error?: string }> {
+export async function previewTheme(
+	name: string,
+	event: ThemeChangeEvent = { ephemeral: true },
+): Promise<{ success: boolean; error?: string }> {
 	const requestId = ++themeLoadRequestId;
 	try {
 		const loadedTheme = await loadTheme(name, getCurrentThemeOptions());
@@ -2264,7 +2287,7 @@ export async function previewTheme(name: string): Promise<{ success: boolean; er
 			return { success: false, error: "Theme preview superseded by a newer request" };
 		}
 		theme = loadedTheme;
-		notifyThemeChange();
+		notifyThemeChange(event);
 		return { success: true };
 	} catch (error) {
 		if (requestId !== themeLoadRequestId) {
@@ -2280,9 +2303,9 @@ export async function previewTheme(name: string): Promise<{ success: boolean; er
 /**
  * Enable auto-detection mode, switching to the appropriate dark/light theme.
  */
-export function enableAutoTheme(): void {
+export function enableAutoTheme(event: ThemeChangeEvent = {}): void {
 	autoDetectedTheme = true;
-	reevaluateAutoTheme("enableAutoTheme");
+	reevaluateAutoTheme("enableAutoTheme", event);
 }
 
 /**
@@ -2311,7 +2334,7 @@ export function setThemeInstance(themeInstance: Theme): void {
 	theme = themeInstance;
 	currentThemeName = "<in-memory>";
 	stopThemeWatcher();
-	notifyThemeChange();
+	notifyThemeChange({ ephemeral: true });
 }
 
 /**
@@ -2332,7 +2355,7 @@ export async function setSymbolPreset(preset: SymbolPreset): Promise<void> {
 		theme = await loadTheme("dark", getCurrentThemeOptions());
 		if (requestId !== themeLoadRequestId) return;
 	}
-	notifyThemeChange();
+	notifyThemeChange({ ephemeral: true });
 }
 
 /**
@@ -2361,7 +2384,7 @@ export async function setColorBlindMode(enabled: boolean): Promise<void> {
 		theme = await loadTheme("dark", getCurrentThemeOptions());
 		if (requestId !== themeLoadRequestId) return;
 	}
-	notifyThemeChange();
+	notifyThemeChange({ ephemeral: true });
 }
 
 /**
@@ -2371,7 +2394,7 @@ export function getColorBlindMode(): boolean {
 	return currentColorBlindMode;
 }
 
-export function onThemeChange(callback: () => void): () => void {
+export function onThemeChange(callback: (event: ThemeChangeEvent) => void): () => void {
 	onThemeChangeCallback = callback;
 	return () => {
 		if (onThemeChangeCallback === callback) {
@@ -2392,9 +2415,9 @@ export function getThemeEpoch(): number {
 }
 
 /** Bump the theme epoch and notify the registered theme-change listener. */
-function notifyThemeChange(): void {
+function notifyThemeChange(event: ThemeChangeEvent = {}): void {
 	themeEpoch++;
-	onThemeChangeCallback?.();
+	onThemeChangeCallback?.(event);
 }
 
 /**
@@ -2449,7 +2472,7 @@ async function startThemeWatcher(): Promise<void> {
 			loadTheme(watchedThemeName, getCurrentThemeOptions())
 				.then(loadedTheme => {
 					theme = loadedTheme;
-					notifyThemeChange();
+					notifyThemeChange({ ephemeral: true });
 				})
 				.catch(() => {
 					// Ignore errors (file might be in invalid state while being edited)
@@ -2478,27 +2501,164 @@ async function startThemeWatcher(): Promise<void> {
 }
 
 /**
- * Shared logic for re-evaluating the auto-detected theme.
- * Called from SIGWINCH, terminal appearance change handler, and macOS fallback observer.
+ * Load and apply an already-resolved auto-theme name.
  */
-function reevaluateAutoTheme(debugLabel: string): void {
-	if (!autoDetectedTheme) return;
-	const resolved = getDefaultTheme();
+function applyResolvedAutoTheme(resolved: string, debugLabel: string, event: ThemeChangeEvent): void {
 	if (resolved === currentThemeName) return;
 	currentThemeName = resolved;
+	const requestId = ++themeLoadRequestId;
 	loadTheme(resolved, getCurrentThemeOptions())
 		.then(loadedTheme => {
+			if (requestId !== themeLoadRequestId) return;
 			theme = loadedTheme;
-			notifyThemeChange();
+			notifyThemeChange(event);
 		})
 		.catch(err => {
+			if (requestId !== themeLoadRequestId) return;
 			logger.debug(`Theme switch on ${debugLabel} failed`, { error: String(err) });
 		});
+}
+
+/**
+ * Shared logic for re-evaluating the auto-detected theme.
+ * An explicit appearance is provisional input and does not alter terminal-reported state.
+ */
+function reevaluateAutoTheme(debugLabel: string, event: ThemeChangeEvent = {}, appearance?: "dark" | "light"): void {
+	if (!autoDetectedTheme) return;
+	const resolved =
+		appearance === undefined ? getDefaultTheme() : appearance === "dark" ? autoDarkTheme : autoLightTheme;
+	applyResolvedAutoTheme(resolved, debugLabel, event);
 }
 
 // ============================================================================
 // macOS Appearance Fallback Observer
 // ============================================================================
+
+type MacOSAppearanceReprobeTerminal = Pick<
+	Terminal,
+	"appearance" | "onAppearanceChange" | "onAppearanceReport" | "onPrivateModeReport" | "refreshAppearance"
+>;
+
+const MACOS_APPEARANCE_REPROBE_DELAYS_MS = [25, 50, 100, 250, 500, 1000] as const;
+const MACOS_APPEARANCE_RECONCILE_DELAY_MS = 1100;
+
+/**
+ * Fall back to native macOS appearance notifications when the terminal
+ * explicitly confirms that Mode 2031 notifications are unsupported.
+ *
+ * Native notifications provisionally repaint from the host appearance and
+ * synchronously trigger an OSC 11 probe, followed by a bounded burst of six
+ * retries. A changed terminal classification cancels the sequence; otherwise
+ * a confirmed terminal classification is restored at the validation deadline.
+ */
+export function startMacOSAppearanceReprobeFallback(terminal: MacOSAppearanceReprobeTerminal): () => void {
+	let disposed = false;
+	let observerStartAttempted = false;
+	let observer: MacAppearanceObserver | undefined;
+	let probeGeneration = 0;
+	let probeSequenceActive = false;
+	let probeBaseline: TerminalAppearance | undefined;
+	let probeResponseConfirmed = false;
+	const probeTimers = new Set<Timer>();
+	let reconciliationTimer: Timer | undefined;
+
+	const cancelProbeSequence = (): void => {
+		probeGeneration++;
+		probeSequenceActive = false;
+		probeBaseline = undefined;
+		probeResponseConfirmed = false;
+		if (reconciliationTimer) {
+			clearTimeout(reconciliationTimer);
+			reconciliationTimer = undefined;
+		}
+		for (const timer of probeTimers) {
+			clearTimeout(timer);
+		}
+		probeTimers.clear();
+	};
+
+	const scheduleProbeSequence = (): void => {
+		cancelProbeSequence();
+		if (disposed || !autoDetectedTheme) return;
+
+		probeSequenceActive = true;
+		probeBaseline = terminal.appearance;
+		probeResponseConfirmed = false;
+		const generation = probeGeneration;
+		terminal.refreshAppearance?.();
+		if (disposed || generation !== probeGeneration || !autoDetectedTheme) return;
+		for (const delay of MACOS_APPEARANCE_REPROBE_DELAYS_MS) {
+			const timer = setTimeout(() => {
+				probeTimers.delete(timer);
+				if (disposed || generation !== probeGeneration) return;
+				if (!autoDetectedTheme) {
+					cancelProbeSequence();
+					return;
+				}
+				terminal.refreshAppearance?.();
+			}, delay);
+			timer.unref?.();
+			probeTimers.add(timer);
+		}
+		reconciliationTimer = setTimeout(() => {
+			reconciliationTimer = undefined;
+			if (disposed || generation !== probeGeneration) return;
+			const appearance = probeResponseConfirmed ? terminal.appearance : undefined;
+			cancelProbeSequence();
+			if (!autoDetectedTheme || !appearance) return;
+			reevaluateAutoTheme("macOS appearance reconciliation", {}, appearance);
+		}, MACOS_APPEARANCE_RECONCILE_DELAY_MS);
+		reconciliationTimer.unref?.();
+	};
+
+	const unsubscribeAppearanceReport = terminal.onAppearanceReport?.(() => {
+		if (disposed || !probeSequenceActive) return;
+		probeResponseConfirmed = true;
+	});
+
+	terminal.onAppearanceChange(appearance => {
+		if (disposed || !probeSequenceActive || appearance === probeBaseline) return;
+		cancelProbeSequence();
+	});
+
+	terminal.onPrivateModeReport?.((mode, supported, confirmed) => {
+		if (disposed || observerStartAttempted || mode !== 2031 || supported || confirmed !== true) {
+			return;
+		}
+
+		observerStartAttempted = true;
+		try {
+			observer = MacAppearanceObserver.start((err, appearance) => {
+				if (disposed) return;
+				if (err) {
+					cancelProbeSequence();
+					return;
+				}
+				if (appearance === "dark" || appearance === "light") {
+					reevaluateAutoTheme("macOS provisional appearance", {}, appearance);
+				}
+				scheduleProbeSequence();
+			});
+		} catch (err) {
+			logger.warn("Failed to start macOS appearance reprobe observer", { err });
+		}
+	});
+
+	return () => {
+		if (disposed) return;
+		disposed = true;
+		cancelProbeSequence();
+		if (unsubscribeAppearanceReport) unsubscribeAppearanceReport();
+		const activeObserver = observer;
+		observer = undefined;
+		if (!activeObserver) return;
+		try {
+			activeObserver.stop();
+		} catch (err) {
+			logger.debug("Failed to stop macOS appearance reprobe observer", { err });
+		}
+	};
+}
 
 var macObserver: { stop(): void } | undefined;
 

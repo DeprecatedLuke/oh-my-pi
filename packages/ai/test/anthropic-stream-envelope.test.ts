@@ -1217,6 +1217,60 @@ describe("anthropic stream envelope handling", () => {
 		expect(strictFlags).toEqual([[true], [false], [false]]);
 	});
 
+	it.each([
+		[
+			"unsupported structured outputs",
+			Object.assign(new Error('400 {"error":{"code":"BadRequest","message":"structured_outputs not supported"}}'), {
+				status: 400,
+			}),
+		],
+		[
+			"an unsupported strict field",
+			Object.assign(
+				new Error(
+					'400 {"error":{"message":"{\\"message\\":\\"tools.2.custom.strict: Extra inputs are not permitted\\"}"}}',
+				),
+				{ status: 400 },
+			),
+		],
+	])("retries without strict tools when the endpoint rejects %s", async (_case, rejection) => {
+		const toolContext: Context = {
+			...context,
+			tools: [
+				{
+					name: "edit",
+					description: "Edit a value",
+					strict: true,
+					parameters: queryObjectSchema,
+				},
+			],
+		};
+		const providerSessionState = new Map<string, ProviderSessionState>();
+		const strictFlags: boolean[][] = [];
+		let attempt = 0;
+		vi.spyOn(AnthropicMessages.prototype, "create").mockImplementation((params: unknown) => {
+			attempt += 1;
+			strictFlags.push(getStrictFlags(params));
+			if (attempt === 1) {
+				return createRejectedMockRequest(rejection) as never;
+			}
+			return createMockRequest(createTextSuccessEvents("recovered")) as never;
+		});
+
+		const stream = streamAnthropic(model, toolContext, { apiKey: "sk-ant-test", providerSessionState });
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+		const result = await stream.result();
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toBeUndefined();
+		expect(JSON.parse(JSON.stringify(result.content))).toEqual([{ type: "text", text: "recovered" }]);
+		expect(countEvents(events, "error")).toBe(0);
+		expect(strictFlags).toEqual([[true], [false]]);
+		expect(anthropicStrictToolsDisabled(providerSessionState)).toBe(true);
+	});
 	it("does not disable strict tools for unrelated Anthropic invalid request errors", async () => {
 		const toolContext: Context = {
 			...context,

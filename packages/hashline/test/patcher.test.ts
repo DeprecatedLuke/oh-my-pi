@@ -12,6 +12,7 @@ import {
 	NodeFilesystem,
 	Patch,
 	Patcher,
+	type WriteResult,
 } from "@oh-my-pi/hashline";
 
 const PATH = "a.ts";
@@ -128,6 +129,56 @@ describe("Patcher snapshot tag integrity", () => {
 	});
 });
 
+// A write-time transform outside the patcher's control (e.g. an ACP-connected
+// editor's format-on-save rewriting indentation on every save) must never
+// poison the next section's snapshot tag with content that no longer exists
+// on disk. `DriftingFilesystem` stands in for that editor: every write is
+// persisted verbatim to the backing store (so `fs.get` sees ground truth,
+// like the file the reporter grepped with `cat`/`grep` right after the tool
+// call returned), but `writeText` echoes back a *reformatted* copy — spaces
+// turned into tabs, exactly the corruption reported against the ACP bridge.
+class DriftingFilesystem extends InMemoryFilesystem {
+	async writeText(path: string, content: string): Promise<WriteResult> {
+		const drifted = content.replace(/^ {4}/gm, "\t");
+		await super.writeText(path, drifted);
+		return { text: drifted };
+	}
+}
+
+describe("Patcher snapshot tag stays honest across a write-time content transform", () => {
+	it("keys the returned snapshot tag on what the Filesystem actually persisted, not the pre-write content", async () => {
+		const original = "function f() {\n    return 1;\n}\n";
+		const fs = new DriftingFilesystem([[PATH, original]]);
+		const snapshots = new InMemorySnapshotStore();
+		const tag = snapshots.record(PATH, original);
+		const patcher = new Patcher({ fs, snapshots });
+
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 2.=2:\n+    return 2;`));
+		const section = result.sections[0];
+		if (!section) throw new Error("expected one section result");
+
+		// Ground truth: the Filesystem drifted the untouched line's indentation
+		// to tabs on write, exactly like a hostile format-on-save would.
+		const onDisk = fs.get(PATH);
+		expect(onDisk).toBe("function f() {\n\treturn 2;\n}\n");
+
+		// The returned tag MUST hash the drifted (real) content, not the
+		// pre-write text the patcher computed — otherwise the very next edit's
+		// tag validation is checked against content the file no longer has.
+		expect(section.fileHash).toBe(computeFileHash(onDisk ?? ""));
+		expect(section.header).toBe(formatHashlineHeader(PATH, computeFileHash(onDisk ?? "")));
+
+		// The drift is surfaced, not swallowed: silent divergence is exactly
+		// what turned a one-line edit into unexplained whole-file corruption.
+		expect(section.warnings.some(w => w.includes(PATH) && /reformatted it on save/.test(w))).toBe(true);
+
+		// A follow-up edit anchored on the returned tag must succeed against
+		// the real (drifted) file instead of failing a stale-tag mismatch.
+		await patcher.apply(Patch.parse(`[${PATH}#${section.fileHash}]\nSWAP 1.=1:\n+function g() {`));
+		expect(fs.get(PATH)).toBe("function g() {\n\treturn 2;\n}\n");
+	});
+});
+
 describe("Patcher mandatory snapshot tag policy", () => {
 	it("rejects a hashless head/tail insert — the tag is required on every section", async () => {
 		const fs = new InMemoryFilesystem([[PATH, "a\nb\n"]]);
@@ -233,6 +284,113 @@ describe("Patcher seen-line provenance", () => {
 		expect(fs.get(PATH)).toBe("l1\nl2\nl3\nL4\nl5\n");
 	});
 
+	it("reveals the actual line content in the rejection and unblocks a same-tag retry", async () => {
+		const fs = new InMemoryFilesystem([[PATH, CONTENT]]);
+		const snapshots = new InMemorySnapshotStore();
+		// Read only surfaced lines 1-2; anchor line 4 is unseen.
+		const tag = snapshots.record(PATH, CONTENT, [1, 2]);
+		const patcher = new Patcher({ fs, snapshots });
+
+		let message: string | undefined;
+		try {
+			await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 4.=4:\n+L4`));
+		} catch (err) {
+			message = (err as Error).message;
+		}
+		expect(message).toMatch(/never displayed \(it showed/);
+		expect(message).toContain("Actual file content at those lines:");
+		expect(message).toContain("4:l4");
+		expect(fs.get(PATH)).toBe(CONTENT);
+
+		// The revealed line joins the snapshot's seen set, so a straight retry
+		// with the same [path#tag] header applies — no extra read required.
+		const result = await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 4.=4:\n+L4`));
+		expect(result.sections[0]?.op).toBe("update");
+		expect(fs.get(PATH)).toBe("l1\nl2\nl3\nL4\nl5\n");
+	});
+
+	it("truncates the reveal at the cap and directs the tail back to a range re-read", async () => {
+		const bigContent = `${Array.from({ length: 200 }, (_, i) => `l${i + 1}`).join("\n")}\n`;
+		const fs = new InMemoryFilesystem([[PATH, bigContent]]);
+		const snapshots = new InMemorySnapshotStore();
+		const tag = snapshots.record(PATH, bigContent, [1]);
+		const patcher = new Patcher({ fs, snapshots });
+
+		// Anchor 60 unseen lines — over the 40-line inline reveal cap.
+		const dels = Array.from({ length: 60 }, (_, i) => `CUT ${100 + i}`).join("\n");
+		let message: string | undefined;
+		try {
+			await patcher.apply(Patch.parse(`[${PATH}#${tag}]\n${dels}`));
+		} catch (err) {
+			message = (err as Error).message;
+		}
+		expect(message).toContain("Preview of the actual file content at the first 40 unseen line(s)");
+		expect(message).toContain("100:l100");
+		expect(message).toContain("139:l139");
+		expect(message).not.toContain("140:l140");
+		expect(message).toMatch(new RegExp(`${PATH}:100-159`));
+		expect(fs.get(PATH)).toBe(bigContent);
+
+		// A straight retry of the same over-cap patch STILL rejects: the
+		// truncated reveal must not merge its prefix into seenLines, or the
+		// model could split a blind over-cap edit into <=cap-line retries and
+		// slip past the range-re-read gate. The reveal window stays anchored
+		// at the head (100..139), never advancing to the tail across retries.
+		let retryMessage: string | undefined;
+		try {
+			await patcher.apply(Patch.parse(`[${PATH}#${tag}]\n${dels}`));
+		} catch (err) {
+			retryMessage = (err as Error).message;
+		}
+		expect(retryMessage).toContain("Preview of the actual file content at the first 40 unseen line(s)");
+		expect(retryMessage).toContain("100:l100");
+		expect(retryMessage).toContain("139:l139");
+		expect(retryMessage).not.toContain("140:l140");
+		expect(fs.get(PATH)).toBe(bigContent);
+	});
+
+	it("column-clips wide revealed lines, keeps the merge gate closed, and stays anchored across retries", async () => {
+		// Minified-bundle-style single wide line at anchor 2. Anchor 3 is a
+		// short line so we can see the width truncation applied only where
+		// needed. The 4KB cap is comfortably over SEEN_LINE_REVEAL_MAX_COLUMNS.
+		const wide = "a".repeat(4096);
+		const wideContent = `l1\n${wide}\nl3\nl4\n`;
+		const fs = new InMemoryFilesystem([[PATH, wideContent]]);
+		const snapshots = new InMemorySnapshotStore();
+		const tag = snapshots.record(PATH, wideContent, [1]);
+		const patcher = new Patcher({ fs, snapshots });
+
+		let message: string | undefined;
+		try {
+			await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 2.=3:\n+X\n+Y`));
+		} catch (err) {
+			message = (err as Error).message;
+		}
+		expect(message).toContain("Preview of the actual file content at the first 2 unseen line(s)");
+		// Line 2 is clipped at 512 chars + ellipsis; the full 4KB never leaks
+		// into the error preview.
+		expect(message).toMatch(/2:a{512}…/);
+		expect(message).not.toContain("a".repeat(513));
+		// Short line surfaces verbatim.
+		expect(message).toContain("3:l3");
+		// Guidance routes to a range re-read.
+		expect(message).toMatch(new RegExp(`${PATH}:2-3`));
+		expect(fs.get(PATH)).toBe(wideContent);
+
+		// A straight retry STILL rejects: column-truncated reveals must not
+		// merge into seenLines, otherwise the model would land the edit
+		// having only seen the first 512 chars of a >4KB line.
+		let retryMessage: string | undefined;
+		try {
+			await patcher.apply(Patch.parse(`[${PATH}#${tag}]\nSWAP 2.=3:\n+X\n+Y`));
+		} catch (err) {
+			retryMessage = (err as Error).message;
+		}
+		expect(retryMessage).toContain("Preview of the actual file content at the first 2 unseen line(s)");
+		expect(retryMessage).toMatch(/2:a{512}…/);
+		expect(retryMessage).not.toContain("a".repeat(513));
+		expect(fs.get(PATH)).toBe(wideContent);
+	});
 	it("skips the check when no seen lines were recorded (absent → allow)", async () => {
 		const fs = new InMemoryFilesystem([[PATH, CONTENT]]);
 		const snapshots = new InMemorySnapshotStore();

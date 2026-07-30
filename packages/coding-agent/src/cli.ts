@@ -32,7 +32,6 @@ import { extractProfileFlags } from "./cli/profile-bootstrap";
 import { startJsEvalProcess } from "./eval/js/process-entry";
 import type { WorkerInbound as JsWorkerInbound, WorkerOutbound as JsWorkerOutbound } from "./eval/js/worker-protocol";
 import { DAEMON_BROKER_WORKER_ARG } from "./launch/protocol";
-import { smokeTestTerminalOutputWorker } from "./launch/terminal-output-worker-client";
 import { TERMINAL_OUTPUT_WORKER_ARG } from "./launch/terminal-output-worker-protocol";
 import { COMPUTER_WORKER_ARG } from "./tools/computer/protocol";
 import { smokeTestComputerWorker } from "./tools/computer/supervisor";
@@ -90,6 +89,7 @@ async function runSmokeTest(): Promise<void> {
 	const { smokeTestJsEvalWorker } = await import("./eval/js/context-manager");
 	// Other smoke dependencies stay lazy so normal CLI startup does not load their worker clients.
 	const { smokeTestDaemonBroker } = await import("./launch/client");
+	const { smokeTestTerminalOutputWorker } = await import("./launch/terminal-output-worker-client");
 	await smokeTestSyncWorker();
 
 	const statsServer = await startServer(0);
@@ -199,9 +199,9 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 		return true;
 	}
 	if (arg === TERMINAL_OUTPUT_WORKER_ARG) {
-		// A child-process boundary keeps xterm's native/runtime state out of the long-lived client.
-		const { startTerminalOutputWorker } = await import("./launch/terminal-output-worker");
-		await runIpcSubprocessWorker(startTerminalOutputWorker);
+		if (parentPort) installWorkerInbox(parentPort);
+		// This selector is the isolation boundary; a static import would evaluate xterm in normal CLI startup.
+		await import("./launch/terminal-output-worker");
 		return true;
 	}
 	if (arg === DAEMON_BROKER_WORKER_ARG) {

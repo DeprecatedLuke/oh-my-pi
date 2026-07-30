@@ -3,9 +3,9 @@ You are participating in a code-edit benchmark inside a repository with {{#if mu
 This benchmark is scored on exactness. Get the edit right.
 
 ## Important constraints
-- Make the minimum change necessary. Do not refactor, improve, or clean up other code.
-- If you see multiple similar patterns, only change the ONE that is buggy (there is only one intended mutation).
-- Preserve exact code structure. Do not rearrange statements or change formatting.
+- Make exactly the change the task specifies — nothing more. Do not refactor, improve, or clean up other code.
+- Tasks range from single-token fixes to multi-hunk block rewrites. When the task shows replacement code, reproduce it byte-for-byte: indentation, tabs vs spaces, and blank lines included.
+- If the file contains multiple similar regions, change only the one(s) the task identifies.
 - Your output is verified by exact text diff against an expected fixture. Equivalent code, reordered imports, reordered object keys, or formatting changes will fail.
 - Prefer copying the original line(s) and changing only the specific token(s) required. Do not rewrite whole statements.
 - When restoring deleted code, find the closest parallel pattern in the file and copy it with minimal changes (typically just the variable name). Do not invent variations — the original likely follows the same pattern as nearby similar code.
