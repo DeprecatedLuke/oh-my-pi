@@ -165,6 +165,55 @@ describe("CursorExecHandlers mounted tool bridge", () => {
 		expect(result.isError).toBe(false);
 		expect(result.content).toEqual([{ type: "text", text: "reported" }]);
 	});
+	it("resolves legacy built-in aliases while preserving the requested Cursor call identity", async () => {
+		const events: AgentEvent[] = [];
+		const canonicalTool: AgentTool = {
+			name: "search",
+			label: "Search",
+			description: "canonical search fixture",
+			parameters: type({}),
+			async execute() {
+				return { content: [{ type: "text", text: "canonical search executed" }], details: {} };
+			},
+		};
+		const handlers = new CursorExecHandlers({
+			cwd: ".",
+			tools: new Map([[canonicalTool.name, canonicalTool]]),
+			emitEvent: event => events.push(event),
+		});
+
+		const result = await handlers.mcp({
+			name: "grep",
+			providerIdentifier: "pi-agent",
+			toolName: "grep",
+			toolCallId: "call-legacy-grep",
+			args: { pattern: "needle" },
+			rawArgs: {},
+		});
+
+		expect(result).toMatchObject({
+			role: "toolResult",
+			toolCallId: "call-legacy-grep",
+			toolName: "grep",
+			content: [{ type: "text", text: "canonical search executed" }],
+			isError: false,
+		});
+		const starts = events.filter(event => event.type === "tool_execution_start");
+		expect(starts).toHaveLength(1);
+		expect(starts[0]).toMatchObject({
+			toolCallId: "call-legacy-grep",
+			toolName: "grep",
+			args: { pattern: "needle" },
+		});
+		const ends = events.filter(event => event.type === "tool_execution_end");
+		expect(ends).toHaveLength(1);
+		expect(ends[0]).toMatchObject({
+			toolCallId: "call-legacy-grep",
+			toolName: "grep",
+			isError: false,
+			result: { content: [{ type: "text", text: "canonical search executed" }] },
+		});
+	});
 
 	it("routes wrapped mounted devices through the approval gate", async () => {
 		let executed = false;

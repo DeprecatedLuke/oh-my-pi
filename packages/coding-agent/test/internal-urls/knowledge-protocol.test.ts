@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { InternalUrlRouter, parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import {
+	InternalUrlRouter,
+	IssuesProtocolHandler,
+	KnowledgeProtocolHandler,
+	PatchProtocolHandler,
+	parseInternalUrl,
+} from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { getKnowledgeRoot } from "@oh-my-pi/pi-coding-agent/session/knowledge-index";
 import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 
@@ -14,6 +20,32 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 		await fs.rm(dir, { recursive: true, force: true });
 	}
 }
+
+describe("InternalUrlRouter native protocol registrations", () => {
+	beforeEach(() => {
+		InternalUrlRouter.resetForTests();
+	});
+
+	afterEach(() => {
+		InternalUrlRouter.resetForTests();
+	});
+
+	it("registers knowledge://, issues://, and patch:// as native handlers", () => {
+		const router = InternalUrlRouter.instance();
+		const protocols = [
+			["knowledge", KnowledgeProtocolHandler],
+			["issues", IssuesProtocolHandler],
+			["patch", PatchProtocolHandler],
+		] as const;
+
+		for (const [scheme, handlerClass] of protocols) {
+			const handler = router.getHandler(scheme);
+			expect(handler).toBeInstanceOf(handlerClass);
+			expect(handler?.scheme).toBe(scheme);
+			expect(router.canHandle(`${scheme}://`)).toBe(true);
+		}
+	});
+});
 
 describe("KnowledgeProtocolHandler", () => {
 	beforeEach(() => {

@@ -60,7 +60,7 @@ import { isFoundryEnabled } from "../utils/foundry";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
 import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import { notifyProviderResponse } from "../utils/provider-response";
-import { COMBINATOR_KEYS, NO_STRICT, toolWireSchema } from "../utils/schema";
+import { COMBINATOR_KEYS, flattenTopLevelObjectUnion, NO_STRICT, toolWireSchema } from "../utils/schema";
 import { spillToDescription } from "../utils/schema/spill";
 import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent } from "../utils/sse-debug";
@@ -4365,7 +4365,7 @@ function normalizeAnthropicStrictSchema(
 }
 
 function buildAnthropicBaseToolInputSchema(tool: Tool): Record<string, unknown> {
-	const jsonSchema = toolWireSchema(tool);
+	const jsonSchema = flattenTopLevelObjectUnion(toolWireSchema(tool) as Record<string, unknown>);
 	return normalizeAnthropicToolSchema({
 		...jsonSchema,
 		type: "object",

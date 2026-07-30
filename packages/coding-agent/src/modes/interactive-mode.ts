@@ -42,6 +42,7 @@ import {
 	APP_NAME,
 	adjustHsv,
 	formatNumber,
+	getAgentDir,
 	getProjectDir,
 	hsvToRgb,
 	isEnoent,
@@ -1058,6 +1059,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#eventBusUnsubscribers.push(
 			this.session.subscribe(event => {
 				void this.#handleGoalSessionEvent(event);
+				void this.#maybeAutoFixRefusal(event);
+				void this.#saveRefusalDump(event);
 			}),
 			onStatusLineSessionAccentChanged(() => {
 				this.#syncStatusLineSettings();
@@ -1247,6 +1250,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		const { promise, resolve } = Promise.withResolvers<SubmittedUserInput>();
 		this.onInputCallback = input => {
+			if (input.customType !== "auto-fix-refusal") {
+				this.#autoFixRefusalRounds = 0;
+			}
 			this.onInputCallback = undefined;
 			resolve(input);
 		};
@@ -2327,6 +2333,55 @@ export class InteractiveMode implements InteractiveModeContext {
 			ui.done();
 			this.#autoFixRefusalInFlight = false;
 			this.endFixRefusal();
+		}
+	}
+
+	/**
+	 * Preserve every refusal-ending turn for later analysis, independently of
+	 * automatic refusal recovery.
+	 */
+	async #saveRefusalDump(event: AgentSessionEvent): Promise<void> {
+		if (event.type !== "agent_end") return;
+		const refusal = this.session.getLastAssistantMessage();
+		if (!refusal || !isRefusalMessage(refusal)) return;
+		try {
+			let formatted = this.session.formatSessionAsText();
+			if (!formatted) return;
+			// Classifier refusals are pruned from active provider context after
+			// settle. Preserve that terminal assistant turn explicitly when the
+			// generic transcript formatter can no longer see it.
+			if (!this.session.messages.includes(refusal)) {
+				const refusalText =
+					refusal.content
+						.filter(block => block.type === "text")
+						.map(block => block.text)
+						.join("\n")
+						.trim() ||
+					refusal.errorMessage?.trim() ||
+					"(refusal contained no text)";
+				formatted += `\n\n## Assistant\n\n${refusalText}`;
+			}
+			let sidecarPath: string | undefined;
+			try {
+				sidecarPath = await this.session.dumpLlmRequestToTmpDir();
+			} catch {
+				// The transcript remains useful when the request snapshot fails.
+			}
+			const document = sidecarPath
+				? `${formatted}\n\n---\nLLM request JSON: ${sidecarPath}\nThis file persists on disk and may contain raw context/secrets — treat accordingly.`
+				: formatted;
+			const refusalsDir = path.join(getAgentDir(), "refusals");
+			await fs.mkdir(refusalsDir, { recursive: true });
+			const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -1);
+			const filePath = path.join(refusalsDir, `${stamp}.txt`);
+			await Bun.write(filePath, `${document}\n`);
+			const statusParts = [`Refusal saved to ${filePath}`];
+			if (sidecarPath) statusParts.push(`LLM request JSON: ${sidecarPath}`);
+			this.showStatus(statusParts.join("\n"));
+		} catch (error) {
+			logger.warn("Failed to save refusal snapshot", {
+				error: error instanceof Error ? error.message : String(error),
+			});
 		}
 	}
 

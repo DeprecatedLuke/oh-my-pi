@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Anthropic and non-strict OpenAI-compatible requests sending top-level union tool schemas that those APIs reject; object-union branches are flattened before wire serialization.
+
 ## [17.1.8] - 2026-07-28
 
 ### Fixed

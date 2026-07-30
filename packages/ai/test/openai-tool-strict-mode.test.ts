@@ -13,6 +13,7 @@ import type {
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { type } from "arktype";
+import * as z from "zod/v4";
 
 const testTool: Tool = {
 	name: "echo",
@@ -20,6 +21,29 @@ const testTool: Tool = {
 	parameters: type({
 		text: "string",
 	}),
+};
+
+const patchTool: Tool = {
+	name: "patch",
+	description: "Manage durable native patches.",
+	strict: false,
+	parameters: z.discriminatedUnion("op", [
+		z.object({
+			op: z.literal("list"),
+			list_dropped: z.boolean().optional().describe("include patches already marked dropped"),
+		}),
+		z.object({
+			op: z.literal("apply"),
+			patch: z.string().describe("patch id to apply"),
+			message: z.string().optional(),
+		}),
+		z.object({
+			op: z.literal("reapply"),
+			patch: z.string().describe("conflicted patch id to finalize"),
+			message: z.string().optional(),
+		}),
+		z.object({ op: z.literal("drop"), patch: z.string().describe("patch id to mark dropped") }),
+	]),
 };
 
 const looseYieldTool: Tool = {
@@ -95,8 +119,13 @@ function captureCompletionsPayload(
 	context: Context = testContext,
 ): Promise<unknown> {
 	const { promise, resolve } = Promise.withResolvers<unknown>();
+	const fetchMock: FetchImpl = Object.assign(
+		async (_input: string | URL | Request, _init?: RequestInit): Promise<Response> => createSseResponse(["[DONE]"]),
+		{ preconnect: fetch.preconnect },
+	);
 	streamOpenAICompletions(model, context, {
 		apiKey: "test-key",
+		fetch: fetchMock,
 		signal: createAbortedSignal(),
 		onPayload: payload => resolve(payload),
 	});
@@ -174,6 +203,44 @@ describe("OpenAI tool strict mode", () => {
 		// `supportsStrictMode: false` providers reject the `strict` key entirely,
 		// so the explicit `false` MUST still be suppressed.
 		expect(payload.tools?.[0]?.function?.strict).toBeUndefined();
+	});
+
+	it("flattens discriminated unions in non-strict openai-completions tool schemas", async () => {
+		const model: Model<"openai-completions"> = buildModel({
+			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
+			api: "openai-completions",
+			compat: { supportsStrictMode: false } satisfies OpenAICompat,
+		} as ModelSpec<"openai-completions">);
+
+		const payload = (await captureCompletionsPayload(model, {
+			...testContext,
+			tools: [patchTool],
+		})) as {
+			tools?: Array<{
+				function?: {
+					name?: string;
+					strict?: boolean;
+					parameters?: Record<string, unknown>;
+				};
+			}>;
+		};
+		const fn = payload.tools?.find(tool => tool.function?.name === "patch")?.function;
+		expect(fn).toBeDefined();
+		if (!fn) return;
+
+		const schema = fn.parameters;
+		expect(schema?.oneOf).toBeUndefined();
+		expect(schema?.anyOf).toBeUndefined();
+		expect(schema?.allOf).toBeUndefined();
+		expect(schema?.type).toBe("object");
+
+		const properties = schema?.properties as Record<string, unknown> | undefined;
+		expect(Object.keys(properties ?? {}).sort()).toEqual(["list_dropped", "message", "op", "patch"]);
+		expect(schema?.required).toEqual(["op"]);
+
+		const op = properties?.op as { anyOf?: Array<{ const?: string }> } | undefined;
+		expect(op?.anyOf?.map(variant => variant.const).sort()).toEqual(["apply", "drop", "list", "reapply"]);
+		expect(fn.strict).toBeUndefined();
 	});
 
 	it("sends strict=true for openai-completions tool schemas on GitHub Copilot", async () => {

@@ -15,6 +15,7 @@ import type {
 	ToolResultMessage,
 } from "@oh-my-pi/pi-ai";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { normalizeToolName } from "./tools/builtin-names";
 import { resolveToCwd } from "./tools/path-utils";
 import type { TodoPhase, TodoStatus } from "./tools/todo";
 
@@ -82,7 +83,10 @@ async function executeTool(
 	toolCallId: string,
 	args: Record<string, unknown>,
 ): Promise<ToolResultMessage> {
-	const tool = options.getExecutableTool?.(toolName) ?? options.tools.get(toolName);
+	const tool =
+		options.getExecutableTool?.(toolName) ??
+		options.tools.get(normalizeToolName(toolName)) ??
+		options.tools.get(toolName);
 	if (!tool) {
 		const result = buildToolErrorResult(`Tool "${toolName}" not available`);
 		return createToolResultMessage(toolCallId, toolName, result, true);
@@ -498,7 +502,10 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 	async mcp(call: CursorMcpCall) {
 		const toolName = call.toolName || call.name;
 		const toolCallId = decodeToolCallId(call.toolCallId);
-		const tool = this.options.getExecutableTool?.(toolName) ?? this.options.tools.get(toolName);
+		const tool =
+			this.options.getExecutableTool?.(toolName) ??
+			this.options.tools.get(normalizeToolName(toolName)) ??
+			this.options.tools.get(toolName);
 		if (!tool) {
 			const availableTools = Array.from(this.options.tools.keys()).filter(name => name.startsWith("mcp__"));
 			const message = formatMcpToolErrorMessage(toolName, availableTools);

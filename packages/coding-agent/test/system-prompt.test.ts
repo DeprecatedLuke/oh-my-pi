@@ -234,3 +234,85 @@ describe("non-Linux system prompt CPU model", () => {
 		}
 	});
 });
+
+describe("project knowledge in the system prompt", () => {
+	it("lists grouped topic URLs and omits them when the cwd has no knowledge", async () => {
+		const populatedDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-knowledge-prompt-"));
+		try {
+			const knowledgeRoot = path.join(populatedDir, ".omp", "knowledge");
+			await fs.mkdir(path.join(knowledgeRoot, "runtime"), { recursive: true });
+			await fs.mkdir(path.join(knowledgeRoot, "ui"), { recursive: true });
+			await fs.writeFile(
+				path.join(knowledgeRoot, "runtime", "background-jobs.md"),
+				"---\ndescription: runtime, background jobs\n---\n\n# Background Jobs\n",
+			);
+			await fs.writeFile(
+				path.join(knowledgeRoot, "runtime", "session-state.md"),
+				"---\ndescription: runtime, session state\n---\n\n# Session State\n",
+			);
+			await fs.writeFile(
+				path.join(knowledgeRoot, "ui", "terminal-output.md"),
+				"---\ndescription: ui, terminal output\n---\n\n# Terminal Output\n",
+			);
+
+			const { systemPrompt } = await buildSystemPrompt({
+				cwd: populatedDir,
+				contextFiles: [],
+				skills: [],
+				rules: [],
+				toolNames: [],
+				workspaceTree: {
+					rootPath: populatedDir,
+					rendered: "",
+					truncated: false,
+					totalLines: 0,
+					agentsMdFiles: [],
+				},
+				activeRepoContext: null,
+			});
+			const promptText = systemPrompt.join("\n");
+			const knowledgeUrls = [
+				"knowledge://runtime/background-jobs.md",
+				"knowledge://runtime/session-state.md",
+				"knowledge://ui/terminal-output.md",
+			];
+
+			for (const url of knowledgeUrls) {
+				expect(promptText).toContain(url);
+			}
+			expect(promptText).toContain("runtime, background jobs");
+			expect(promptText).toContain("runtime, session state");
+			expect(promptText).toContain("ui, terminal output");
+			expect(promptText).toMatch(/(?:^|\n)runtime\n/);
+			expect(promptText).toMatch(/(?:^|\n)ui\n/);
+
+			const renderedUrlOffsets = knowledgeUrls.map(url => promptText.indexOf(url));
+			expect(renderedUrlOffsets).toEqual([...renderedUrlOffsets].sort((a, b) => a - b));
+		} finally {
+			await fs.rm(populatedDir, { recursive: true, force: true });
+		}
+
+		const emptyDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-knowledge-prompt-"));
+		try {
+			const { systemPrompt } = await buildSystemPrompt({
+				cwd: emptyDir,
+				contextFiles: [],
+				skills: [],
+				rules: [],
+				toolNames: [],
+				workspaceTree: {
+					rootPath: emptyDir,
+					rendered: "",
+					truncated: false,
+					totalLines: 0,
+					agentsMdFiles: [],
+				},
+				activeRepoContext: null,
+			});
+
+			expect(systemPrompt.join("\n")).not.toContain("# Knowledge\n");
+		} finally {
+			await fs.rm(emptyDir, { recursive: true, force: true });
+		}
+	});
+});

@@ -154,6 +154,18 @@ describe("task.batch schema gating", () => {
 		expect(batch.description).toContain("`effort`");
 	});
 
+	it("renders and refreshes the configured concurrency bound", async () => {
+		mockDiscovery();
+		const session = createSession({ settings: { "task.maxConcurrency": 7 } });
+		const tool = await TaskTool.create(session);
+
+		expect(tool.description).toContain("Concurrency is bounded at 7 running subagents per session.");
+
+		session.settings.override("task.maxConcurrency", 3);
+		expect(tool.description).toContain("Concurrency is bounded at 3 running subagents per session.");
+		expect(tool.description).not.toContain("Concurrency is bounded at 7 running subagents per session.");
+	});
+
 	it("keeps isolation boolean-only and describes the configured apply behavior", async () => {
 		mockDiscovery();
 

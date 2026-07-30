@@ -89,4 +89,66 @@ describe("hub peer-message wait routing", () => {
 
 		manager.cancel(jobId);
 	});
+
+	test("bare wait rejects immediately when nothing is running", async () => {
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		const result = await new HubTool(makeSession(manager)).execute("call_no_jobs", { op: "wait" });
+		const details = result.details as CoordinationDetails;
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		expect(result.isError).toBe(true);
+		expect(details.op).toBe("wait");
+		expect(details.jobs).toBeUndefined();
+		expect(text).toContain("Background-job waiting is disabled");
+		expect(text).toContain("auto-deliver");
+	});
+
+	test("bare wait does not treat agents outside job control as background jobs", async () => {
+		const registry = AgentRegistry.global();
+		registry.register({ id: SELF_ID, displayName: "main", kind: "main", session: null });
+		registry.register({
+			id: "Worker",
+			displayName: "worker",
+			kind: "sub",
+			parentId: SELF_ID,
+			session: null,
+			status: "running",
+		});
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		const result = await new HubTool(makeSession(manager)).execute("call_agent_only", { op: "wait" });
+		const details = result.details as CoordinationDetails;
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		expect(result.isError).toBe(true);
+		expect(details.op).toBe("wait");
+		expect(details.agents).toBeUndefined();
+		expect(text).toContain("Background-job waiting is disabled");
+		expect(text).toContain("End the turn immediately");
+	});
+
+	test("explicit agent ids with no matching job are rejected without polling", async () => {
+		const registry = AgentRegistry.global();
+		registry.register({ id: SELF_ID, displayName: "main", kind: "main", session: null });
+		registry.register({
+			id: "Worker",
+			displayName: "worker",
+			kind: "sub",
+			parentId: SELF_ID,
+			session: null,
+			status: "running",
+		});
+		const manager = new AsyncJobManager({ onJobComplete: () => {} });
+		const result = await new HubTool(makeSession(manager)).execute("call_missing_job", {
+			op: "wait",
+			ids: ["Worker"],
+		});
+		const details = result.details as CoordinationDetails;
+		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+		expect(result.isError).toBe(true);
+		expect(details.op).toBe("wait");
+		expect(details.jobs).toBeUndefined();
+		expect(text).toContain("Background-job waiting is disabled");
+		expect(text).toContain("auto-deliver");
+	});
 });

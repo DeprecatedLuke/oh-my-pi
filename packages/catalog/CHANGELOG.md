@@ -5,6 +5,10 @@
 
 - Added the ClinePass Kimi K3 model with image input, a 1M-token context window, and a 128K output budget.
 
+### Fixed
+
+- Fixed ClinePass GLM-5.2 catalog metadata advertising the unsupported `max` reasoning effort instead of the gateway's `xhigh` top tier.
+
 ## [17.1.8] - 2026-07-28
 
 ### Added

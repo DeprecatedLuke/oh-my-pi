@@ -44,6 +44,7 @@ import { notifyProviderResponse } from "../utils/provider-response";
 import { callWithCopilotModelRetry } from "../utils/retry";
 import {
 	adaptSchemaForStrict,
+	flattenTopLevelObjectUnion,
 	NO_STRICT,
 	normalizeSchemaForMoonshot,
 	sanitizeSchemaForGrammar,
@@ -2301,7 +2302,9 @@ function convertTools(
 				tool.strict === false &&
 				toolStrictMode === "mixed" &&
 				compat.supportsStrictMode !== false;
-			const wireParameters = includeStrict ? parameters : baseParameters;
+			const wireParameters = includeStrict
+				? parameters
+				: flattenTopLevelObjectUnion(baseParameters as Record<string, unknown>);
 			return {
 				type: "function",
 				function: {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { buildModel } from "../src/build";
 import { toClinepassPublicModelId, toClinepassWireModelId } from "../src/clinepass-model-id";
 import { buildOpenAICompat } from "../src/compat/openai";
 import { Effort } from "../src/effort";
@@ -107,6 +108,11 @@ describe("clinepass compat resolution", () => {
 			);
 			expect(compat.reasoningEffortMap).toEqual({ minimal: "low", xhigh: "high" });
 		}
+	});
+	it("preserves the ClinePass GLM-5.2 provider ladder through source model build", () => {
+		const efforts = buildModel(clinepassSpec("glm-5.2")).thinking?.efforts;
+		expect(efforts).toEqual([Effort.Minimal, Effort.Low, Effort.Medium, Effort.High, Effort.XHigh]);
+		expect(efforts).not.toContain(Effort.Max);
 	});
 });
 

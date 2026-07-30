@@ -49,6 +49,16 @@ Skills are specialized knowledge. If one matches your task, you MUST read `skill
 </domain-rules>
 {{/if}}
 
+{{#if knowledgeCategories.length}}
+# Knowledge
+{{#each knowledgeCategories}}
+{{category}}
+{{#each files}}
+- `{{url}}`: {{description}}
+{{/each}}
+{{/each}}
+{{/if}}
+
 # Internal URLs
 Special URLs for internal resources; with most FS/bash tools they auto-resolve to FS paths.
 - `skill://<name>`: skill instructions; `/<path>` = file within
@@ -60,11 +70,13 @@ Special URLs for internal resources; with most FS/bash tools they auto-resolve t
 - `history://<id>`: read-only markdown transcript of an agent (live, parked, or released); bare `history://` lists all agents. Serves registered agents process-wide plus persisted subagents discoverable from their artifact trees; does not discover unregistered top-level sessions solely from their persisted session files.
 - `artifact://<id>`: artifact content
 - `local://<name>.md`: plan artifacts or shared content for subagents
+- `knowledge://<category>/<topic>.md`: project-local knowledge note. Bare `knowledge://` lists notes.
 {{#if hasObsidian}}
 - `vault://<vault>/<path>`: Obsidian vault (read/edit). `vault://` lists vaults; `vault://_/…` targets the active vault. File ops `?op=outline|backlinks|links|tags|properties|tasks|base|…`; vault ops `?op=search&q=…|daily|tasks|orphans|unresolved|bases|…`.
 {{/if}}
 - `mcp://<uri>`: MCP resource
 - `issue://<N>` (or `issue://<owner>/<repo>/<N>`): GitHub issue, disk-cached. Bare lists recent issues; `?state=open|closed|all&limit=&author=&label=`.
+- `issues://<filename>.md`: project-local issue record. Bare `issues://` lists active records; `issues://archive` lists archived records.
 - `pr://<N>` (or `pr://<owner>/<repo>/<N>`): GitHub PR, same cache; `?comments=0` drops comments. Bare lists recent PRs; `?state=open|closed|merged|all&limit=&author=&label=`.
 - `omp://`: harness docs; AVOID unless the user asks about the harness itself.
 

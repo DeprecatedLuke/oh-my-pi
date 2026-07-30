@@ -31,6 +31,7 @@ import { getSessionSlashCommands } from "../extensibility/extensions/get-command
 import { buildSkillPromptMessage, type Skill } from "../extensibility/skills";
 import type { HindsightSessionState } from "../hindsight/state";
 import type { LocalProtocolOptions } from "../internal-urls";
+import { listIssues, renderIssueListing } from "../issues";
 import type { MCPManager } from "../mcp/manager";
 import type { MnemopiSessionState } from "../mnemopi/state";
 import subagentAsyncPendingTemplate from "../prompts/system/subagent-async-pending.md" with { type: "text" };
@@ -2758,6 +2759,30 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 
 			const { normalized: normalizedOutputSchema } = normalizeSchema(outputSchema);
 
+			// Agents that can file findings receive the full active + archived
+			// catalogue so settled decisions and existing open reports are not
+			// duplicated.
+			let existingIssues = "";
+			if (toolNames?.includes("issues") && subagentSettings.get("issues.enabled") !== false) {
+				try {
+					const summaries = await awaitAbortable(listIssues(worktree ?? cwd));
+					existingIssues =
+						summaries.length > 0
+							? renderIssueListing(summaries, {
+									title: "",
+									emptyText: "",
+									group: true,
+									showArchived: true,
+								}).trimStart()
+							: "_No issues filed yet._";
+				} catch (error) {
+					if (error instanceof ToolAbortError) throw error;
+					logger.debug("Failed to load existing issues for subagent prompt", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+			}
+
 			// Captured by the lifecycle reviver: rebuilding an equivalent session from
 			// the same JSONL file re-invokes createAgentSession with the exact options
 			// of the original run (same agent id, tools, model, system prompt,
@@ -2798,6 +2823,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						agent: agent.systemPrompt,
 						context: options.context?.trim() ?? "",
 						planReference: options.planReference?.content ?? "",
+						existingIssues,
 						planReferencePath: options.planReference?.path ?? "",
 						worktree: worktree ?? "",
 						outputSchema: normalizedOutputSchema,

@@ -5,6 +5,12 @@
 ### Fixed
 
 - Restored the anchored Background Jobs panel after detached subagent observer updates, replacing the duplicated Subagents tree and repeated task labels with compact live job rows.
+- Fixed automatic refusal recovery no longer observing completed refusal turns, and restored automatic refusal transcript/request snapshots for later analysis.
+- Restored native `knowledge://`, `issues://`, and `patch://` routing, project knowledge summaries in the system prompt, and reviewer issue filing with duplicate awareness.
+- Fixed directory line selectors in grep rejecting directory scopes or starving later/open-ended selected lines before post-filtering.
+- Fixed the job snapshot renderer hiding running agents when no background-job row existed.
+- Fixed Cursor legacy tool aliases and `patch://` line-selector or `@`-path normalization.
+- Fixed the task tool's model-visible concurrency limit rendering as an empty value.
 
 ## [17.1.8] - 2026-07-28
 

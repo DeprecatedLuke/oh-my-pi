@@ -24,6 +24,7 @@ import friendlyPersonality from "./prompts/system/personalities/friendly.md" wit
 import pragmaticPersonality from "./prompts/system/personalities/pragmatic.md" with { type: "text" };
 import projectPromptTemplate from "./prompts/system/project-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
+import { type KnowledgeSummary, knowledgeUrlForPath, loadKnowledgeSummaries } from "./session/knowledge-index";
 import { normalizeConcurrencyLimit } from "./task/parallel";
 import { usesCodexTaskPrompt } from "./task/prompt-policy";
 import { type ActiveRepoContext, resolveActiveRepoContext } from "./utils/active-repo-context";
@@ -42,6 +43,28 @@ interface AlwaysApplyRule {
 	name: string;
 	content: string;
 	path: string;
+}
+
+interface KnowledgeCategorySummary {
+	category: string;
+	files: Array<{ description: string; topic: string; url: string }>;
+}
+
+function groupKnowledgeSummaries(summaries: readonly KnowledgeSummary[]): KnowledgeCategorySummary[] {
+	const categories = new Map<string, KnowledgeCategorySummary>();
+	for (const summary of summaries) {
+		let category = categories.get(summary.category);
+		if (!category) {
+			category = { category: summary.category, files: [] };
+			categories.set(summary.category, category);
+		}
+		category.files.push({
+			description: summary.description,
+			topic: summary.topic,
+			url: knowledgeUrlForPath(summary.path),
+		});
+	}
+	return Array.from(categories.values());
 }
 
 function normalizePromptBlock(content: string): string {
@@ -604,6 +627,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		systemPromptCustomization: null as string | null,
 		contextFiles: dedupeExactContextFiles(providedContextFiles ?? []),
 		skills: providedSkills ?? ([] as Skill[]),
+		knowledge: [] as KnowledgeSummary[],
 		workspaceTree: {
 			rootPath: resolvedCwd,
 			rendered: "",
@@ -698,6 +722,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			: skillsSettings?.enabled !== false
 				? loadSkills({ ...skillsSettings, cwd: resolvedCwd }).then(result => result.skills)
 				: Promise.resolve([]);
+	const knowledgePromise = logger.time("loadKnowledgeSummaries", loadKnowledgeSummaries, { cwd: resolvedCwd });
 	const activeRepoContextPromise =
 		providedActiveRepoContext !== undefined
 			? Promise.resolve(providedActiveRepoContext)
@@ -711,6 +736,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		systemPromptCustomization,
 		contextFiles,
 		skills,
+		knowledge,
 		workspaceTree,
 		activeRepoContext,
 		cpuModel,
@@ -735,6 +761,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			dedupeExactContextFiles,
 		),
 		withDeadline("loadSkills", skillsPromise, prepDefaults.skills),
+		withDeadline("loadKnowledgeSummaries", knowledgePromise, prepDefaults.knowledge),
 		withDeadline("buildWorkspaceTree", workspaceTreePromise, prepDefaults.workspaceTree),
 		withDeadline("resolveActiveRepoContext", activeRepoContextPromise, prepDefaults.activeRepoContext),
 		withDeadline("getCpuModel", cpuModelPromise, prepDefaults.cpuModel),
@@ -848,6 +875,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		agentsMdSearch: { files: agentsMdFiles },
 		workspaceTree,
 		skills: filteredSkills,
+		knowledgeCategories: groupKnowledgeSummaries(knowledge),
 		rules: rules ?? [],
 		alwaysApplyRules: injectedAlwaysApplyRules,
 		date,

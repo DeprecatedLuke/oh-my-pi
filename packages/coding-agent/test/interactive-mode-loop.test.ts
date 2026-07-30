@@ -1,9 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
@@ -11,7 +11,8 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import * as fixRefusalHelpers from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/fix-refusal";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 async function flushMicrotasks(): Promise<void> {
 	await Promise.resolve();
@@ -19,18 +20,18 @@ async function flushMicrotasks(): Promise<void> {
 	await Promise.resolve();
 }
 
-function classifierRefusal(text: string): AssistantMessage {
+function classifierRefusalResponse(text: string): MockResponse {
 	return {
-		role: "assistant",
-		content: [],
-		api: "anthropic-messages",
-		provider: "anthropic",
-		model: "test",
-		usage: {},
 		stopReason: "error",
 		stopDetails: { type: "refusal" },
 		errorMessage: text,
-	} as unknown as AssistantMessage;
+	};
+}
+
+async function promptWithMockResponse(session: AgentSession, text: string, response: MockResponse): Promise<void> {
+	const mock = createMockModel({ responses: [response] });
+	session.agent.streamFn = (model, context, options) => mock.stream(model, context, options);
+	await session.agent.prompt(text);
 }
 
 describe("InteractiveMode loop auto-submit", () => {
@@ -38,14 +39,16 @@ describe("InteractiveMode loop auto-submit", () => {
 	let mode: InteractiveMode;
 	let session: AgentSession;
 	let tempDir: TempDir;
+	let settingsTestState: SettingsTestState | undefined;
 
 	beforeAll(() => {
 		initTheme();
 	});
 
 	beforeEach(async () => {
-		resetSettingsForTest();
+		settingsTestState = beginSettingsTest();
 		tempDir = TempDir.createSync("@pi-loop-auto-submit-");
+		setAgentDir(tempDir.path());
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
@@ -68,11 +71,11 @@ describe("InteractiveMode loop auto-submit", () => {
 		mode?.disableLoopMode("Loop mode disabled.");
 		mode?.stop();
 		vi.useRealTimers();
-		vi.restoreAllMocks();
 		await session?.dispose();
 		authStorage?.close();
 		tempDir?.removeSync();
-		resetSettingsForTest();
+		restoreSettingsTestState(settingsTestState);
+		settingsTestState = undefined;
 	});
 
 	it("does not resolve the next loop prompt while compaction is running", async () => {
@@ -215,14 +218,7 @@ describe("InteractiveMode loop auto-submit", () => {
 		mode.onInputCallback = input => submissions.push(input);
 		await mode.init();
 
-		session.agent.appendMessage({
-			role: "user",
-			content: [{ type: "text", text: "original request" }],
-			timestamp: Date.now(),
-		});
-		const refusal = classifierRefusal("Refusal (cyber): blocked");
-		session.agent.appendMessage(refusal);
-		session.agent.emitExternalEvent({ type: "agent_end", messages: [refusal] });
+		await promptWithMockResponse(session, "original request", classifierRefusalResponse("Refusal (cyber): blocked"));
 		await session.waitForIdle();
 		await flushMicrotasks();
 
@@ -252,17 +248,14 @@ describe("InteractiveMode loop auto-submit", () => {
 			get: () => blocked,
 		});
 		const idle = Promise.withResolvers<void>();
-		const idleSpy = vi.spyOn(session, "waitForIdle").mockReturnValue(idle.promise);
-
-		session.agent.appendMessage({
-			role: "user",
-			content: [{ type: "text", text: "deferred request" }],
-			timestamp: Date.now(),
+		const waitForIdleCalled = Promise.withResolvers<void>();
+		const idleSpy = vi.spyOn(session, "waitForIdle").mockImplementation(() => {
+			waitForIdleCalled.resolve();
+			return idle.promise;
 		});
-		const refusal = classifierRefusal("Refusal (cyber): blocked");
-		session.agent.appendMessage(refusal);
-		session.agent.emitExternalEvent({ type: "agent_end", messages: [refusal] });
-		await flushMicrotasks();
+
+		await promptWithMockResponse(session, "deferred request", classifierRefusalResponse("Refusal (cyber): blocked"));
+		await waitForIdleCalled.promise;
 
 		expect(idleSpy).toHaveBeenCalledTimes(1);
 		expect(fixSpy).not.toHaveBeenCalled();
@@ -289,22 +282,7 @@ describe("InteractiveMode loop auto-submit", () => {
 		mode.onInputCallback = input => submissions.push(input);
 		await mode.init();
 
-		session.agent.appendMessage({
-			role: "user",
-			content: [{ type: "text", text: "ordinary request" }],
-			timestamp: Date.now(),
-		});
-		const answer = {
-			role: "assistant",
-			content: [{ type: "text", text: "helpful answer" }],
-			api: "anthropic-messages",
-			provider: "anthropic",
-			model: "test",
-			usage: {},
-			stopReason: "stop",
-		} as unknown as AssistantMessage;
-		session.agent.appendMessage(answer);
-		session.agent.emitExternalEvent({ type: "agent_end", messages: [answer] });
+		await promptWithMockResponse(session, "ordinary request", { content: ["helpful answer"] });
 		await flushMicrotasks();
 
 		expect(fixSpy).not.toHaveBeenCalled();

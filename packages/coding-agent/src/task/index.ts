@@ -657,6 +657,7 @@ interface TaskDescriptionOptions {
 	batchEnabled: boolean;
 	effortEnabled: boolean;
 	asyncEnabled: boolean;
+	maxConcurrency: number;
 	ircEnabled: boolean;
 	parentSpawns: string;
 }
@@ -690,6 +691,7 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		batchEnabled: options.batchEnabled,
 		effortEnabled: options.effortEnabled,
 		asyncEnabled: options.asyncEnabled,
+		MAX_CONCURRENCY: options.maxConcurrency,
 		hasBlockingAgents: renderedAgents.some(agent => agent.blocking),
 		ircEnabled: options.ircEnabled,
 	});
@@ -1105,6 +1107,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			batchEnabled: this.#isBatchEnabled(),
 			effortEnabled: this.session.settings.get("task.enableEffort"),
 			asyncEnabled: this.session.settings.get("async.enabled"),
+			maxConcurrency: this.session.settings.get("task.maxConcurrency"),
 			ircEnabled: isIrcEnabled(this.session.settings, this.session.taskDepth ?? 0),
 			parentSpawns: this.session.getSessionSpawns() ?? "*",
 		});

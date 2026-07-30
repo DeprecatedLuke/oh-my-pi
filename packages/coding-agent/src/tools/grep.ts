@@ -72,7 +72,7 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const searchPathEntry = type("string").describe(
-	'file, directory, glob, internal URL, or "<file>:<lines>" selector (e.g. "src/foo.ts:50-100", "src/foo.ts:50+10", "src/foo.ts:50-100,200-300")',
+	'file, directory, glob, internal URL, or "<path>:<lines>" selector (e.g. "src/foo.ts:50-100", "src:50-100", "src/foo.ts:50+10")',
 );
 const searchSchema = type({
 	pattern: type("string").describe("regex pattern"),
@@ -125,6 +125,11 @@ interface GrepPathSpec {
 	clean: string;
 	literalFilesystemMatch?: boolean;
 	ranges?: [LineRange, ...LineRange[]];
+}
+
+interface DirectoryRangeScope {
+	path: string;
+	ranges: LineRange[];
 }
 
 /**
@@ -241,6 +246,22 @@ function mergeRangesInto(map: Map<string, LineRange[]>, absKey: string, ranges: 
 	} else {
 		map.set(absKey, [...ranges]);
 	}
+}
+
+function rangesForMatch(
+	absPath: string,
+	rangesByAbsPath: ReadonlyMap<string, LineRange[]>,
+	directoryRanges: readonly DirectoryRangeScope[],
+): LineRange[] | undefined {
+	const ranges = [...(rangesByAbsPath.get(absPath) ?? [])];
+	for (const scope of directoryRanges) {
+		const relative = path.relative(scope.path, absPath);
+		if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+			continue;
+		}
+		ranges.push(...scope.ranges);
+	}
+	return ranges.length > 0 ? ranges : undefined;
 }
 
 function matchAbsolutePath(matchPath: string, searchPath: string): string {
@@ -402,6 +423,21 @@ function indexSearchLines(content: string): IndexedContentLines {
 
 function lineAllowed(lineNumber: number, ranges: readonly LineRange[] | undefined): boolean {
 	return !ranges || isLineInRanges(lineNumber, ranges);
+}
+
+/**
+ * Finite per-file native fetch budget that lets the post-fetch range filter
+ * reach later or open-ended ranges without dropping the visible match window.
+ */
+function lineRangeFetchCap(pathSpecs: readonly GrepPathSpec[], perFileKeep: number): number {
+	let cap = 0;
+	for (const spec of pathSpecs) {
+		if (!spec.ranges) continue;
+		for (const range of spec.ranges) {
+			cap = Math.max(cap, range.endLine ?? range.startLine - 1 + perFileKeep);
+		}
+	}
+	return Math.min(cap, NATIVE_GREP_MAX_FILE_BYTES);
 }
 
 /** Binary search for the index of the line containing byte `offset`. */
@@ -963,6 +999,7 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 				// resolve through `resolveReadPath`; archive entries are keyed by the
 				// scratch path that grep will actually report against.
 				const rangesByAbsPath = new Map<string, LineRange[]>();
+				const directoryRanges: DirectoryRangeScope[] = [];
 
 				if (
 					archiveUnreadable.length > 0 &&
@@ -1031,16 +1068,19 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 							continue;
 						}
 						if (resolved === spec.clean && !archiveDisplayMap.has(resolved)) {
-							// Non-archive entry; ensure the cleaned path resolves to a regular file.
+							// Non-archive entry; apply file selectors exactly and
+							// directory selectors independently to every descendant file.
 							const absKey = path.resolve(resolveReadPath(resolved, this.session.cwd));
 							const stats = await stat(absKey).catch(() => null);
 							if (!stats) {
 								throw new ToolError(`Path not found for line-range selector: ${spec.original}`);
 							}
+							if (stats.isDirectory()) {
+								directoryRanges.push({ path: absKey, ranges: [...spec.ranges] });
+								continue;
+							}
 							if (!stats.isFile()) {
-								throw new ToolError(
-									`Line-range selector requires a single file: ${spec.original} is a directory`,
-								);
+								throw new ToolError(`Line-range selector requires a file or directory: ${spec.original}`);
 							}
 							mergeRangesInto(rangesByAbsPath, absKey, spec.ranges);
 						} else {
@@ -1087,6 +1127,15 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					Boolean(multiTargets) ||
 					(virtualResources.length > 0 && (virtualResources.length > 1 || searchablePaths.length > 0));
 				const perFileMatchCap = isMultiScope ? MULTI_FILE_PER_FILE_MATCHES : SINGLE_FILE_MATCHES;
+				// Range filtering runs after native grep. Widen both caps enough to
+				// reach the selected lines, while keeping open-ended ranges finite.
+				const hasLineRangeFilters = pathSpecs.some(spec => spec.ranges);
+				const nativeMaxCountPerFile = hasLineRangeFilters
+					? Math.max(perFileMatchCap + 1, lineRangeFetchCap(pathSpecs, perFileMatchCap + 1))
+					: perFileMatchCap + 1;
+				const nativeMaxCount = hasLineRangeFilters
+					? Math.ceil(INTERNAL_TOTAL_CAP / (perFileMatchCap + 1)) * nativeMaxCountPerFile
+					: INTERNAL_TOTAL_CAP;
 
 				// Run grep
 				let result: GrepResult = {
@@ -1121,12 +1170,12 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 										multiline: effectiveMultiline,
 										hidden: true,
 										gitignore: useGitignore,
-										maxCount: INTERNAL_TOTAL_CAP,
+										maxCount: nativeMaxCount,
 										contextBefore: normalizedContextBefore,
 										contextAfter: normalizedContextAfter,
 										maxColumns: DEFAULT_MAX_COLUMN,
 										mode: effectiveOutputMode,
-										maxCountPerFile: perFileMatchCap + 1,
+										maxCountPerFile: nativeMaxCountPerFile,
 										signal,
 										timeoutMs: SEARCH_GREP_TIMEOUT_MS,
 									},
@@ -1168,12 +1217,12 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 									multiline: effectiveMultiline,
 									hidden: true,
 									gitignore: useGitignore,
-									maxCount: INTERNAL_TOTAL_CAP,
+									maxCount: nativeMaxCount,
 									contextBefore: normalizedContextBefore,
 									contextAfter: normalizedContextAfter,
 									maxColumns: DEFAULT_MAX_COLUMN,
 									mode: effectiveOutputMode,
-									maxCountPerFile: perFileMatchCap + 1,
+									maxCountPerFile: nativeMaxCountPerFile,
 									signal,
 									timeoutMs: SEARCH_GREP_TIMEOUT_MS,
 								},
@@ -1214,12 +1263,12 @@ export class SearchTool implements AgentTool<typeof searchSchema, SearchToolDeta
 					}
 					throw err;
 				}
-				result = mergeGrepResults(result, virtualResult, INTERNAL_TOTAL_CAP);
-				if (rangesByAbsPath.size > 0) {
+				result = mergeGrepResults(result, virtualResult, nativeMaxCount);
+				if (rangesByAbsPath.size > 0 || directoryRanges.length > 0) {
 					const filteredMatches: GrepMatch[] = [];
 					for (const match of result.matches) {
 						const abs = matchAbsolutePath(match.path, searchPath);
-						const ranges = rangesByAbsPath.get(abs);
+						const ranges = rangesForMatch(abs, rangesByAbsPath, directoryRanges);
 						if (!ranges) {
 							// Path has no line-range constraint (e.g. a peer entry without `:N-M`).
 							filteredMatches.push(match);

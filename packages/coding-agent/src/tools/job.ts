@@ -420,7 +420,7 @@ export const jobToolRenderer = {
 		const jobs = result.details?.jobs ?? [];
 		const agents = result.details?.agents ?? [];
 
-		if (jobs.length === 0) {
+		if (jobs.length === 0 && agents.length === 0) {
 			const fallback = result.content?.find(c => c.type === "text")?.text || "No jobs to process";
 			const header = renderStatusLine({ icon: "warning", title: describeTarget(args) || "Job" }, uiTheme);
 			return new Text([header, formatEmptyMessage(fallback, uiTheme)].join("\n"), 0, 0);
@@ -435,8 +435,12 @@ export const jobToolRenderer = {
 		if (counts.completed > 0) meta.push(uiTheme.fg("success", `${counts.completed} done`));
 		if (counts.failed > 0) meta.push(uiTheme.fg("error", `${counts.failed} failed`));
 		if (counts.cancelled > 0) meta.push(uiTheme.fg("warning", `${counts.cancelled} cancelled`));
+		if (agents.length > 0 && jobs.length > 0) {
+			meta.push(uiTheme.fg("accent", `${agents.length} agent${agents.length === 1 ? "" : "s"}`));
+		}
 
-		const headerIcon: ToolUIStatus = counts.failed > 0 ? "warning" : counts.running > 0 ? "info" : "success";
+		const headerIcon: ToolUIStatus =
+			counts.failed > 0 ? "warning" : counts.running > 0 || agents.length > 0 ? "info" : "success";
 		const jobsNoun = jobs.length === 1 ? "job" : "jobs";
 		const description =
 			jobs.length === 0
@@ -449,7 +453,7 @@ export const jobToolRenderer = {
 		const header = renderStatusLine(
 			{
 				icon: headerIcon,
-				spinnerFrame: counts.running > 0 ? options.spinnerFrame : undefined,
+				spinnerFrame: counts.running > 0 || agents.length > 0 ? options.spinnerFrame : undefined,
 				title: description,
 				meta,
 			},
