@@ -24,8 +24,8 @@ function createSession(testDir: string): ToolSession {
 		},
 		settings: Settings.isolated({
 			"fetch.enabled": true,
-			"search.contextBefore": 0,
-			"search.contextAfter": 0,
+			"grep.contextBefore": 0,
+			"grep.contextAfter": 0,
 			"astGrep.enabled": true,
 			"astEdit.enabled": true,
 			"tools.xdev": false,
@@ -50,7 +50,7 @@ function stubLoadPage(body: string, contentType: string) {
 	}));
 }
 
-describe("search tools with external URL paths", () => {
+describe("grep tools with external URL paths", () => {
 	let testDir: string;
 
 	beforeEach(async () => {
@@ -62,10 +62,10 @@ describe("search tools with external URL paths", () => {
 		await removeWithRetries(testDir);
 	});
 
-	it("search fetches a URL and greps the rendered text", async () => {
+	it("grep fetches a URL and greps the rendered text", async () => {
 		stubLoadPage("alpha\nremote needle\nomega\n", "text/plain");
 		const tools = await createTools(createSession(testDir));
-		const tool = tools.find(entry => entry.name === "search");
+		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
 
 		const result = await tool!.execute("search-url", {
@@ -78,7 +78,7 @@ describe("search tools with external URL paths", () => {
 		expect(text).not.toContain("Cannot search external URL");
 	});
 
-	it("refetches the same URL before each search", async () => {
+	it("refetches the same URL before each grep", async () => {
 		let body = "first needle\n";
 		const loadPage = vi.spyOn(scrapers, "loadPage").mockImplementation(async requestedUrl => ({
 			ok: true,
@@ -88,7 +88,7 @@ describe("search tools with external URL paths", () => {
 			content: body,
 		}));
 		const tools = await createTools(createSession(testDir));
-		const tool = tools.find(entry => entry.name === "search");
+		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
 
 		const first = await tool!.execute("search-url-first", {
@@ -107,10 +107,10 @@ describe("search tools with external URL paths", () => {
 		expect(loadPage).toHaveBeenCalledTimes(2);
 	});
 
-	it("search applies URL line-range selectors after materialization", async () => {
+	it("grep applies URL line-range selectors after materialization", async () => {
 		stubLoadPage("outside before\nremote needle\noutside after\n", "text/plain");
 		const tools = await createTools(createSession(testDir));
-		const tool = tools.find(entry => entry.name === "search");
+		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
 
 		const result = await tool!.execute("search-url-range", {
@@ -151,10 +151,10 @@ describe("search tools with external URL paths", () => {
 		).rejects.toThrow("Cannot search external URL");
 	});
 
-	it("search materializes a scheme-less www. scope like its canonical spelling", async () => {
+	it("grep materializes a scheme-less www. scope like its canonical spelling", async () => {
 		const loadPage = stubLoadPage("alpha\nremote needle\nomega\n", "text/plain");
 		const tools = await createTools(createSession(testDir));
-		const tool = tools.find(entry => entry.name === "search");
+		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
 
 		const result = await tool!.execute("search-url-www", {
@@ -166,10 +166,10 @@ describe("search tools with external URL paths", () => {
 		expect(loadPage).toHaveBeenCalledWith("https://www.example.com/notes.txt", expect.anything());
 	});
 
-	it("search repairs a collapsed https:/ scheme before materializing", async () => {
+	it("grep repairs a collapsed https:/ scheme before materializing", async () => {
 		const loadPage = stubLoadPage("alpha\nremote needle\nomega\n", "text/plain");
 		const tools = await createTools(createSession(testDir));
-		const tool = tools.find(entry => entry.name === "search");
+		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
 
 		const result = await tool!.execute("search-url-collapsed", {
@@ -181,12 +181,12 @@ describe("search tools with external URL paths", () => {
 		expect(loadPage).toHaveBeenCalledWith("https://example.com/notes.txt", expect.anything());
 	});
 
-	it("search prefers an existing local directory named like a www. host", async () => {
+	it("grep prefers an existing local directory named like a www. host", async () => {
 		const loadPage = stubLoadPage("remote body\n", "text/plain");
 		await fs.mkdir(path.join(testDir, "www.example.com"), { recursive: true });
 		await fs.writeFile(path.join(testDir, "www.example.com", "notes.txt"), "local needle\n");
 		const tools = await createTools(createSession(testDir));
-		const tool = tools.find(entry => entry.name === "search");
+		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
 
 		const result = await tool!.execute("search-local-dir", {
@@ -198,12 +198,12 @@ describe("search tools with external URL paths", () => {
 		expect(loadPage).not.toHaveBeenCalled();
 	});
 
-	it("search leaves plain relative paths untouched by URL materialization", async () => {
+	it("grep leaves plain relative paths untouched by URL materialization", async () => {
 		const loadPage = stubLoadPage("remote body\n", "text/plain");
 		await fs.mkdir(path.join(testDir, "src"), { recursive: true });
 		await fs.writeFile(path.join(testDir, "src", "notes.txt"), "local needle\n");
 		const tools = await createTools(createSession(testDir));
-		const tool = tools.find(entry => entry.name === "search");
+		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
 
 		const result = await tool!.execute("search-local-rel", {
@@ -215,10 +215,10 @@ describe("search tools with external URL paths", () => {
 		expect(loadPage).not.toHaveBeenCalled();
 	});
 
-	it("search rejects unsupported URL schemes explicitly", async () => {
+	it("grep rejects unsupported URL schemes explicitly", async () => {
 		stubLoadPage("remote body\n", "text/plain");
 		const tools = await createTools(createSession(testDir));
-		const tool = tools.find(entry => entry.name === "search");
+		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
 
 		await expect(

@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir, prompt } from "@oh-my-pi/pi-utils";
 import {
 	isValidManagedSkillName,
 	MANAGED_SKILLS_PROVIDER_ID,
@@ -11,6 +11,8 @@ import type { SourceMeta } from "../capability/types";
 import type { SkillsSettings } from "../config/settings";
 import { type Skill as CapabilitySkill, loadCapability } from "../discovery";
 import { compareSkillOrder, scanSkillsFromDir } from "../discovery/helpers";
+import autoloadTemplate from "../prompts/skills/autoload.md" with { type: "text" };
+import userInvocationTemplate from "../prompts/skills/user-invocation.md" with { type: "text" };
 import type { SkillPromptDetails } from "../session/messages";
 import { expandTilde } from "../tools/path-utils";
 export interface Skill {
@@ -461,18 +463,25 @@ function startsWithLocalExecutionPrefix(trimmedStart: string): boolean {
 	return next === 32 /* space */ || next === 9 /* tab */ || next === 10 /* LF */ || next === 13 /* CR */;
 }
 
+export type SkillInvocationKind = "user" | "autoload";
+
 export async function buildSkillPromptMessage(
-	skill: Pick<Skill, "name" | "filePath">,
+	skill: Pick<Skill, "name" | "filePath" | "baseDir">,
 	args: string,
+	invocation: SkillInvocationKind = "user",
 ): Promise<BuiltSkillPromptMessage> {
 	const content = await Bun.file(skill.filePath).text();
 	const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
-	const metaLines = [`Skill: ${skill.filePath}`];
 	const trimmedArgs = args.trim();
-	if (trimmedArgs) {
-		metaLines.push(`User: ${trimmedArgs}`);
-	}
-	const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
+	const message = prompt
+		.render(invocation === "user" ? userInvocationTemplate : autoloadTemplate, {
+			name: skill.name,
+			body,
+			baseDir: skill.baseDir,
+			filePath: skill.filePath,
+			userArgs: trimmedArgs || undefined,
+		})
+		.trim();
 	return {
 		message,
 		details: {

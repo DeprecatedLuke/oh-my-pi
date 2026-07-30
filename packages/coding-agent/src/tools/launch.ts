@@ -13,7 +13,7 @@ import { type } from "arktype";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { daemonClientForProject } from "../launch/client";
 import type { DaemonOperation, DaemonRpcResult, DaemonSnapshot, DaemonSpec, DaemonState } from "../launch/protocol";
-import { renderTerminalOutput } from "../launch/terminal-output";
+import { renderTerminalOutputIsolated } from "../launch/terminal-output-worker-client";
 import type { Theme, ThemeColor } from "../modes/theme/theme";
 import launchDescription from "../prompts/tools/launch.md" with { type: "text" };
 import { framedBlock, outputBlockContentWidth, renderStatusLine } from "../tui";
@@ -287,7 +287,7 @@ async function toolDetails(result: DaemonRpcResult, params: LaunchParams): Promi
 			const terminalRows =
 				result.terminalText === undefined
 					? undefined
-					: await renderTerminalOutput(result.terminalText, {
+					: await renderTerminalOutputIsolated(result.terminalText, {
 							head: params.head ?? false,
 							maxRows: Math.min(1_000, Math.floor(params.lines ?? 100)),
 						});

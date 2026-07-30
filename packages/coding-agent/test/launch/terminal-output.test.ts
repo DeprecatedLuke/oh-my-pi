@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { renderTerminalOutput } from "../../src/launch/terminal-output";
+import { renderTerminalOutputIsolated } from "../../src/launch/terminal-output-worker-client";
 
 const RESET = "\x1b[0m";
 
@@ -102,6 +103,30 @@ describe("renderTerminalOutput", () => {
 		expect(await renderTerminalOutput(output, { head: false, maxRows: 2 })).toEqual([
 			`${RESET}row-4198`,
 			`${RESET}row-4199`,
+		]);
+	});
+});
+
+describe("renderTerminalOutputIsolated", () => {
+	it("replays ANSI cursor and color sequences in the worker", async () => {
+		const rows = await renderTerminalOutputIsolated("stale\r\x1b[2K\x1b[1;32mready\x1b[0m", {
+			head: false,
+			maxRows: 10,
+		});
+
+		expect(rows).toEqual([`${RESET}\x1b[1;38;5;2mready`]);
+	});
+
+	it("honors head and tail row limits through the worker protocol", async () => {
+		const output = ["row-0", "row-1", "row-2", "row-3"].join("\r\n");
+
+		expect(await renderTerminalOutputIsolated(output, { head: true, maxRows: 2 })).toEqual([
+			`${RESET}row-0`,
+			`${RESET}row-1`,
+		]);
+		expect(await renderTerminalOutputIsolated(output, { head: false, maxRows: 2 })).toEqual([
+			`${RESET}row-2`,
+			`${RESET}row-3`,
 		]);
 	});
 });

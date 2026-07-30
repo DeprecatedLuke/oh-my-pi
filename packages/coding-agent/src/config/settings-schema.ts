@@ -4207,6 +4207,7 @@ export const SETTINGS_SCHEMA = {
 		default: 300_000,
 		ui: {
 			tab: "tools",
+			group: "Execution",
 			label: "Async Batch Settle (ms)",
 			description:
 				"Defer dispatching a completed background job while other background jobs are still running, up to this many ms, so sibling completions arrive in one user turn. Jobs from the same task fan-out extend the hold while a sibling is alive and reporting progress; the cap then acts as a silence (hang) bound. 0 disables.",

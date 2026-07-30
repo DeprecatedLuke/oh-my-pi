@@ -338,52 +338,7 @@ export function buildSessionContext(
 		}
 	};
 
-	if (options?.transcript && options.collapseCompactedHistory !== false) {
-		// Display transcript (collapsed): render from the LATEST compaction onward,
-		// mirroring the live model context — the summary divider first (standing in
-		// for the summarized-away prefix), then the KEPT range (firstKeptEntryId →
-		// compaction, still verbatim in the model's context) and every turn after
-		// it. Older history and any earlier compactions are omitted from the visible
-		// scrollback instead of replaying the whole session on resume, so the user
-		// sees exactly what the model still holds. With no compaction the whole path
-		// renders. `compaction` is the latest compaction on the resolved leaf→root
-		// path (branching is respected); snapcompact frames are re-attached so the
-		// divider component can report them.
-		if (compaction) {
-			const snapcompactArchive = snapcompact.getPreservedArchive(compaction.preserveData);
-			messages.push(
-				createCompactionSummaryMessage(
-					compaction.summary,
-					compaction.tokensBefore,
-					compaction.timestamp,
-					compaction.shortSummary,
-					undefined,
-					undefined,
-					snapcompactHistoryBlocksForContext(snapcompactArchive, options),
-				),
-			);
-			const compactionIdx = path.findIndex(entry => entry.id === compaction.id);
-			// Kept range: the verbatim recent turns the compaction preserved.
-			let foundFirstKept = false;
-			for (let i = 0; i < compactionIdx; i++) {
-				const entry = path[i];
-				if (entry.id === compaction.firstKeptEntryId) {
-					foundFirstKept = true;
-				}
-				if (foundFirstKept) {
-					appendMessage(entry);
-				}
-			}
-			// Turns recorded after the compaction.
-			for (let i = compactionIdx + 1; i < path.length; i++) {
-				appendMessage(path[i]);
-			}
-		} else {
-			for (const entry of path) {
-				appendMessage(entry);
-			}
-		}
-	} else if (options?.transcript) {
+	if (options?.transcript && !options.collapseCompactedHistory) {
 		// Full chronological transcript: every entry in order. Compactions do not
 		// erase prior history here — each renders inline (as a divider in the TUI)
 		// at the point it fired, with any snapcompact frames re-attached so the

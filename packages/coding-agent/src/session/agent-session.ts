@@ -143,6 +143,7 @@ import type { GoalModeState } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
 import type { IrcMessage } from "../irc/bus";
+import { type IssueSummary, listIssues } from "../issues";
 
 import { MCPManager } from "../mcp/manager";
 import { shutdownMnemopiEmbedClient } from "../mnemopi/embed-client";
@@ -480,6 +481,7 @@ export class AgentSession {
 	#planModeReminderCount = 0;
 	#planModeReminderAwaitingProgress = false;
 	readonly #todo: TodoTracker;
+	#issuesReminderCount = 0;
 	#replanTitleRefreshInFlight: Promise<void> | undefined = undefined;
 	/** Resolved TITLE_SYSTEM.md override applied to every automatic session-title
 	 *  generation path. Refresh via {@link AgentSession.setTitleSystemPrompt} when
@@ -608,6 +610,7 @@ export class AgentSession {
 	#providerSessionState = new Map<string, ProviderSessionState>();
 	#hindsightSessionState: HindsightSessionState | undefined = undefined;
 	readonly #memory: SessionMemory;
+	#clearFailedSwitchMemoryPromotionOnNextPrompt = false;
 	readonly rawSseDebugBuffer: RawSseDebugBuffer;
 
 	#resetPromptMaintenanceState(): void {
@@ -2779,19 +2782,27 @@ export class AgentSession {
 				return;
 			}
 			if (msg.stopReason !== "error") {
-				if (this.#enforceRewindBeforeYield()) {
-					await emitAgentEndNotification({ willContinue: true });
-					return;
-				}
-				const planModeContinuationScheduled = await this.#enforcePlanModeDecisionAtSettle();
-				if (planModeContinuationScheduled) {
-					await emitAgentEndNotification({ willContinue: true });
-					return;
-				}
-				const todoContinuationScheduled = await this.#todo.checkCompletion(msg);
-				if (todoContinuationScheduled) {
-					await emitAgentEndNotification({ willContinue: true });
-					return;
+				const userForced = this.#toolChoiceQueue.consumeLastServedLabel() === "user-force";
+				if (!userForced) {
+					if (this.#enforceRewindBeforeYield()) {
+						await emitAgentEndNotification({ willContinue: true });
+						return;
+					}
+					const planModeContinuationScheduled = await this.#enforcePlanModeDecisionAtSettle();
+					if (planModeContinuationScheduled) {
+						await emitAgentEndNotification({ willContinue: true });
+						return;
+					}
+					const todoContinuationScheduled = await this.#todo.checkCompletion(msg);
+					if (todoContinuationScheduled) {
+						await emitAgentEndNotification({ willContinue: true });
+						return;
+					}
+					const issuesContinuationScheduled = await this.#checkInProgressIssues();
+					if (issuesContinuationScheduled) {
+						await emitAgentEndNotification({ willContinue: true });
+						return;
+					}
 				}
 			}
 			// A pending async wake means this settle is a scheduling pause, not
@@ -2833,6 +2844,60 @@ export class AgentSession {
 					this.#resolvePostPromptTasks();
 				}
 			});
+	}
+
+	async #checkInProgressIssues(): Promise<boolean> {
+		if (this.settings.get("issues.enabled") === false) return false;
+		if (!this.settings.get("issues.reminders")) {
+			this.#issuesReminderCount = 0;
+			return false;
+		}
+		if (this.hasPendingBackgroundJobs()) return false;
+
+		const remindersMax = this.settings.get("issues.reminders.max");
+		if (this.#issuesReminderCount >= remindersMax) {
+			logger.debug("Issues reminder: max reminders reached", { count: this.#issuesReminderCount });
+			return false;
+		}
+
+		let inProgress: IssueSummary[];
+		try {
+			inProgress = await listIssues(this.sessionManager.getCwd(), {
+				status: "in-progress",
+				archived: false,
+			});
+		} catch (error) {
+			logger.debug("Issues reminder: listIssues failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return false;
+		}
+		if (inProgress.length === 0) {
+			this.#issuesReminderCount = 0;
+			return false;
+		}
+
+		this.#issuesReminderCount++;
+		const issueList = inProgress.map(issue => `- #${issue.id} ${issue.title} (${issue.category})`).join("\n");
+		const reminder =
+			`<system-reminder>\n` +
+			`You are ending the turn with ${inProgress.length} issue(s) still marked in-progress:\n${issueList}\n\n` +
+			`Finish the work and set each to fixed (or archive it), or — if it is not actively being worked on — set it back to open via the \`issues\` tool.\n` +
+			`(Reminder ${this.#issuesReminderCount}/${remindersMax})\n` +
+			`</system-reminder>`;
+
+		logger.debug("Issues reminder: sending reminder", {
+			inProgress: inProgress.length,
+			attempt: this.#issuesReminderCount,
+		});
+		this.agent.appendMessage({
+			role: "developer",
+			content: [{ type: "text", text: reminder }],
+			attribution: "agent",
+			timestamp: Date.now(),
+		});
+		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
+		return true;
 	}
 
 	#schedulePostPromptTask(
@@ -4857,6 +4922,16 @@ export class AgentSession {
 			this.#advisors.autoResumeSuppressed = false;
 			this.#planModeReminderCount = 0;
 			this.#planModeReminderAwaitingProgress = false;
+			this.#issuesReminderCount = 0;
+			if (this.#clearFailedSwitchMemoryPromotionOnNextPrompt) {
+				const canonicalPrompt = this.#memory.promotionSnapshot;
+				if (canonicalPrompt) {
+					this.#tools.setBaseSystemPrompt(canonicalPrompt);
+					this.agent.setSystemPrompt(canonicalPrompt);
+					this.#memory.clearPromotionSnapshot();
+				}
+				this.#clearFailedSwitchMemoryPromotionOnNextPrompt = false;
+			}
 			// A user turn owns the next decision; drop a queued forced choice from
 			// a reminder continuation this prompt just preempted.
 			this.#toolChoiceQueue.removeByLabel("plan-mode-decision");
@@ -7546,6 +7621,7 @@ export class AgentSession {
 
 			if (switchingToDifferentSession) {
 				await this.#memory.resetContextForNewTranscript();
+				this.#clearFailedSwitchMemoryPromotionOnNextPrompt = false;
 			}
 			if (switchingToDifferentSession) {
 				this.#clearSessionScopedToolState();
@@ -7583,6 +7659,8 @@ export class AgentSession {
 			this.agent.setTools(previousTools);
 			this.#tools.setBaseSystemPrompt(previousBaseSystemPrompt);
 			this.#memory.restorePromotionSnapshot(previousBaseSystemPromptBeforeMemoryPromotion);
+			this.#clearFailedSwitchMemoryPromotionOnNextPrompt =
+				switchingToDifferentSession && previousBaseSystemPromptBeforeMemoryPromotion !== undefined;
 			this.agent.setSystemPrompt(previousSystemPrompt);
 			this.agent.replaceMessages(previousAgentMessages);
 			this.agent.replaceQueues(previousSteeringMessages, previousFollowUpMessages);

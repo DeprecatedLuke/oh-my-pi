@@ -1733,6 +1733,31 @@ export class Settings {
 			}
 			delete raw["tools.essentialOverride"];
 		}
+		// Approval policies are keyed by wire tool name. Keep explicit user
+		// denials/approvals effective after search/find become grep/glob.
+		const ensureApprovalObject = (): Record<string, unknown> => {
+			const tools = ensureToolsObject();
+			if (isRecord(tools.approval)) return tools.approval;
+			const created: Record<string, unknown> = {};
+			tools.approval = created;
+			return created;
+		};
+		const approvalObj = toolsObj && isRecord(toolsObj.approval) ? toolsObj.approval : undefined;
+		for (const [legacy, canonical] of [
+			["search", "grep"],
+			["find", "glob"],
+		] as const) {
+			if (approvalObj && legacy in approvalObj) {
+				if (!(canonical in approvalObj)) approvalObj[canonical] = approvalObj[legacy];
+				delete approvalObj[legacy];
+			}
+			const flatKey = `tools.approval.${legacy}`;
+			if (flatKey in raw) {
+				const approval = ensureApprovalObject();
+				if (!(canonical in approval)) approval[canonical] = raw[flatKey];
+				delete raw[flatKey];
+			}
+		}
 
 		// Also clean up any empty nested objects we might have created or left behind.
 		if (isRecord(raw.find) && Object.keys(raw.find).length === 0) {

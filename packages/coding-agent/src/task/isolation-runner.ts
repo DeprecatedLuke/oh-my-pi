@@ -331,15 +331,23 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 				hadAnyChanges = false;
 			} else {
 				const normalized = patchText.endsWith("\n") ? patchText : `${patchText}\n`;
-				changesApplied = await git.patch.canApplyText(repoRoot, normalized);
+				const [alreadyApplied, forwardApplies] = await Promise.all([
+					git.patch.canApplyText(repoRoot, normalized, { reverse: true }),
+					git.patch.canApplyText(repoRoot, normalized),
+				]);
 				hadAnyChanges = false;
-				if (changesApplied) {
+				if (alreadyApplied && !forwardApplies) {
+					changesApplied = true;
+				} else if (forwardApplies) {
+					changesApplied = true;
 					try {
 						await git.patch.applyText(repoRoot, normalized);
 						hadAnyChanges = true;
 					} catch {
 						changesApplied = false;
 					}
+				} else {
+					changesApplied = false;
 				}
 			}
 		}

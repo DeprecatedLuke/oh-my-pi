@@ -10,8 +10,10 @@ import { Container, Markdown, Text } from "@oh-my-pi/pi-tui";
 import { formatNumber, sanitizeText } from "@oh-my-pi/pi-utils";
 import { settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import type { IssueSeverity } from "../issues";
 import { formatContextUsage } from "../modes/components/status-line/context-thresholds";
-import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
+import { getMarkdownTheme, type Theme, type ThemeColor } from "../modes/theme/theme";
+import type { IssuesToolDetails } from "../tools/issues";
 import { stripGeneratedOutputNotice, stripRawOutputArtifactNotice } from "../tools/output-meta";
 import {
 	capPreviewLines,
@@ -145,6 +147,71 @@ function normalizeFindings(value: unknown): FindingDetails[] {
 		if (finding) findings.push(finding);
 	}
 	return findings;
+}
+const ISSUE_SEVERITY_ORDER: readonly IssueSeverity[] = ["critical", "high", "medium", "low"];
+const ISSUE_SEVERITY_INFO: Record<IssueSeverity, { ord: number; color: ThemeColor }> = {
+	critical: { ord: 0, color: "error" },
+	high: { ord: 1, color: "warning" },
+	medium: { ord: 2, color: "muted" },
+	low: { ord: 3, color: "accent" },
+};
+
+function normalizeIssueAdds(value: unknown): IssuesToolDetails[] {
+	if (!Array.isArray(value)) return [];
+	return value.filter(
+		(item): item is IssuesToolDetails =>
+			Boolean(item) && typeof item === "object" && "op" in item && item.op === "add",
+	);
+}
+
+function formatIssuesSummary(issues: IssuesToolDetails[], theme: Theme): string {
+	const counts: { [S in IssueSeverity]?: number } = {};
+	for (const issue of issues) {
+		const severity = issue.severity ?? "low";
+		counts[severity] = (counts[severity] ?? 0) + 1;
+	}
+	const parts = ISSUE_SEVERITY_ORDER.map(severity => {
+		const { color } = ISSUE_SEVERITY_INFO[severity];
+		return theme.fg(color, `${severity}:${counts[severity] ?? 0}`);
+	});
+	return `${theme.fg("dim", "Findings:")} ${parts.join(theme.sep.dot)}`;
+}
+
+function renderIssuesList(
+	issues: IssuesToolDetails[],
+	continuePrefix: string,
+	expanded: boolean,
+	theme: Theme,
+): string[] {
+	const sorted = expanded
+		? issues
+		: [...issues].sort(
+				(a, b) => ISSUE_SEVERITY_INFO[a.severity ?? "low"].ord - ISSUE_SEVERITY_INFO[b.severity ?? "low"].ord,
+			);
+	const displayCount = expanded ? sorted.length : Math.min(3, sorted.length);
+	const lines: string[] = [];
+	for (let i = 0; i < displayCount; i++) {
+		const issue = sorted[i];
+		const isLast = i === displayCount - 1 && (expanded || sorted.length <= 3);
+		const issuePrefix = isLast ? theme.tree.last : theme.tree.branch;
+		const issueContinue = isLast ? "   " : `${theme.tree.vertical}  `;
+		const severity = issue.severity ?? "low";
+		const { color } = ISSUE_SEVERITY_INFO[severity];
+		const title = replaceTabs(sanitizeText(issue.title ?? "(untitled)")).replace(/[\r\n]+/g, " ");
+		const url = sanitizeText(issue.url ?? `issues://${issue.filename ?? "?"}`);
+		lines.push(
+			`${continuePrefix}${issuePrefix} ${theme.fg(color, `[${severity}]`)} ${title} ${theme.fg("dim", url)}`,
+		);
+		if (expanded && issue.bodyPreview) {
+			for (const bodyLine of sanitizeText(issue.bodyPreview).split("\n")) {
+				lines.push(`${continuePrefix}${issueContinue}${theme.fg("dim", replaceTabs(bodyLine))}`);
+			}
+		}
+	}
+	if (!expanded && issues.length > 3) {
+		lines.push(`${continuePrefix}${theme.fg("dim", formatMoreItems(issues.length - 3, "finding"))}`);
+	}
+	return lines;
 }
 
 /** Reviewer output declares `findings` as an array, so a lone finding section still assembles as a list. */
@@ -1011,6 +1078,7 @@ function renderAgentProgress(
 					...renderReviewResult(
 						incrementalReview.summary,
 						incrementalReview.findings,
+						normalizeIssueAdds(progress.extractedToolData.issues),
 						continuePrefix,
 						expanded,
 						theme,
@@ -1024,7 +1092,16 @@ function renderAgentProgress(
 			if (reviewData.length > 0) {
 				const summary = reviewData[reviewData.length - 1];
 				const findings: FindingDetails[] = [];
-				lines.push(...renderReviewResult(summary, findings, continuePrefix, expanded, theme));
+				lines.push(
+					...renderReviewResult(
+						summary,
+						findings,
+						normalizeIssueAdds(progress.extractedToolData.issues),
+						continuePrefix,
+						expanded,
+						theme,
+					),
+				);
 				return lines; // Review result handles its own rendering
 			}
 		}
@@ -1108,6 +1185,7 @@ function renderAgentProgress(
 function renderReviewResult(
 	summary: SubmitReviewDetails,
 	findings: FindingDetails[],
+	issues: IssuesToolDetails[],
 	continuePrefix: string,
 	expanded: boolean,
 	theme: Theme,
@@ -1144,11 +1222,19 @@ function renderReviewResult(
 		}
 	}
 
-	// Findings summary + list
-	lines.push(`${continuePrefix}${formatFindingSummary(findings, theme)}`);
-
-	if (findings.length > 0) {
-		lines.push(...renderFindings(findings, continuePrefix, expanded, theme));
+	// Findings summary + list. New reviewers file via `issues`; legacy agents
+	// may still use report_finding. Surface every real source.
+	if (findings.length === 0 && issues.length === 0) {
+		lines.push(`${continuePrefix}${formatFindingSummary([], theme)}`);
+	} else {
+		if (findings.length > 0) {
+			lines.push(`${continuePrefix}${formatFindingSummary(findings, theme)}`);
+			lines.push(...renderFindings(findings, continuePrefix, expanded, theme));
+		}
+		if (issues.length > 0) {
+			lines.push(`${continuePrefix}${formatIssuesSummary(issues, theme)}`);
+			lines.push(...renderIssuesList(issues, continuePrefix, expanded, theme));
+		}
 	}
 
 	return lines;
@@ -1287,7 +1373,14 @@ function renderAgentResult(
 
 	if (incrementalReview) {
 		lines.push(
-			...renderReviewResult(incrementalReview.summary, incrementalReview.findings, continuePrefix, expanded, theme),
+			...renderReviewResult(
+				incrementalReview.summary,
+				incrementalReview.findings,
+				normalizeIssueAdds(result.extractedToolData?.issues),
+				continuePrefix,
+				expanded,
+				theme,
+			),
 		);
 		return lines;
 	}
@@ -1301,7 +1394,16 @@ function renderAgentResult(
 	if (submitReviewData) {
 		const summary = submitReviewData[submitReviewData.length - 1];
 		const findings: FindingDetails[] = [];
-		lines.push(...renderReviewResult(summary, findings, continuePrefix, expanded, theme));
+		lines.push(
+			...renderReviewResult(
+				summary,
+				findings,
+				normalizeIssueAdds(result.extractedToolData?.issues),
+				continuePrefix,
+				expanded,
+				theme,
+			),
+		);
 		return lines;
 	}
 

@@ -32,6 +32,8 @@ import { extractProfileFlags } from "./cli/profile-bootstrap";
 import { startJsEvalProcess } from "./eval/js/process-entry";
 import type { WorkerInbound as JsWorkerInbound, WorkerOutbound as JsWorkerOutbound } from "./eval/js/worker-protocol";
 import { DAEMON_BROKER_WORKER_ARG } from "./launch/protocol";
+import { smokeTestTerminalOutputWorker } from "./launch/terminal-output-worker-client";
+import { TERMINAL_OUTPUT_WORKER_ARG } from "./launch/terminal-output-worker-protocol";
 import { COMPUTER_WORKER_ARG } from "./tools/computer/protocol";
 import { smokeTestComputerWorker } from "./tools/computer/supervisor";
 import { startComputerWorker } from "./tools/computer/worker-entry";
@@ -109,6 +111,7 @@ async function runSmokeTest(): Promise<void> {
 	await smokeTestTtsWorker();
 	await smokeTestMnemopiEmbedWorker();
 	await smokeTestDaemonBroker();
+	await smokeTestTerminalOutputWorker();
 	process.stdout.write("smoke-test: ok\n");
 }
 
@@ -195,6 +198,12 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 		await runIpcSubprocessWorker(startMnemopiEmbedWorker);
 		return true;
 	}
+	if (arg === TERMINAL_OUTPUT_WORKER_ARG) {
+		// A child-process boundary keeps xterm's native/runtime state out of the long-lived client.
+		const { startTerminalOutputWorker } = await import("./launch/terminal-output-worker");
+		await runIpcSubprocessWorker(startTerminalOutputWorker);
+		return true;
+	}
 	if (arg === DAEMON_BROKER_WORKER_ARG) {
 		// Worker selectors must dispatch before the normal command graph loads.
 		const { startDaemonBrokerFromEnvironment } = await import("./launch/broker");
@@ -205,14 +214,12 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 }
 
 /**
- * Boot a subprocess-isolated transformers.js worker over the parent's IPC
- * channel and block until the parent disconnects. The tiny-model, STT, and TTS
- * workers each run `onnxruntime-node` (loaded transitively by
- * `@huggingface/transformers`) in a child address space because its NAPI
- * finalizer segfaults Bun on shutdown (issue #1606); the parent `SIGKILL`s the
- * child so that finalizer never runs in either process. This wires `process`
- * IPC to the worker's typed transport, keeps the event loop alive while the
- * worker is idle, and hard-kills the process on parent `disconnect`.
+ * Boot a native-sensitive worker over subprocess IPC and block until its parent
+ * disconnects. Inference workers isolate `onnxruntime-node`; terminal replay
+ * isolates xterm. Both have caused Bun/native shutdown faults when evaluated in
+ * the long-lived client. The parent hard-kills the child so native finalizers
+ * never run, wires the typed `process` transport, and keeps the child alive
+ * while it is idle.
  */
 async function runIpcSubprocessWorker<In, Out>(
 	start: (transport: {

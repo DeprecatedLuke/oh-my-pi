@@ -18,10 +18,69 @@ import { obfuscateProviderContext, type SecretObfuscator } from "../secrets/obfu
 import type { HandoffResult, SessionHandoffOptions } from "./agent-session-types";
 import type { BashSessionTransition } from "./bash-runner";
 import type { SessionContext } from "./session-context";
+import type { SessionEntry } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 
-function createHandoffContext(document: string): string {
-	return `<handoff-context>\n${document}\n</handoff-context>\n\nThe above is a handoff document from a previous session. Use this context to continue the work seamlessly.`;
+function extractVerbatimMessageText(message: AgentMessage): string | undefined {
+	if (!("content" in message)) return undefined;
+	const content = message.content;
+	if (typeof content === "string") return content.trim() ? content : undefined;
+	if (!Array.isArray(content)) return undefined;
+	const parts: string[] = [];
+	for (const block of content) {
+		if (!("text" in block) || typeof block.text !== "string") continue;
+		parts.push(block.text);
+	}
+	const text = parts.join("");
+	return text.trim() ? text : undefined;
+}
+
+const ASYNC_RESULT_CUSTOM_TYPE = "async-result";
+
+function isAssistantResponseToBackgroundJob(
+	entry: SessionEntry,
+	entriesById: ReadonlyMap<string, SessionEntry>,
+): boolean {
+	if (entry.type !== "message" || entry.message.role !== "assistant") return false;
+	for (let parentId = entry.parentId; parentId; ) {
+		const parent = entriesById.get(parentId);
+		if (!parent) return false;
+		if (parent.type === "custom_message") return parent.customType === ASYNC_RESULT_CUSTOM_TYPE;
+		if (parent.type !== "message") {
+			parentId = parent.parentId;
+			continue;
+		}
+		if (parent.message.role === "custom") {
+			return parent.message.customType === ASYNC_RESULT_CUSTOM_TYPE;
+		}
+		if (parent.message.role !== "assistant" && parent.message.role !== "toolResult") return false;
+		parentId = parent.parentId;
+	}
+	return false;
+}
+
+function findLastSessionMessageText(entries: readonly SessionEntry[]): string | undefined {
+	const entriesById = new Map(entries.map(entry => [entry.id, entry]));
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const entry = entries[i];
+		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+		if (isAssistantResponseToBackgroundJob(entry, entriesById)) continue;
+		const text = extractVerbatimMessageText(entry.message);
+		if (text) return text;
+	}
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const entry = entries[i];
+		if (entry.type !== "message" || entry.message.role !== "user") continue;
+		const text = extractVerbatimMessageText(entry.message);
+		if (text) return text;
+	}
+	return undefined;
+}
+
+function createHandoffContext(document: string, lastSessionMessage: string | undefined): string {
+	let content = `<handoff-context>\n${document}\n</handoff-context>\n\nThe above is a handoff document from a previous session. Use this context to continue the work seamlessly.`;
+	if (lastSessionMessage) content += `\n\n### Last Session Message\n\n${lastSessionMessage}`;
+	return content;
 }
 
 function createHandoffFileName(date = new Date()): string {
@@ -102,6 +161,7 @@ export class SessionHandoff {
 		const entries = this.#host.sessionManager.getBranch();
 		const messageCount = entries.filter(e => e.type === "message").length;
 
+		const lastSessionMessage = findLastSessionMessageText(entries);
 		if (messageCount < 2) {
 			throw new Error("Nothing to hand off (no messages yet)");
 		}
@@ -259,7 +319,7 @@ export class SessionHandoff {
 			this.#host.resetTodoCycle();
 
 			// Inject the handoff document as a custom message
-			const handoffContent = createHandoffContext(handoffText);
+			const handoffContent = createHandoffContext(handoffText, lastSessionMessage);
 			this.#host.sessionManager.appendCustomMessageEntry("handoff", handoffContent, true, undefined, "agent");
 			await this.#host.sessionManager.ensureOnDisk();
 			let savedPath: string | undefined;

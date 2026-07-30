@@ -38,5 +38,6 @@ export function adaptSchemaForStrict(
 	// top-level union into a single object before enforcing strict constraints.
 	// No-op for schemas that are already a plain object.
 	const rooted = flattenTopLevelObjectUnion(upgraded);
-	return tryEnforceStrictSchema(rooted);
+	const result = tryEnforceStrictSchema(rooted);
+	return result.strict ? result : { schema, strict: false };
 }

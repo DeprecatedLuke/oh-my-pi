@@ -268,8 +268,8 @@ describe("Coding Agent Tools", () => {
 	let writeTool: WriteTool;
 	let editTool: EditTool;
 	let bashTool: BashTool;
-	let searchTool: SearchTool;
-	let findTool: FindTool;
+	let searchTool: GrepTool;
+	let findTool: GlobTool;
 	let originalEditVariant: string | undefined;
 
 	beforeAll(async () => {
@@ -1707,7 +1707,7 @@ function b() {
 		});
 	});
 
-	describe("search tool", () => {
+	describe("grep tool", () => {
 		it("should include filename when searching a single file", async () => {
 			const testFile = path.join(testDir, "example.txt");
 			fs.writeFileSync(testFile, "first line\nmatch line\nlast line");
@@ -1825,7 +1825,7 @@ function b() {
 			const content = ["before", "match one", "after", "middle", "match two", "after two"].join("\n");
 			fs.writeFileSync(testFile, content);
 
-			const contextSettings = Settings.isolated({ "search.contextBefore": 1, "search.contextAfter": 1 });
+			const contextSettings = Settings.isolated({ "grep.contextBefore": 1, "grep.contextAfter": 1 });
 			const contextSearchTool = wrapToolWithMetaNotice(
 				new GrepTool(createTestToolSession(testDir, contextSettings)),
 			);
@@ -1847,7 +1847,7 @@ function b() {
 			const lines = Array.from({ length: 10 }, (_, idx) => (idx === 0 || idx === 5 ? "match" : `filler ${idx}`));
 			fs.writeFileSync(testFile, lines.join("\n"));
 
-			const noContextSettings = Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 });
+			const noContextSettings = Settings.isolated({ "grep.contextBefore": 0, "grep.contextAfter": 0 });
 			const noContextSearchTool = wrapToolWithMetaNotice(
 				new GrepTool(createTestToolSession(testDir, noContextSettings)),
 			);
@@ -2094,7 +2094,7 @@ function b() {
 		});
 	});
 
-	describe("find tool", () => {
+	describe("glob tool", () => {
 		it("should return a single file when given a file path", async () => {
 			const testFile = path.join(testDir, "single.txt");
 			fs.writeFileSync(testFile, "single");

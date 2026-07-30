@@ -1,5 +1,5 @@
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
-import { getSkillSlashCommandName, parseSkillInvocation } from "../extensibility/skills";
+import { buildSkillPromptMessage, getSkillSlashCommandName, parseSkillInvocation } from "../extensibility/skills";
 import { type CustomMessage, SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../session/messages";
 import type { InteractiveModeContext } from "./types";
 
@@ -50,31 +50,19 @@ export async function buildSkillCommandPrompt(
 	const parsed = parseSkillInvocation(text);
 	if (!parsed) return undefined;
 	const commandName = getSkillSlashCommandName({ name: parsed.name });
-	const skillPath = ctx.skillCommands.get(commandName);
-	if (!skillPath) return undefined;
+	const skill = ctx.skillCommands.get(commandName);
+	if (!skill) return undefined;
 
-	const content = await Bun.file(skillPath).text();
-	const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
-	const metaLines = [`Skill: ${skillPath}`];
-	if (parsed.args) {
-		metaLines.push(`User: ${parsed.args}`);
-	}
-	const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
-	const textBlock: TextContent = { type: "text", text: message };
-	const promptContent = images && images.length > 0 ? [textBlock, ...images] : message;
-	const details: SkillPromptDetails = {
-		name: parsed.name,
-		path: skillPath,
-		args: parsed.args || undefined,
-		lineCount: body ? body.split("\n").length : 0,
-	};
+	const built = await buildSkillPromptMessage(skill, parsed.args, "user");
+	const textBlock: TextContent = { type: "text", text: built.message };
+	const promptContent = images && images.length > 0 ? [textBlock, ...images] : built.message;
 
 	return {
 		message: {
 			customType: SKILL_PROMPT_MESSAGE_TYPE,
 			content: promptContent,
 			display: true,
-			details,
+			details: built.details,
 			attribution: "user",
 		},
 		options: { streamingBehavior, queueChipText: text },

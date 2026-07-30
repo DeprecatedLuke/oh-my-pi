@@ -168,12 +168,12 @@ describe("CursorExecHandlers mounted tool bridge", () => {
 	it("resolves legacy built-in aliases while preserving the requested Cursor call identity", async () => {
 		const events: AgentEvent[] = [];
 		const canonicalTool: AgentTool = {
-			name: "search",
-			label: "Search",
-			description: "canonical search fixture",
+			name: "grep",
+			label: "Grep",
+			description: "canonical grep fixture",
 			parameters: type({}),
 			async execute() {
-				return { content: [{ type: "text", text: "canonical search executed" }], details: {} };
+				return { content: [{ type: "text", text: "canonical grep executed" }], details: {} };
 			},
 		};
 		const handlers = new CursorExecHandlers({
@@ -183,35 +183,35 @@ describe("CursorExecHandlers mounted tool bridge", () => {
 		});
 
 		const result = await handlers.mcp({
-			name: "grep",
+			name: "search",
 			providerIdentifier: "pi-agent",
-			toolName: "grep",
-			toolCallId: "call-legacy-grep",
+			toolName: "search",
+			toolCallId: "call-legacy-search",
 			args: { pattern: "needle" },
 			rawArgs: {},
 		});
 
 		expect(result).toMatchObject({
 			role: "toolResult",
-			toolCallId: "call-legacy-grep",
-			toolName: "grep",
-			content: [{ type: "text", text: "canonical search executed" }],
+			toolCallId: "call-legacy-search",
+			toolName: "search",
+			content: [{ type: "text", text: "canonical grep executed" }],
 			isError: false,
 		});
 		const starts = events.filter(event => event.type === "tool_execution_start");
 		expect(starts).toHaveLength(1);
 		expect(starts[0]).toMatchObject({
-			toolCallId: "call-legacy-grep",
-			toolName: "grep",
+			toolCallId: "call-legacy-search",
+			toolName: "search",
 			args: { pattern: "needle" },
 		});
 		const ends = events.filter(event => event.type === "tool_execution_end");
 		expect(ends).toHaveLength(1);
 		expect(ends[0]).toMatchObject({
-			toolCallId: "call-legacy-grep",
-			toolName: "grep",
+			toolCallId: "call-legacy-search",
+			toolName: "search",
 			isError: false,
-			result: { content: [{ type: "text", text: "canonical search executed" }] },
+			result: { content: [{ type: "text", text: "canonical grep executed" }] },
 		});
 	});
 

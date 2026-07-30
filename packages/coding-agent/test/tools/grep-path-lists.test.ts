@@ -142,7 +142,7 @@ describe("tool path arrays", () => {
 		resetSettingsForTest();
 	});
 
-	it("search accepts explicit path arrays", async () => {
+	it("grep accepts explicit path arrays", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
@@ -164,7 +164,7 @@ describe("tool path arrays", () => {
 		expect(details?.scopePath).toBe("apps/, packages/, phases/");
 	});
 
-	it("search accepts JSON-array string paths in direct execute", async () => {
+	it("grep accepts JSON-array string paths in direct execute", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
@@ -185,7 +185,7 @@ describe("tool path arrays", () => {
 		expect(details?.scopePath).toBe("apps/, packages/, phases/");
 	});
 
-	it("search expands delimited path entries", async () => {
+	it("grep expands delimited path entries", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
@@ -212,7 +212,7 @@ describe("tool path arrays", () => {
 		}
 	});
 
-	it("search keeps comma-delimited surviving entries when peers are missing", async () => {
+	it("grep keeps comma-delimited surviving entries when peers are missing", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
@@ -255,7 +255,7 @@ describe("tool path arrays", () => {
 		expect(snapshot?.text).toBe("shared-needle apps\n");
 	});
 
-	it("search accepts a single string path through tool validation", async () => {
+	it("grep accepts a single string path through tool validation", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
@@ -278,7 +278,7 @@ describe("tool path arrays", () => {
 		expect(details?.fileCount).toBe(1);
 		expect(details?.scopePath).toBe("folder with spaces");
 	});
-	it("search resolves bracketed literal paths (Next.js routes) when they exist", async () => {
+	it("grep resolves bracketed literal paths (Next.js routes) when they exist", async () => {
 		// Create `apps/[id]/page.tsx` — `[id]` is glob char-class syntax but here it
 		// is a literal directory name. The literal path must take precedence over
 		// the glob interpretation, otherwise the lookup returns no matches.
@@ -447,7 +447,7 @@ describe("tool path arrays", () => {
 		expect(rendered).not.toContain("[grep: /space-needle/ in .]");
 	});
 
-	it("search keeps a single path that contains spaces", async () => {
+	it("grep keeps a single path that contains spaces", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
@@ -465,7 +465,7 @@ describe("tool path arrays", () => {
 		expect(details?.scopePath).toBe("folder with spaces");
 	});
 
-	it("search accepts quoted directory paths", async () => {
+	it("grep accepts quoted directory paths", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
@@ -484,7 +484,7 @@ describe("tool path arrays", () => {
 		expect(details?.scopePath).toBe("packages");
 	});
 
-	it("search formats absolute in-cwd paths relative to cwd", async () => {
+	it("grep formats absolute in-cwd paths relative to cwd", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "grep");
 		expect(tool).toBeDefined();
@@ -673,7 +673,7 @@ describe("tool path arrays", () => {
 		await removeWithRetries(tmp);
 	});
 
-	it("find accepts explicit path arrays", async () => {
+	it("glob accepts explicit path arrays", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "glob");
 		expect(tool).toBeDefined();
@@ -703,7 +703,7 @@ describe("tool path arrays", () => {
 		expect(details?.scopePath).toBe("apps/, packages/, phases/");
 	});
 
-	it("find expands delimited path entries", async () => {
+	it("glob expands delimited path entries", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "glob");
 		expect(tool).toBeDefined();
@@ -730,7 +730,7 @@ describe("tool path arrays", () => {
 		}
 	});
 
-	it("find keeps comma-delimited surviving entries when peers are missing", async () => {
+	it("glob keeps comma-delimited surviving entries when peers are missing", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "glob");
 		expect(tool).toBeDefined();
@@ -750,7 +750,7 @@ describe("tool path arrays", () => {
 		expect(details?.missingPaths).toEqual(["missing.txt"]);
 	});
 
-	it("find keeps a single path that contains spaces", async () => {
+	it("glob keeps a single path that contains spaces", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "glob");
 		expect(tool).toBeDefined();
@@ -768,7 +768,7 @@ describe("tool path arrays", () => {
 		expect(details?.scopePath).toBe("folder with spaces");
 	});
 
-	it("find accepts quoted directory patterns", async () => {
+	it("glob accepts quoted directory patterns", async () => {
 		const tools = await createTools(createTestSession(tempDir));
 		const tool = tools.find(entry => entry.name === "glob");
 		expect(tool).toBeDefined();
@@ -787,7 +787,7 @@ describe("tool path arrays", () => {
 		expect(details?.scopePath).toBe("packages");
 	});
 
-	it("find keeps paths outside cwd absolute", async () => {
+	it("glob keeps paths outside cwd absolute", async () => {
 		const outsideDir = await fs.mkdtemp(path.join(path.dirname(tempDir), "find-outside-"));
 		try {
 			await Bun.write(path.join(outsideDir, "outside.txt"), "outside\n");
@@ -894,7 +894,7 @@ describe("tool path arrays", () => {
 
 		const tools = await createTools(
 			createTestSession(tmp, {
-				settings: Settings.isolated({ "search.contextBefore": 1, "search.contextAfter": 1 }),
+				settings: Settings.isolated({ "grep.contextBefore": 1, "grep.contextAfter": 1 }),
 			}),
 		);
 		const tool = tools.find(entry => entry.name === "grep");

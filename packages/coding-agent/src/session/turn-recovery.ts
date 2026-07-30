@@ -797,6 +797,11 @@ export class TurnRecovery {
 	 * abort. Deliberate user interrupts (`UserInterrupt`) and silent aborts carry
 	 * their own marker, not the generic sentinel, so they never match here.
 	 */
+	#isGenericAbortSentinel(message: AssistantMessage): boolean {
+		const errorMessage = message.errorMessage?.trim().replace(/^Error:\s*/i, "");
+		return errorMessage === "Request was aborted" || errorMessage === "Request was aborted.";
+	}
+
 	isRetryableReasonlessAbort(message: AssistantMessage): boolean {
 		if (
 			(message.stopReason !== "aborted" && message.stopReason !== "error") ||
@@ -810,9 +815,7 @@ export class TurnRecovery {
 
 		const id = this.#classifyRetryMessage(message);
 		if (message.stopReason === "aborted" && AIError.is(id, AIError.Flag.Abort)) return true;
-		if (message.errorMessage !== "Request was aborted" && message.errorMessage !== "Request was aborted.") {
-			return false;
-		}
+		if (!this.#isGenericAbortSentinel(message)) return false;
 
 		message.errorId = AIError.create(AIError.Flag.Abort);
 		return true;
@@ -843,8 +846,7 @@ export class TurnRecovery {
 	 */
 	classifyResolvedInterruptedToolTurn(message: AssistantMessage): "reasonless-abort" | "stream-stall" | undefined {
 		const id = this.#classifyRetryMessage(message);
-		const genericAbort =
-			message.errorMessage === "Request was aborted" || message.errorMessage === "Request was aborted.";
+		const genericAbort = this.#isGenericAbortSentinel(message);
 		const reasonlessAbort =
 			(message.stopReason === "aborted" || message.stopReason === "error") &&
 			!this.#host.abortInProgress() &&

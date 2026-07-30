@@ -56,14 +56,14 @@ export function parseSessionContent(content: string): {
 	return { entries: foldTitleSlot(entries, slot), titleSlot: slot };
 }
 
-/** Exported for testing — the ≥8MiB streaming path (works on any file size). */
-export async function loadEntriesFromFileStream(filePath: string): Promise<{
-	entries: FileEntry[];
-	titleSlot: SessionTitleUpdate | undefined;
-}> {
-	const entries: FileEntry[] = [];
+/** Parse session JSONL and visit each entry without retaining prior entries. */
+export async function visitEntriesFromFileStream(
+	filePath: string,
+	visit: (entry: FileEntry) => void,
+): Promise<SessionTitleUpdate | undefined> {
 	let titleSlot: SessionTitleUpdate | undefined;
 	let sawFirstLine = false;
+	let visitorThrew = false;
 	// Byte buffer (NOT a decoded string): multibyte UTF-8 sequences that straddle
 	// a stream-chunk boundary stay intact, and Bun.JSONL.parseChunk accepts typed
 	// arrays directly. Only the unconsumed remainder is held (≤ one record + a
@@ -75,17 +75,22 @@ export async function loadEntriesFromFileStream(filePath: string): Promise<{
 	const drain = () => {
 		while (buffer.length > 0) {
 			const { values, error, read, done } = Bun.JSONL.parseChunk(buffer);
-			if (values.length > 0) {
-				for (const value of values) entries.push(value as FileEntry);
+			for (const value of values) {
+				try {
+					visit(value as FileEntry);
+				} catch (err) {
+					visitorThrew = true;
+					throw err;
+				}
 			}
 			if (error) {
 				// Malformed record: skip past the next newline and continue.
 				const nextNewline = buffer.indexOf(0x0a, read);
-				if (nextNewline === -1) break; // rest of the bad line not yet received
+				if (nextNewline === -1) break;
 				buffer = buffer.subarray(nextNewline + 1);
 				continue;
 			}
-			if (read === 0) break; // incomplete record awaiting more data
+			if (read === 0) break;
 			buffer = buffer.subarray(read);
 			if (done) {
 				buffer = new Uint8Array();
@@ -97,11 +102,6 @@ export async function loadEntriesFromFileStream(filePath: string): Promise<{
 	try {
 		for await (const chunk of Bun.file(filePath).stream()) {
 			buffer = buffer.length === 0 ? chunk : Buffer.concat([buffer, chunk]);
-			// The optional fixed-width title slot is a physical first line that is
-			// NOT JSON; peel it before the parser would (correctly) reject it. The
-			// first line ends at a '\n' byte, so it is a complete UTF-8 sequence and
-			// safe to decode. A non-slot first line is a real entry and is left for
-			// the parser; a blank first line is left for the parser to skip.
 			if (!sawFirstLine) {
 				const newline = buffer.indexOf(0x0a);
 				if (newline !== -1) {
@@ -118,17 +118,26 @@ export async function loadEntriesFromFileStream(filePath: string): Promise<{
 			}
 			drain();
 		}
-		// A trailing record without a final newline: terminate it so the parser
-		// can complete it (readline yielded it; parseChunk needs the delimiter).
 		if (buffer.length > 0 && buffer[buffer.length - 1] !== 0x0a) {
 			buffer = Buffer.concat([buffer, new Uint8Array([0x0a])]);
 		}
 		drain();
 	} catch (err) {
-		if (isEnoent(err)) return { entries: [], titleSlot: undefined };
+		if (visitorThrew) throw err;
+		if (isEnoent(err)) return undefined;
 		throw err;
 	}
 
+	return titleSlot;
+}
+
+/** Exported for testing — the ≥8MiB streaming path (works on any file size). */
+export async function loadEntriesFromFileStream(filePath: string): Promise<{
+	entries: FileEntry[];
+	titleSlot: SessionTitleUpdate | undefined;
+}> {
+	const entries: FileEntry[] = [];
+	const titleSlot = await visitEntriesFromFileStream(filePath, entry => entries.push(entry));
 	return { entries: foldTitleSlot(entries, titleSlot), titleSlot };
 }
 

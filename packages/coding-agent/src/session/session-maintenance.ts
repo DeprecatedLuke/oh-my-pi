@@ -64,7 +64,7 @@ import type { ConfiguredThinkingLevel } from "../thinking";
 import type { AgentSessionEvent } from "./agent-session-events";
 import type { ContextUsageBreakdown, HandoffResult, SessionHandoffOptions } from "./agent-session-types";
 import { findCompactMode } from "./compact-modes";
-import { convertToLlm, stripImagesFromMessage } from "./messages";
+import { stripImagesFromMessage } from "./messages";
 import { isTerminalTextAssistantAnswer } from "./queued-messages";
 import {
 	resolveCompactionConfiguredTarget,
@@ -666,7 +666,9 @@ export class SessionMaintenance {
 				snapcompactReady = false;
 			} else if (snapcompactReady) {
 				const text = snapcompact.serializeConversation(
-					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
+					this.#host.convertToLlmForSideRequest(
+						preparation.messagesToSummarize.concat(preparation.turnPrefixMessages),
+					),
 					{ includeThinking: snapcompactIncludeThinking },
 				);
 				const probeText = snapcompact.renderabilityProbeText(
@@ -719,7 +721,7 @@ export class SessionMaintenance {
 						throw new Error("snapcompact shape was not resolved before rendering.");
 					}
 					snapcompactResult = await snapcompact.compact(preparation, {
-						convertToLlm,
+						convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
 						model: this.#model,
 						...(snapcompactShapeSetting === "auto" ? {} : { shape }),
 						maxFrames,
@@ -1974,7 +1976,7 @@ export class SessionMaintenance {
 					fileOps,
 				},
 				{
-					convertToLlm,
+					convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
 					model: this.#model,
 					...(shapeSetting === "auto" ? {} : { shape }),
 					maxFrames,
@@ -2397,7 +2399,9 @@ export class SessionMaintenance {
 				// ("reasoning_extraction", issue #6093).
 				const snapcompactIncludeThinking = preferredDialect(this.#model.id) !== "anthropic";
 				const text = snapcompact.serializeConversation(
-					convertToLlm(preparation.messagesToSummarize.concat(preparation.turnPrefixMessages)),
+					this.#host.convertToLlmForSideRequest(
+						preparation.messagesToSummarize.concat(preparation.turnPrefixMessages),
+					),
 					{ includeThinking: snapcompactIncludeThinking },
 				);
 				const probeText = snapcompact.renderabilityProbeText(
@@ -2425,7 +2429,7 @@ export class SessionMaintenance {
 							"snapcompact: kept history alone exceeds the context budget; using context-full auto-compaction instead.";
 					} else {
 						snapcompactResult = await snapcompact.compact(preparation, {
-							convertToLlm,
+							convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
 							model: this.#model,
 							...(shapeSetting === "auto" ? {} : { shape }),
 							maxFrames,

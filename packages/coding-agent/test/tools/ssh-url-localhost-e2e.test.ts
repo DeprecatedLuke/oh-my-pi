@@ -177,7 +177,7 @@ describe.skipIf(!SSH_OK)("ssh:// through the real read/grep/write tools (localho
 			hasUI: false,
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
-			settings: Settings.isolated({ "search.contextBefore": 0, "search.contextAfter": 0 }),
+			settings: Settings.isolated({ "grep.contextBefore": 0, "grep.contextAfter": 0 }),
 		};
 	}
 
@@ -218,7 +218,7 @@ describe.skipIf(!SSH_OK)("ssh:// through the real read/grep/write tools (localho
 		expect(range).not.toContain("OMEGALINE");
 	});
 
-	it("SearchTool reports matches under the ssh:// URL with no scratch-temp leak", async () => {
+	it("GrepTool reports matches under the ssh:// URL with no scratch-temp leak", async () => {
 		mockEmptyHosts();
 		const tool = new GrepTool(createSession());
 		const result = await tool.execute("s", { pattern: "beta", paths: [`ssh://localhost${TMP}/read.txt`] });

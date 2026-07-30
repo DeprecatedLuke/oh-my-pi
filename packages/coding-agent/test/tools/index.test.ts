@@ -237,8 +237,8 @@ describe("createTools", () => {
 	it("filters disabled builtin tools by settings", async () => {
 		const session = createTestSession({
 			settings: createSettingsWithOverrides({
-				"find.enabled": false,
-				"search.enabled": false,
+				"glob.enabled": false,
+				"grep.enabled": false,
 				"astGrep.enabled": false,
 				"astEdit.enabled": false,
 				"bash.enabled": false,
