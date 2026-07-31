@@ -1,5 +1,5 @@
 import type { Clipboard, InMemorySnapshotStore } from "@oh-my-pi/hashline";
-import type { AgentTelemetryConfig, AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { AgentOptions, AgentTelemetryConfig, AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { FetchImpl, ImageContent, Model, ServiceTierByFamily, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async/job-manager";
@@ -68,6 +68,7 @@ import { PatchTool } from "./patch";
 import { ReadTool } from "./read";
 import type { PlanProposalHandler } from "./resolve";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
+import { SecurityScanTool } from "./security-scan";
 import { loadSshTool } from "./ssh";
 import { type TodoPhase, TodoTool } from "./todo";
 import { WriteTool } from "./write";
@@ -127,6 +128,7 @@ export * from "./report-tool-issue";
 export * from "./resolve";
 export * from "./review";
 export * from "./search-tool-bm25";
+export * from "./security-scan";
 export * from "./ssh";
 export * from "./todo";
 export * from "./tts";
@@ -191,6 +193,8 @@ export interface ToolSession {
 	suppressSpawnAdvisory?: boolean;
 	/** Optional fetch implementation injected into the URL read pipeline (tests, proxies). Defaults to global fetch. */
 	fetch?: FetchImpl;
+	/** Provider credential resolver forwarded unchanged to restricted child sessions. */
+	getApiKey?: AgentOptions["getApiKey"];
 	/** Skip subprocess-kernel availability checks and warmup */
 	skipPythonPreflight?: boolean;
 	/** Pre-loaded context files (AGENTS.md, etc) */
@@ -220,6 +224,8 @@ export interface ToolSession {
 	customToolPaths?: ToolPathWithSource[];
 	/** Whether LSP integrations are enabled */
 	enableLsp?: boolean;
+	/** Whether LSP is limited to navigation and diagnostics. */
+	lspReadOnly?: boolean;
 	/** Whether this invocation may expose IRC. `false` removes it even for subagents. */
 	enableIrc?: boolean;
 	/**
@@ -492,6 +498,7 @@ export function filterInitialToolsForDiscoveryAll(
  */
 export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	read: s => new ReadTool(s),
+	security_scan: s => new SecurityScanTool(s),
 	bash: s => new BashTool(s),
 	launch: s => new LaunchTool(s),
 	edit: s => new EditTool(s),
@@ -690,6 +697,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "ast_edit") return session.settings.get("astEdit.enabled");
 		if (name === "inspect_image") return isInspectImageToolActive(session);
 		if (name === "web_search") return session.settings.get("web_search.enabled");
+		if (name === "security_scan") return session.settings.get("security.enabled");
 		if (name === "ask") return session.settings.get("ask.enabled");
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "computer") return session.settings.get("computer.enabled");

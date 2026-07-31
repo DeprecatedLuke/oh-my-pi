@@ -9,6 +9,12 @@
 
 - Fixed ClinePass GLM-5.2 catalog metadata advertising the unsupported `max` reasoning effort instead of the gateway's `xhigh` top tier.
 
+## [17.2.1] - 2026-07-30
+
+### Fixed
+
+- Fixed Ollama model-manager caches being reused after the configured base URL changed by scoping cache namespaces to the normalized native discovery endpoint, including reverse-proxy path prefixes ([#7087](https://github.com/can1357/oh-my-pi/issues/7087)).
+
 ## [17.2.0] - 2026-07-30
 
 ### Added

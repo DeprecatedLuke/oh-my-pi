@@ -177,6 +177,7 @@ describe("internal-url-autocomplete", () => {
 				"memory",
 				"omp",
 				"rule",
+				"security",
 				"skill",
 				"ssh",
 			]);
