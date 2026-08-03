@@ -325,6 +325,11 @@ export class SessionAdvisors {
 		if (this.#advisorEnabled) this.#buildAdvisorRuntime();
 	}
 
+	/** Clears review metadata when a newer primary prompt supersedes a batch. */
+	clearReviewState(): void {
+		for (const advisor of this.#advisors) advisor.reviewInProgress = undefined;
+	}
+
 	/** Delivers one completed primary turn to every live advisor. */
 	async onPrimaryTurnEnd(
 		messages: AgentMessage[],

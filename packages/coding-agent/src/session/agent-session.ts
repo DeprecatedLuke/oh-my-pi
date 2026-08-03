@@ -672,6 +672,7 @@ export class AgentSession {
 	}
 
 	#beginInFlight(): void {
+		this.#advisors.clearReviewState();
 		this.#promptInFlightCount++;
 		if (this.#promptInFlightCount === 1) {
 			this.#acquirePowerAssertion();
