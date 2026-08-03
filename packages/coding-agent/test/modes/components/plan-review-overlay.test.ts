@@ -5,6 +5,7 @@ import type { HookSelectorSlider } from "@oh-my-pi/pi-coding-agent/modes/compone
 import { PlanReviewOverlay } from "@oh-my-pi/pi-coding-agent/modes/components/plan-review-overlay";
 import { getThemeByName, setThemeInstance, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { setKeybindings } from "@oh-my-pi/pi-tui";
+import { setTerminalTextSizing } from "@oh-my-pi/pi-tui/terminal-capabilities";
 
 const UP = "\x1b[A";
 const DOWN = "\x1b[B";
@@ -30,6 +31,7 @@ const APPROVAL_OPTIONS = [
 
 describe("PlanReviewOverlay", () => {
 	beforeAll(async () => {
+		setTerminalTextSizing(false);
 		darkTheme = await getThemeByName("dark");
 		if (!darkTheme) throw new Error("Failed to load dark theme");
 	});
@@ -42,6 +44,7 @@ describe("PlanReviewOverlay", () => {
 	afterEach(() => {
 		setKeybindings(KeybindingsManager.inMemory());
 		vi.restoreAllMocks();
+		setTerminalTextSizing(false);
 	});
 
 	it("renders the plan body, prompt, options and footer inside one outlined box", () => {
