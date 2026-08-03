@@ -118,6 +118,7 @@ import {
 	hasExecutableIncompleteResponsesToolCalls,
 	isOpenAIResponsesProgressEvent,
 	mapOpenAIResponsesStopReason,
+	NO_AUTH_SENTINEL,
 	normalizeOpenAIPromptCacheKey,
 	populateResponsesUsageFromResponse,
 	promoteResponsesToolUseStopReason,
@@ -4234,7 +4235,7 @@ function createCodexHeaders(
 ): Headers {
 	const headers = new Headers(initHeaders ?? {});
 	headers.delete("x-api-key");
-	headers.set("Authorization", `Bearer ${accessToken}`);
+	if (accessToken !== NO_AUTH_SENTINEL) headers.set("Authorization", `Bearer ${accessToken}`);
 	if (accountId) headers.set(OPENAI_HEADERS.ACCOUNT_ID, accountId);
 	if (attestation) {
 		headers.set(OPENAI_HEADERS.ATTESTATION, attestation);
