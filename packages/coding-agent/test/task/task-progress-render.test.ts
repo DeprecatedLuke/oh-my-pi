@@ -5,6 +5,7 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { taskToolRenderer } from "@oh-my-pi/pi-coding-agent/task/renderer";
 import type { AgentProgress, SingleResult, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task/types";
+import { setTerminalTextSizing, TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 
 function runningProgress(overrides: Partial<AgentProgress> = {}): AgentProgress {
 	return {
@@ -58,7 +59,10 @@ function findRow(component: { render: (w: number) => readonly string[] }, needle
 }
 
 describe("task progress rendering", () => {
+	const originalTextSizing = TERMINAL.textSizing;
+
 	beforeEach(async () => {
+		setTerminalTextSizing(false);
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
 	});
@@ -66,6 +70,7 @@ describe("task progress rendering", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		resetSettingsForTest();
+		setTerminalTextSizing(originalTextSizing);
 	});
 	it("renders running task rows static with the agent dot", async () => {
 		const theme = (await getThemeByName("dark"))!;
