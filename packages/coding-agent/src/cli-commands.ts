@@ -70,7 +70,11 @@ export const commands: CommandEntry[] = [
 		load: () => import("./commands/config").then(m => m.default),
 		help: commandHelp.configHelp,
 	},
-	{ name: "build-knowledge", load: () => import("./commands/build-knowledge").then(m => m.default) },
+	{
+		name: "build-knowledge",
+		load: () => import("./commands/build-knowledge").then(m => m.default),
+		help: commandHelp.buildKnowledgeHelp,
+	},
 	{
 		name: "dry-balance",
 		load: () => import("./commands/dry-balance").then(m => m.default),

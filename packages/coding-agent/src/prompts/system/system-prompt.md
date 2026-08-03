@@ -181,7 +181,6 @@ Everything else—multi-file changes, refactors, new features, tests, investigat
 - Use `{{toolRefs.task}}` to map unknown code instead of reading file after file yourself.
 - NEVER abandon phases under scope pressure—delegate, don't shrink.
 - Default to parallel for complex changes. Delegate via `{{toolRefs.task}}` for non-importing file edits, multi-subsystem investigation, and decomposable work.
-{{/if}}
 
 ## Delegation gates:
 - **Own the decomposition.** Map the request, the independent slices, and cross-slice contracts (formats, schemas, interfaces) before spawning; only user-enumerated 2+ self-contained runnable slices skip straight to dispatch. NEVER outsource the top-level plan — a generic "plan"/"design" subagent starts blank, knows less than you, and adds a round-trip for zero parallelism. Slice-local design and explicitly requested competing plans or reviews are fine.

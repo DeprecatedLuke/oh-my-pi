@@ -77,7 +77,7 @@ describe("Agent hub row ordering", () => {
 		AgentRegistry.resetGlobalForTests();
 	});
 
-	it("freezes the initial lastActivity order while the hub is open", () => {
+	it("freezes the initial lastActivity order while the hub is open", async () => {
 		geometry = stubStdoutGeometry(120);
 		const now = vi.spyOn(Date, "now");
 		const agents = new AgentRegistry();
@@ -110,6 +110,7 @@ describe("Agent hub row ordering", () => {
 		now.mockReturnValue(5000);
 		const sessionD = {} as AgentSession;
 		agents.register({ id: "D", displayName: "Delta", kind: "sub", session: sessionD });
+		await Bun.sleep(150);
 
 		expect(renderedAgentIds(hub)).toEqual(["C", "B", "A", "D"]);
 

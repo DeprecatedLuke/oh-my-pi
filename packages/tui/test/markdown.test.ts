@@ -54,6 +54,10 @@ describe("renderInlineMarkdown", () => {
 });
 
 describe("Markdown component", () => {
+	beforeAll(() => {
+		setTerminalTextSizing(false);
+	});
+
 	describe("Nested lists", () => {
 		it("should render simple nested list", () => {
 			const markdown = new Markdown(
@@ -1958,6 +1962,9 @@ describe("Module-level LRU render cache", () => {
 
 describe("OSC 66 text-sizing headings", () => {
 	const OSC66_INTRO = "\x1b]66;";
+	beforeAll(() => {
+		setTerminalTextSizing(false);
+	});
 
 	afterEach(() => {
 		// The capability gate is process-global; never let it leak into other suites.

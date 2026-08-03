@@ -432,14 +432,14 @@ describe("openai-codex Responses Lite input shaping", () => {
 			Bun.env.PI_CODEX_RESPONSES_LITE = "false";
 			const envOptOut = await transformRequestBody({ model: model.id, instructions: "sys" }, model, {});
 			expect(envOptOut.instructions).toBe("sys");
-			expect(envOptOut.input?.some(item => item.type === "additional_tools")).toBe(false);
+			expect(envOptOut.input).toBeUndefined();
 
 			Bun.env.PI_CODEX_RESPONSES_LITE = "true";
 			const explicitOptOut = await transformRequestBody({ model: model.id, instructions: "sys" }, model, {
 				responsesLite: false,
 			});
 			expect(explicitOptOut.instructions).toBe("sys");
-			expect(explicitOptOut.input?.some(item => item.type === "additional_tools")).toBe(false);
+			expect(explicitOptOut.input).toBeUndefined();
 		} finally {
 			if (previous === undefined) delete Bun.env.PI_CODEX_RESPONSES_LITE;
 			else Bun.env.PI_CODEX_RESPONSES_LITE = previous;
@@ -464,11 +464,6 @@ describe("openai-codex fresh execution input shaping", () => {
 			{
 				type: "message",
 				role: "developer",
-				content: [{ type: "input_text", text: "Read local://approved-plan.md and execute it." }],
-			},
-			{
-				type: "message",
-				role: "user",
 				content: [{ type: "input_text", text: "Read local://approved-plan.md and execute it." }],
 			},
 		]);

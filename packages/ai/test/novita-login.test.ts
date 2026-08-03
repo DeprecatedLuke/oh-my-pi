@@ -62,6 +62,7 @@ describe("Novita login", () => {
 					messages: [{ role: "user", content: "ping" }],
 					max_tokens: 1,
 					temperature: 0,
+					stream: false,
 				},
 			},
 		]);

@@ -74,18 +74,17 @@ describe("--session-dir", () => {
 });
 
 describe("--tools legacy aliases", () => {
-	it("normalizes legacy grep and glob aliases to canonical search and find", () => {
+	it("normalizes legacy search and find aliases to canonical grep and glob", () => {
 		const result = parseArgs(["--tools", "search,find,grep"]);
 
-		expect(result.tools).toEqual(["search", "find"]);
+		expect(result.tools).toEqual(["grep", "glob"]);
 	});
 
 	it("rejects unknown tool names instead of silently narrowing the toolset", () => {
-		// Removed tools (ssh, job, irc, launch, search_tool_bm25) used to be
-		// dropped with only a log-file warning, so `--tools bash,ssh` ran with
-		// just bash and no visible notice.
-		expect(() => parseArgs(["--tools", "bash,ssh"])).toThrow(CliUsageError);
-		expect(() => parseArgs(["--tools", "bash,ssh"])).toThrow(/Unknown tool in --tools: ssh/);
+		// Fork-retained built-ins such as ssh remain valid, so use a name outside
+		// the tool registry to verify unknown-tool rejection.
+		expect(() => parseArgs(["--tools", "bash,not-a-tool"])).toThrow(CliUsageError);
+		expect(() => parseArgs(["--tools", "bash,not-a-tool"])).toThrow(/Unknown tool in --tools: not-a-tool/);
 	});
 });
 

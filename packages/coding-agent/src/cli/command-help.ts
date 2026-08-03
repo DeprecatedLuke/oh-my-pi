@@ -18,6 +18,10 @@ export const benchHelp = {
 	description: "Benchmark models with the same prompt: time-to-first-token and generation throughput (tokens/s)",
 } satisfies CommandMetadata;
 
+export const buildKnowledgeHelp = {
+	description: "Backfill project-local knowledge from saved sessions",
+} satisfies CommandMetadata;
+
 export const browserRelayHelp = {
 	description: "Run the local CDP relay that lets the browser tool drive your own Chrome tabs",
 } satisfies CommandMetadata;
