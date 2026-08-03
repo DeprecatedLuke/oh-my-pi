@@ -15,7 +15,7 @@ import {
 } from "@oh-my-pi/pi-catalog/model-thinking";
 import { CATALOG_PROVIDERS, type ProviderCatalogEntry } from "@oh-my-pi/pi-catalog/provider-models";
 import { CODEX_BASE_URL } from "@oh-my-pi/pi-catalog/wire/codex";
-import { $env, $pickenv, getConfigRootDir, isEnoent, logger, withExtraCaFetch } from "@oh-my-pi/pi-utils";
+import { $env, $pickenv, getProviderInFlightRoot, isEnoent, logger, withExtraCaFetch } from "@oh-my-pi/pi-utils";
 import { getCustomApi } from "./api-registry";
 import { createAuthRetryKeyState, isApiKeyResolver, resolveNextAuthRetryKey } from "./auth-retry";
 import * as AIError from "./error";
@@ -129,7 +129,10 @@ function isLeakedThinkingHealExempt(model: Model<Api>): boolean {
 function isOfficialOpenAIApiUrl(baseUrl: string | undefined): boolean {
 	if (!baseUrl) return true;
 	try {
-		return new URL(baseUrl).hostname === "api.openai.com";
+		const url = new URL(baseUrl);
+		if (url.protocol !== "https:" || url.hostname !== "api.openai.com" || url.port !== "") return false;
+		const pathname = url.pathname.replace(/\/+$/, "");
+		return pathname === "" || pathname === "/v1";
 	} catch {
 		return false;
 	}
@@ -189,7 +192,7 @@ function resolveProviderInFlightLimit(
 
 function providerInFlightRoot(): string {
 	if (providerInFlightRootOverride) return providerInFlightRootOverride;
-	return path.join(getConfigRootDir(), "run", "provider-inflight");
+	return getProviderInFlightRoot();
 }
 
 function providerInFlightSegment(provider: string): string {

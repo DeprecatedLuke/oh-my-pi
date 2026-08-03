@@ -13,6 +13,7 @@ import { splitMemoryGlobPattern } from "../internal-urls/memory-protocol";
 import type { Theme } from "../modes/theme/theme";
 import globDescription from "../prompts/tools/glob.md" with { type: "text" };
 import { type TruncationResult, truncateHead } from "../session/streaming-output";
+import { isScoutSpawnable } from "../task/spawn-policy";
 import { Ellipsis, fileHyperlink, renderFileList, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import type { ToolSession } from ".";
 import { applyListLimit } from "./list-limit";
@@ -92,6 +93,8 @@ export interface GlobOperations {
 export interface GlobToolOptions {
 	/** Custom operations for glob. Default: local filesystem + rg */
 	operations?: GlobOperations;
+	/** Remap slash-only paths to the session cwd before root-search validation. */
+	rootPathAlias?: boolean;
 }
 
 interface GlobTarget {
@@ -105,7 +108,14 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 	readonly approval = "read" as const;
 	readonly loadMode = "essential";
 	readonly label = "Glob";
-	readonly description: string;
+	get description(): string {
+		return prompt.render(globDescription, {
+			scoutAvailable: isScoutSpawnable(
+				this.session.settings.get("task.disabledAgents") as string[] | undefined,
+				this.session.getSessionSpawns?.() ?? "*",
+			),
+		});
+	}
 	readonly parameters = findSchema;
 
 	readonly examples: readonly ToolExample<typeof findSchema.infer>[] = [
@@ -129,13 +139,14 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 	readonly strict = true;
 
 	readonly #customOps?: GlobOperations;
+	readonly #rootPathAlias: boolean;
 
 	constructor(
 		private readonly session: ToolSession,
 		options?: GlobToolOptions,
 	) {
 		this.#customOps = options?.operations;
-		this.description = prompt.render(globDescription);
+		this.#rootPathAlias = options?.rootPathAlias === true;
 	}
 
 	async execute(
@@ -153,9 +164,15 @@ export class GlobTool implements AgentTool<typeof findSchema, GlobToolDetails> {
 				? paths
 				: await expandDelimitedPathEntries(paths, this.session.cwd, { splitter: parseFindPattern });
 			const rawPatterns = rawPatternInputs.map(input => normalizePathLikeInput(input).replace(/\\/g, "/"));
+			const aliasResolvedPatterns = this.#rootPathAlias
+				? rawPatterns.map(pattern => (/^\/+$/.test(pattern) ? "." : pattern))
+				: rawPatterns;
+			if (aliasResolvedPatterns.some(pattern => /^\/+$/.test(pattern))) {
+				throw new ToolError("Searching from root directory '/' is not allowed");
+			}
 			const internalRouter = InternalUrlRouter.instance();
 			const normalizedPatterns: string[] = [];
-			for (const rawPattern of rawPatterns) {
+			for (const rawPattern of aliasResolvedPatterns) {
 				if (!internalRouter.canHandle(rawPattern)) {
 					normalizedPatterns.push(rawPattern);
 					continue;

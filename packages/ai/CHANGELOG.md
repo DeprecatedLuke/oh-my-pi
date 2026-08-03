@@ -5,6 +5,60 @@
 ### Fixed
 
 - Fixed Anthropic and non-strict OpenAI-compatible requests sending top-level union tool schemas that those APIs reject; object-union branches are flattened before wire serialization.
+## [17.2.5] - 2026-08-03
+
+### Changed
+
+- Standardized tool-call examples in `renderToolExamples` and `renderToolInventory` to use Python keyword-argument syntax (`name(key="value")`) across all models, removing the model-specific dialect parameter and the `DialectRenderOptions.example` flag.
+- Updated `renderToolInventory` to render the tool catalog as a unified OpenAI-Harmony-style `## functions` block using TypeScript type declarations and comments, replacing the previous per-tool Markdown sections.
+- Added a `style: "harmony"` option to `jsonSchemaToTypeScript` for generating compact, comma-delimited TypeScript definitions.
+
+### Fixed
+
+- Fixed a session-blocking issue where unescaped Harmony control tokens in replayed assistant responses and tool inputs caused subsequent requests to be rejected with `invalid_prompt` errors.
+- Fixed an issue where Codex Responses dropped native image-generation results from assistant content and replays due to stale `generating` statuses.
+- Fixed Anthropic stream truncation handling where unexpected connection closures were incorrectly treated as clean stops, causing the agent loop to halt silently mid-sentence.
+- Optimized Anthropic prompt caching to prevent unnecessary cache invalidation of the entire system prefix when volatile project footer details (such as current working directory, date, or workspace tree) change.
+
+## [17.2.4] - 2026-08-01
+
+### Fixed
+
+- Fixed Codex WebSocket tool-result turns replaying full history when the preceding tool-call ID required Responses API normalization ([#7279](https://github.com/can1357/oh-my-pi/issues/7279)).
+- Fixed direct Anthropic provider streams ignoring `model.compat.streamIdleTimeoutMs`. Requests dispatched through `streamAnthropic` can now widen the inter-event idle watchdog or set it to `0` to disable that watchdog; caller options and environment overrides retain precedence. Setting the compat value to `0` disables only the inter-event watchdog and leaves the first-event watchdog enabled; wider idle values continue to floor the first-event budget under the existing timeout contract.
+- Fixed OpenRouter DeepSeek models failing structured subagents when the upstream returns an opaque HTTP 400 for a strict yield schema, retrying once without strict tools and remembering the fallback for the provider session ([#7264](https://github.com/can1357/oh-my-pi/issues/7264)).
+- Fixed provider-native Codex compaction streams bypassing WebSocket-first transport selection and SSE transport fallback ([#7198](https://github.com/can1357/oh-my-pi/issues/7198)).
+- Fixed `SqliteAuthCredentialStore.open()` running the `auth_credential_refresh_leases` DDL (`CREATE TABLE`/`CREATE INDEX`) with Bun's default `busy_timeout=0`, before the constructor's `#initializeSchema()` installed the busy handler. Under a concurrent write lock (e.g. WAL recovery on parallel omp startups) the lock-taking DDL failed immediately and, since the error wasn't BUSY-classified, bypassed `open()`'s bounded retry loop. The busy handler is now installed on the connection immediately after it opens, before any lock-taking statement, honoring the issue-#2421 invariant on every entry path. ([#7298](https://github.com/can1357/oh-my-pi/issues/7298))
+- Fixed a corrupt credential store (`agent.db`) silently disabling every persisted rate-limit block. `AuthStorage` caught unrecoverable SQLite errors (`SQLITE_CORRUPT` family / `SQLITE_NOTADB`) from the persisted block read/write paths at `debug` level with no latch, so the broken store was re-queried on every credential evaluation while blocks quietly stopped applying. The first unrecoverable error is now reported once at `error` level with the store location and repair guidance, and every later persisted-block read/write short-circuits for the process lifetime; in-memory backoff still preserves availability ([#7296](https://github.com/can1357/oh-my-pi/issues/7296)).
+
+## [17.2.3] - 2026-08-01
+
+### Added
+
+- Added the ai& (`aiand`) provider registry entry with API-key paste login validated against `https://api.aiand.com/v1/models`.
+
+### Fixed
+
+- Fixed Anthropic OAuth (Claude Pro/Max subscription) requests hard-429ing (`Usage credits are required for long context requests`) on every beta-gated 1M model — e.g. `claude-sonnet-4-6`, which the default `task`/`smol`/`scout` subagent roles resolve to — regardless of prompt size, breaking all subagents. The 17.2.1 cowork request profile reintroduced the `context-1m-2025-08-07` beta for any model with a 1M catalog window, but subscription credentials have no long-context credit balance so Anthropic rejects the request outright. The beta is no longer advertised on OAuth requests; subscription accounts transparently get the standard 200k window. ([#7238](https://github.com/can1357/oh-my-pi/issues/7238))
+- Fixed OpenAI Codex Responses ignoring disabled cache retention when deriving `prompt_cache_key`, while preserving transport session identity ([#7219](https://github.com/can1357/oh-my-pi/issues/7219)).
+
+## [17.2.2] - 2026-07-31
+
+### Added
+
+- Added support for the `gmi-cloud` provider registry, including API-key paste login validation and integration with `@oh-my-pi/pi-catalog`.
+
+### Changed
+
+- Updated `AuthStorage.redeemResetCredit` to prioritize spending the soonest-expiring available saved reset credit, and improved error handling to distinguish between transport failures (`credit_list_failed`) and a genuine lack of credits.
+- Exported `SENSITIVE_TOKEN_RE` from `providers/transform-messages` to allow hosts to route credential shapes through reversible obfuscation instead of irreversible redaction.
+
+### Fixed
+
+- Fixed an issue where Cursor conversation checkpoints were incorrectly recorded as billable output tokens, ensuring accurate usage totals.
+- Fixed an issue in `AuthStorage.refreshStoredOAuthCredential` where expired OAuth credentials were returned without being refreshed when a credential mismatch occurred, which previously resulted in misleading "No API key found" errors.
+- Fixed Cursor history replay issues by preserving structured message order for assistant tool calls/results, retaining Kimi K3 thinking blocks, and preventing unsafe mid-session switches to K3.
+
 ## [17.2.1] - 2026-07-30
 
 ### Added

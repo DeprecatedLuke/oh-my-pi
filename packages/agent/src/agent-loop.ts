@@ -42,7 +42,6 @@ import {
 	recoverHarmonyToolCall,
 	signalListLabel,
 } from "@oh-my-pi/pi-ai/utils/harmony-leak";
-import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { logger, sanitizeText, structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { agentPauseGate } from "./pause";
@@ -829,13 +828,16 @@ function injectIntentIntoSchema(
 	};
 }
 
-export function normalizeTools(
-	tools: AgentContext["tools"],
-	injectIntent: boolean,
-	exampleDialect?: Dialect,
-	pruneDescriptions = false,
-): Context["tools"] {
-	injectIntent = injectIntent && Bun.env.PI_NO_INTENT !== "1";
+export interface NormalizeToolsOptions {
+	/** Inject the `i` intent field into tool schemas (subject to `PI_NO_INTENT`). */
+	injectIntent: boolean;
+	/** Strip descriptions from the wire specs when the catalog rides in the system prompt. */
+	pruneDescriptions?: boolean;
+}
+
+export function normalizeTools(tools: AgentContext["tools"], options: NormalizeToolsOptions): Context["tools"] {
+	const pruneDescriptions = options.pruneDescriptions === true;
+	const injectIntent = options.injectIntent && Bun.env.PI_NO_INTENT !== "1";
 	return tools?.map(t => {
 		const intentMode = resolveIntentMode(t.intent);
 		const doInjectIntent = injectIntent && intentMode !== "omit";
@@ -853,9 +855,7 @@ export function normalizeTools(
 		let parameters = toolWireSchema(t) as TSchema;
 		if (doInjectIntent) parameters = injectIntentIntoSchema(parameters, intentMode) as TSchema;
 		const description = t.description ?? "";
-		const examplesBlock = exampleDialect
-			? renderToolExamples({ ...t, parameters }, exampleDialect, doInjectIntent ? INTENT_FIELD : undefined)
-			: "";
+		const examplesBlock = renderToolExamples({ ...t, parameters }, doInjectIntent ? INTENT_FIELD : undefined);
 		const finalDescription = examplesBlock ? `${description}\n\n${examplesBlock}` : description;
 		return { ...t, parameters, description: finalDescription };
 	});
@@ -1498,21 +1498,22 @@ async function prepareProviderCall(
 	const llmMessages = await config.convertToLlm(messages);
 	const normalizedMessages = normalizeMessagesForProvider(llmMessages, model);
 	const ownedDialect: Dialect | undefined = config.dialect ?? resolveOwnedDialectFromEnv(Bun.env.PI_DIALECT);
-	const exampleDialect = ownedDialect ?? preferredDialect(model.id);
 	const pruneToolDescriptions = !!config.pruneToolDescriptions && !ownedDialect;
 	let llmContext: Context;
 	if (config.appendOnlyContext) {
 		config.appendOnlyContext.syncMessages(normalizedMessages);
 		llmContext = config.appendOnlyContext.build(context, {
 			intentTracing: !!config.intentTracing,
-			exampleDialect,
 			pruneToolDescriptions,
 		});
 	} else {
 		llmContext = {
 			systemPrompt: context.systemPrompt,
 			messages: normalizedMessages,
-			tools: normalizeTools(context.tools, !!config.intentTracing, exampleDialect, pruneToolDescriptions),
+			tools: normalizeTools(context.tools, {
+				injectIntent: !!config.intentTracing,
+				pruneDescriptions: pruneToolDescriptions,
+			}),
 		};
 	}
 	if (config.transformProviderContext) {
@@ -1928,8 +1929,10 @@ function recoverTransientErrorToolTurn(
 		if (tool.customWireName !== undefined) availableToolNames.add(tool.customWireName);
 	}
 	if (!toolCalls.every(toolCall => availableToolNames.has(toolCall.name))) return message;
+	const errorText = `${message.errorMessage ?? ""}\n${message.stopDetails?.explanation ?? ""}`;
 	if (
-		!AIError.isStreamReadErrorText(`${message.errorMessage ?? ""}\n${message.stopDetails?.explanation ?? ""}`) &&
+		!AIError.isStreamReadErrorText(errorText) &&
+		!AIError.isStreamEnvelopeErrorText(errorText) &&
 		!AIError.isTransientStreamParseError(message.errorMessage) &&
 		!AIError.isTransientStreamParseError(message.stopDetails?.explanation)
 	)
@@ -2454,6 +2457,7 @@ async function executeToolCalls(
 		let isError = false;
 		let caughtError: unknown;
 		let completedToolExecution = false;
+		let executionStarted = false;
 
 		await runInActiveSpan(toolSpan, async () => {
 			try {
@@ -2487,6 +2491,7 @@ async function executeToolCalls(
 							providerMetadata: toolCall.providerMetadata,
 						})
 					: undefined;
+				executionStarted = true;
 				const rawResult = await tool.execute(
 					toolCall.id,
 					executionArgs,
@@ -2557,12 +2562,12 @@ async function executeToolCalls(
 		const interrupted = interruptState.triggered;
 		const perToolAborted = record.signal.aborted;
 		const abortedDuringExecution = perToolAborted && isError && !completedToolExecution;
-		if (interrupted && perToolAborted && isError && !completedToolExecution) {
-			// This tool's own signal fired AND it failed to produce a result: `tool.execute()`
-			// never returned (it threw on the abort), so it was genuinely cut off before
-			// producing usable output. Report it as skipped.
+		if (interrupted && abortedDuringExecution) {
+			// This tool's own signal fired AND it failed to produce a result. The
+			// execution may already have performed partial work before throwing on
+			// abort, so preserve that distinction in the placeholder metadata.
 			record.skipped = true;
-			emitToolResult(record, createSkippedToolResult(interruptState.source), true);
+			emitToolResult(record, createSkippedToolResult(interruptState.source, executionStarted), true);
 		} else {
 			// No interrupt on this signal, or the tool finished before the interrupt landed
 			// (`completedToolExecution`) — even if the signal aborted around completion. Keep
@@ -2703,7 +2708,7 @@ async function executeToolCalls(
 				toolName: record.toolCall.name,
 				status: "skipped",
 			});
-			emitToolResult(record, createSkippedToolResult(interruptState.source), true);
+			emitToolResult(record, createSkippedToolResult(interruptState.source, false), true);
 		}
 	}
 
@@ -2723,15 +2728,32 @@ async function executeToolCalls(
  * (#4321): a provider-side stream error after tool-call emission (e.g. Codex
  * websocket close) was surfaced by the CLI as if the local tool had failed.
  *
- * `source` names the assistant-side termination state that prevented
- * execution; `upstreamError` is the provider-reported message when the turn
- * ended with `stopReason === "error"`.
+ * `source` names the state that prevented execution — either an assistant-side
+ * turn termination (`assistant_stop_*`) or a mid-batch interrupt that skipped a
+ * still-pending call to service queued steering/peer input (`interrupt_skipped`).
+ * `upstreamError` is the provider-reported message when the turn ended with
+ * `stopReason === "error"`.
  */
 export interface SyntheticToolResultDetails {
 	__synthetic: true;
-	source: "assistant_stop_aborted" | "assistant_stop_error" | "assistant_stop_skipped" | "assistant_stop_length";
+	source:
+		| "assistant_stop_aborted"
+		| "assistant_stop_error"
+		| "assistant_stop_skipped"
+		| "assistant_stop_length"
+		| "interrupt_skipped";
 	executed: false;
 	upstreamError?: string;
+}
+
+/**
+ * Metadata for an interrupt-aborted call that entered `tool.execute()` but
+ * threw before returning a usable result. It may have performed partial work.
+ */
+interface InterruptedToolResultDetails {
+	__interrupted: true;
+	source: "interrupt_skipped";
+	execution: "started";
 }
 
 /**
@@ -2844,7 +2866,10 @@ function createToolSignalAbortedResult(signal: AbortSignal): AgentToolResult<unk
 	};
 }
 
-function createSkippedToolResult(source: SteeringInterruptSource | "irc" | undefined): AgentToolResult<any> {
+function createSkippedToolResult(
+	source: SteeringInterruptSource | "irc" | undefined,
+	executionStarted: boolean,
+): AgentToolResult<SyntheticToolResultDetails | InterruptedToolResultDetails> {
 	let reason = "pending steering message";
 	let blocker = "queued message";
 	if (source === "user") {
@@ -2864,6 +2889,8 @@ function createSkippedToolResult(source: SteeringInterruptSource | "irc" | undef
 				text: `Skipped due to ${reason}. Do not count this skipped result as completed work or verification. After the ${blocker} is handled on the next step, retry the skipped tool if it is still needed.`,
 			},
 		],
-		details: {},
+		details: executionStarted
+			? { __interrupted: true, source: "interrupt_skipped", execution: "started" }
+			: { __synthetic: true, source: "interrupt_skipped", executed: false },
 	};
 }

@@ -170,6 +170,7 @@ export interface InteractiveModeContext {
 	initialChatRendered: boolean;
 	isBashMode: boolean;
 	toolOutputExpanded: boolean;
+	hideToolActivity: boolean;
 	todoExpanded: boolean;
 	planModeEnabled: boolean;
 	vibeModeEnabled: boolean;
@@ -374,7 +375,11 @@ export interface InteractiveModeContext {
 	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;
 	handleMCPCommand(text: string): Promise<void>;
 	handleSSHCommand(text: string): Promise<void>;
-	handleCompactCommand(customInstructions?: string, mode?: CompactMode): Promise<CompactionOutcome>;
+	handleCompactCommand(
+		customInstructions?: string,
+		mode?: CompactMode,
+		beforeFlush?: (outcome: CompactionOutcome) => void | Promise<void>,
+	): Promise<CompactionOutcome>;
 	handleHandoffCommand(customInstructions?: string): Promise<void>;
 	handleShakeCommand(mode: ShakeMode): Promise<void>;
 	handleMoveCommand(targetPath?: string): Promise<void>;
@@ -420,6 +425,8 @@ export interface InteractiveModeContext {
 	handleCtrlC(): void;
 	handleCtrlD(): void;
 	handleCtrlZ(): void;
+	/** Re-query terminal appearance for an explicit display reset, then immediately replay the display. */
+	resetDisplayAfterAppearanceRefresh(): void;
 	handleDequeue(): void;
 	handleImagePaste(): Promise<boolean>;
 	/** Queue a message for delivery only after the active agent turn would stop. */
