@@ -869,6 +869,10 @@ export class AgentSession {
 	 *  an abort is still tearing a live turn down do we park it hidden, so abort's
 	 *  settle step replays it once idle — never appended into a live streamMessage. */
 	#preserveAdvisorCard(card: CustomMessage): void {
+		if (this.#promptInFlightCount > 0) {
+			this.#inFlightSettledCallbacks.push(() => this.#preserveAdvisorCard(card));
+			return;
+		}
 		if (this.#abortInProgress && this.isStreaming) {
 			this.#pendingNextTurnMessages.push(card);
 			return;
@@ -1412,7 +1416,7 @@ export class AgentSession {
 			sharedInstructions: config.advisorSharedInstructions,
 			contextPrompt: config.advisorContextPrompt,
 			configs: config.advisorConfigs,
-			streamFn: config.advisorStreamFn,
+			streamFn: config.advisorStreamFn ?? this.agent.streamFn,
 			transformProviderContext: config.transformProviderContext,
 			initialCosts: config.initialAdvisorCosts,
 		});

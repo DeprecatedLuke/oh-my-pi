@@ -161,6 +161,7 @@ interface ActiveAdvisor {
 	retryFallback?: AdvisorRetryFallbackState;
 	retryFallbackPendingSuccess: boolean;
 	signature: string;
+	reviewInProgress: boolean | undefined;
 }
 
 interface AdvisorCompactionSummaryMessage extends CompactionSummaryMessage {
@@ -536,6 +537,7 @@ export class SessionAdvisors {
 			a.agentUnsubscribe?.();
 			a.agentUnsubscribe = undefined;
 			a.runtime.reset();
+			a.reviewInProgress = undefined;
 			a.adviseTool.resetDeliveredNotes();
 			a.emissionGuard.reset();
 			this.#attachAdvisorRecorderFeed(a);
@@ -878,20 +880,30 @@ export class SessionAdvisors {
 				obfuscator: this.#host.obfuscator,
 				getModelIdentity: () => formatModelString(advisorRef.agent.state.model),
 				beginAdvisorUpdate: inProgress => {
+					advisorRef.reviewInProgress = inProgress;
 					advisorRef.adviseTool.beginUpdate(inProgress);
 					advisorRef.emissionGuard.beginUpdate();
 				},
-				onTurnError: (error, failedMessages, signal) =>
-					this.#recoverAdvisorTurn(advisorRef, error, failedMessages, signal),
+				onTurnError: async (error, failedMessages, signal) => {
+					try {
+						return await this.#recoverAdvisorTurn(advisorRef, error, failedMessages, signal);
+					} finally {
+						advisorRef.reviewInProgress = undefined;
+					}
+				},
 				onTurnSuccess: async () => {
-					const fallback = advisorRef.retryFallback;
-					if (!advisorRef.retryFallbackPendingSuccess || !fallback) return;
-					advisorRef.retryFallbackPendingSuccess = false;
-					await this.#host.emitSessionEvent({
-						type: "retry_fallback_succeeded",
-						model: formatRetryFallbackSelector(advisorRef.agent.state.model, advisorRef.thinkingLevel),
-						role: fallback.role,
-					});
+					try {
+						const fallback = advisorRef.retryFallback;
+						if (!advisorRef.retryFallbackPendingSuccess || !fallback) return;
+						advisorRef.retryFallbackPendingSuccess = false;
+						await this.#host.emitSessionEvent({
+							type: "retry_fallback_succeeded",
+							model: formatRetryFallbackSelector(advisorRef.agent.state.model, advisorRef.thinkingLevel),
+							role: fallback.role,
+						});
+					} finally {
+						advisorRef.reviewInProgress = undefined;
+					}
 				},
 				notifyFailure: error => {
 					this.#advisorStatuses.set(slug, { name: advisorName, status: "error" });
@@ -926,6 +938,7 @@ export class SessionAdvisors {
 				providerSessionId: advisorProviderSessionId,
 				retryFallbackPendingSuccess: false,
 				signature,
+				reviewInProgress: undefined,
 			};
 			this.#refreshAdvisorProviderIdentity(advisorRef);
 			this.#attachAdvisorRecorderFeed(advisorRef);
@@ -992,10 +1005,10 @@ export class SessionAdvisors {
 			severity,
 			autoResumeSuppressed: this.#advisorAutoResumeSuppressed,
 			preserveOnly: this.#preserveAdvisorAdvice,
-			// Key on the live agent-core loop, not session `isStreaming` (which also
-			// counts `#promptInFlightCount` during post-turn unwind). Only a running
-			// loop consumes a steer at its next boundary.
-			streaming: this.#host.agent.state.isStreaming,
+			// Agent-core invokes onTurnEnd before it clears state.isStreaming. The
+			// advisor batch carries whether it reviews a final turn, so this
+			// decision stays correct while the advisor drains asynchronously.
+			streaming: advisor.reviewInProgress === false ? false : this.#host.agent.state.isStreaming,
 			aborting: this.#host.abortInProgress(),
 			terminalAnswerNoQueuedWork: this.#hasTerminalTextAnswerWithoutQueuedWork(),
 			interruptImmuneTurnActive: interrupting && this.#isAdvisorInterruptImmuneTurnActive(),
@@ -1058,7 +1071,10 @@ export class SessionAdvisors {
 
 	/** Re-prime every advisor's transcript view after an in-conversation history rewrite. */
 	#resetAllAdvisorRuntimes(): void {
-		for (const a of this.#advisors) a.runtime.reset();
+		for (const a of this.#advisors) {
+			a.runtime.reset();
+			a.reviewInProgress = undefined;
+		}
 	}
 
 	#stopAdvisorRuntime(): void {

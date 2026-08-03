@@ -11,6 +11,7 @@
 - Fixed the job snapshot renderer hiding running agents when no background-job row existed.
 - Fixed Cursor legacy tool aliases and `patch://` line-selector or `@`-path normalization.
 - Fixed the task tool's model-visible concurrency limit rendering as an empty value.
+- Fixed preserved advisor cards racing the primary `agent_end` extension event, which could deadlock prompt completion while a message hook was waiting on card persistence.
 ## [17.2.5] - 2026-08-03
 
 ### Breaking Changes
