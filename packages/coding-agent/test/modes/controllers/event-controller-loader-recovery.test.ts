@@ -81,6 +81,8 @@ function createContext(options: { terminalProgress?: boolean } = {}) {
 			get isStreaming() {
 				return streamState.isStreaming;
 			},
+			getAsyncJobSnapshot: () => null,
+			hasPendingBackgroundJobs: () => false,
 		},
 		session: {
 			get isStreaming() {

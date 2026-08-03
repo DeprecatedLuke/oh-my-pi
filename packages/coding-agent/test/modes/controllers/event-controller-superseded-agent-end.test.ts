@@ -40,6 +40,7 @@ function createContext() {
 			isCompacting: false,
 			getLastAssistantMessage: () => undefined,
 			hasPendingBackgroundJobs: () => false,
+			getAsyncJobSnapshot: () => null,
 		},
 		session: {
 			get isStreaming() {
