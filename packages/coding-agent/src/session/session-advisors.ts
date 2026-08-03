@@ -368,6 +368,7 @@ export class SessionAdvisors {
 	 * detach only after any active prompt has settled.
 	 */
 	async drainAndDetachRecorders(): Promise<void> {
+		for (const advisor of this.#advisors) advisor.reviewInProgress = undefined;
 		await Promise.all(this.#advisors.map(advisor => advisor.runtime.pauseForSessionTransition()));
 		await this.detachAndCloseRecorders();
 	}
