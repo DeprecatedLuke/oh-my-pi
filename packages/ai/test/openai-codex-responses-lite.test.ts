@@ -10,7 +10,7 @@ import {
 	resetOpenAICodexHistoryAfterCompaction,
 	streamOpenAICodexResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import { isOpenAIResponsesProgressEvent } from "@oh-my-pi/pi-ai/providers/openai-shared";
+import { isOpenAIResponsesProgressEvent, NO_AUTH_SENTINEL } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { configureCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import type { CodexCompactionRequestContext, Context, FetchImpl, ProviderSessionState } from "@oh-my-pi/pi-ai/types";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -545,6 +545,27 @@ describe("openai-codex Responses Lite and client metadata wire format", () => {
 		expect(turnMetadataHeader).toMatch(/^[\x20-\x7e]+$/);
 		const reparsedTurnMetadata: unknown = turnMetadataHeader ? JSON.parse(turnMetadataHeader) : undefined;
 		expect(requireRecord(reparsedTurnMetadata, "round-tripped turn metadata").workspace_path).toBe("東京/🚀");
+	});
+
+	it("preserves a custom x-api-key for keyless Codex endpoints", async () => {
+		const model = createCodexModel("gpt-5.1-codex", {
+			baseUrl: "https://proxy.example.com/v1",
+			headers: { "x-api-key": "proxy-key" },
+		});
+		let captured: CapturedCodexRequest | undefined;
+		const fetchMock = createCodexFetchMock(createCodexSse(COMPLETED_CODEX_EVENTS), request => {
+			captured = request;
+		});
+
+		const result = await streamOpenAICodexResponses(model, createCodexTestContext(), {
+			apiKey: NO_AUTH_SENTINEL,
+			fetch: fetchMock,
+		}).result();
+
+		expect(result.stopReason).toBe("stop");
+		if (!captured) throw new Error("expected a captured Codex request");
+		expect(captured.headers.get("x-api-key")).toBe("proxy-key");
+		expect(captured.headers.get("Authorization")).toBeNull();
 	});
 
 	it("keeps the installation identity stable across provider sessions", async () => {

@@ -36,6 +36,7 @@ describe("selector setting side effects", () => {
 		const updateSettings = vi.fn();
 		const requestRender = vi.fn();
 		const controller = new SelectorController({
+			updateEditorTopBorder: vi.fn(),
 			statusLine: { updateSettings },
 			ui: { requestRender },
 		} as unknown as InteractiveModeContext);
@@ -59,6 +60,7 @@ describe("selector setting side effects", () => {
 		const invalidate = vi.fn();
 		const requestRender = vi.fn();
 		const controller = new SelectorController({
+			updateEditorTopBorder: vi.fn(),
 			ui: { invalidate, requestRender },
 		} as unknown as InteractiveModeContext);
 
