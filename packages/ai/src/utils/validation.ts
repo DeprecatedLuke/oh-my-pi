@@ -13,6 +13,7 @@
 
 import { type Type, type } from "@oh-my-pi/omptype";
 import { structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import type { ZodType } from "zod/v4";
 import * as AIError from "../error";
 import type { Tool, ToolCall } from "../types";
 import { upgradeJsonSchemaTo202012 } from "./schema/draft";
@@ -22,7 +23,7 @@ import {
 	validateJsonSchemaValue,
 } from "./schema/json-schema-validator";
 import { stamp } from "./schema/stamps";
-import { arkToWireSchema, isArkSchema } from "./schema/wire";
+import { arkToWireSchema, isArkSchema, isZodSchema, toolWireSchema } from "./schema/wire";
 
 // ============================================================================
 // Type Coercion Utilities
@@ -1451,6 +1452,11 @@ type ValidationContext =
 			json: Record<string, unknown>;
 	  }
 	| {
+			kind: "zod";
+			zod: ZodType;
+			json: Record<string, unknown>;
+	  }
+	| {
 			kind: "json";
 			json: Record<string, unknown>;
 	  };
@@ -1466,7 +1472,9 @@ function getValidationContext(tool: Tool): ValidationContext {
 	return stamp(tool.parameters as object, kValidationContext, params =>
 		isArkSchema(params)
 			? { kind: "arktype", ark: params, json: arkToWireSchema(params) }
-			: { kind: "json", json: upgradeJsonSchemaTo202012(params) as Record<string, unknown> },
+			: isZodSchema(params)
+				? { kind: "zod", zod: params, json: toolWireSchema(tool) }
+				: { kind: "json", json: upgradeJsonSchemaTo202012(params) as Record<string, unknown> },
 	);
 }
 
@@ -1523,6 +1531,18 @@ function validateContext(ctx: ValidationContext, value: unknown): ContextValidat
 			success: false,
 			flatIssues,
 			messages: out.map(e => `  - ${formatIssuePath(e.path)}: ${e.message}`),
+		};
+	}
+	if (ctx.kind === "zod") {
+		const parsed = ctx.zod.safeParse(value);
+		if (parsed.success) {
+			return { success: true, value: preserveUnknownRootFields(value, parsed.data) };
+		}
+		const jsonResult = validateJsonSchemaValue(ctx.json, value);
+		return {
+			success: false,
+			flatIssues: jsonResult.success ? [] : flattenJsonSchemaIssues(jsonResult.issues),
+			messages: parsed.error.issues.map(issue => `  - ${formatIssuePath(issue.path)}: ${issue.message}`),
 		};
 	}
 

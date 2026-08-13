@@ -41,7 +41,8 @@
     "@oh-my-pi/omptype": "catalog:",
     "@oh-my-pi/pi-catalog": "catalog:",
     "@oh-my-pi/pi-utils": "catalog:",
-    "@oh-my-pi/pi-wire": "catalog:"
+    "@oh-my-pi/pi-wire": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@bufbuild/protoc-gen-es": "catalog:",

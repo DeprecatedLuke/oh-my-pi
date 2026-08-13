@@ -1125,7 +1125,6 @@ describe("AgentSession concurrent prompt guard", () => {
 	it("reports pending background jobs while one runs and until its queued result is consumed", async () => {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth-pending-bg.db"));
-		authStorages.push(authStorage);
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models-pending-bg.yml"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
 		const settings = Settings.isolated();

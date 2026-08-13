@@ -9,7 +9,8 @@ import fixRefusalNameTemplate from "../prompts/secrets/fix-refusal-name.md" with
 import fixRefusalSelectTemplate from "../prompts/secrets/fix-refusal-select.md" with { type: "text" };
 import fixRefusalSystemPrompt from "../prompts/secrets/fix-refusal-system.md" with { type: "text" };
 import { buildNamedToolChoice } from "../utils/tool-choice";
-import { PLACEHOLDER_RE, type SecretEntry, SecretObfuscator } from "./obfuscator";
+import { type SecretEntry, SecretObfuscator } from "./obfuscator";
+import { PLACEHOLDER_RE } from "./placeholder";
 import { compileSecretRegex } from "./regex";
 
 // ═══════════════════════════════════════════════════════════════════════════

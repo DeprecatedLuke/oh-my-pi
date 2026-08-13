@@ -146,8 +146,8 @@ import type { GoalModeState } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
 import type { IrcMessage } from "../irc/bus";
-import type { DaemonCompletionNotification } from "../launch/protocol";
 import { type IssueSummary, listIssues } from "../issues";
+import type { DaemonCompletionNotification } from "../launch/protocol";
 
 import { MCPManager } from "../mcp/manager";
 import { shutdownMnemopiEmbedClient } from "../mnemopi/embed-client";

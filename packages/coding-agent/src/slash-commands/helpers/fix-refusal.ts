@@ -11,11 +11,9 @@ import { theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import {
 	appendManagedSecrets,
+	buildSecretObfuscator,
 	clearFixRefusalState,
-	collectEnvSecrets,
 	loadFixRefusalState,
-	loadSecrets,
-	SecretObfuscator,
 	saveFixRefusalState,
 } from "../../secrets";
 import {
@@ -194,10 +192,9 @@ export async function executeFixRefusal(deps: FixRefusalDeps): Promise<FixRefusa
 
 	const { path: filePath, added } = await appendManagedSecrets(agentDir, result.entries);
 
-	// Rebuild from every source (env + all secrets files) so the new patterns
-	// apply to this session immediately.
-	const allSecrets = [...collectEnvSecrets(), ...(await loadSecrets(cwd, agentDir))];
-	session.setObfuscator(allSecrets.length > 0 ? new SecretObfuscator(allSecrets) : undefined);
+	// Rebuild from every configured source, including built-in credential patterns,
+	// so newly managed patterns take effect without dropping existing protection.
+	session.setObfuscator(await buildSecretObfuscator(cwd, agentDir));
 
 	ui.step(
 		added === 0

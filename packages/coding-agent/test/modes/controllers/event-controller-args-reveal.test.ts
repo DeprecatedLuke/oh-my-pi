@@ -43,10 +43,7 @@ function makeStreamingMessage(content: AssistantMessage["content"]): AssistantMe
 	};
 }
 
-function createFixture(
-	streamingMessage: AssistantMessage,
-	dependency?: SecretObfuscator | AgentTool,
-) {
+function createFixture(streamingMessage: AssistantMessage, dependency?: SecretObfuscator | AgentTool) {
 	const obfuscator = dependency instanceof SecretObfuscator ? dependency : undefined;
 	const tool = dependency instanceof SecretObfuscator ? undefined : dependency;
 	const pendingTools = new Map<string, ToolExecutionComponent>();

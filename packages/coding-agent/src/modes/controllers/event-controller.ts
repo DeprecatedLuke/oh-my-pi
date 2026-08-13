@@ -23,7 +23,7 @@ import { createUsageRowBlock } from "../../modes/components/usage-row";
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import idleRecapPrompt from "../../prompts/system/recap-user.md" with { type: "text" };
-import { deobfuscateToolArguments } from "../../secrets/obfuscator";
+import { deobfuscateToolArguments } from "../../secrets/message-transform";
 import type { AgentSessionEvent, AsyncJobSnapshotItem } from "../../session/agent-session";
 import { isSilentAbort, readQueueChipText, resolveAbortLabel } from "../../session/messages";
 import { formatTaskId } from "../../task/render";

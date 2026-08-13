@@ -7,9 +7,11 @@
  */
 
 import type { Type } from "@oh-my-pi/omptype";
+import { type ZodType, z } from "zod/v4";
 import type { Tool, TSchema } from "../../types";
 import { upgradeJsonSchemaTo202012 } from "./draft";
 import { stamp } from "./stamps";
+import { isJsonObject } from "./types";
 
 /**
  * True when `value` is a live ArkType schema instance.
@@ -22,6 +24,16 @@ export function isArkSchema(value: unknown): value is Type {
 		typeof value === "function" &&
 		typeof (value as { toJsonSchema?: unknown }).toJsonSchema === "function" &&
 		typeof (value as { assert?: unknown }).assert === "function"
+	);
+}
+export function isZodSchema(value: unknown): value is ZodType {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"_zod" in value &&
+		typeof value._zod === "object" &&
+		"parse" in value &&
+		typeof value.parse === "function"
 	);
 }
 
@@ -110,6 +122,7 @@ function arkJsonAstToWire(value: unknown): unknown {
 /** Symbol-stamped caches keyed by schema object identity. */
 const kJsonWireSchema = Symbol("pi.schema.json.wire");
 const kArkWireSchema = Symbol("pi.schema.ark.wire");
+const kZodWireSchema = Symbol("pi.schema.zod.wire");
 const kStrippedSchema = Symbol("pi.schema.descriptions.stripped");
 
 function postProcessJsonSchema(schema: Record<string, unknown>): Record<string, unknown> {
@@ -562,6 +575,20 @@ export function arkToWireSchema(schema: Type): Record<string, unknown> {
 	});
 }
 
+function zodToWireSchema(schema: ZodType): Record<string, unknown> {
+	return stamp(schema, kZodWireSchema, value => {
+		const wireSchema = z.toJSONSchema(value);
+		if (!isJsonObject(wireSchema)) {
+			throw new TypeError("Zod tool schema did not produce an object JSON Schema");
+		}
+		const upgraded = upgradeJsonSchemaTo202012(wireSchema);
+		if (!isJsonObject(upgraded)) {
+			throw new TypeError("Zod tool schema upgrade did not produce an object JSON Schema");
+		}
+		return postProcessJsonSchema(upgraded);
+	});
+}
+
 /**
  * Resolve a tool's parameters to a JSON Schema object suitable for sending
  * over the wire. ArkType schemas are converted and cached; legacy TypeBox /
@@ -570,6 +597,7 @@ export function arkToWireSchema(schema: Type): Record<string, unknown> {
 export function toolWireSchema(tool: Tool): Record<string, unknown> {
 	const params: TSchema = tool.parameters;
 	if (isArkSchema(params)) return arkToWireSchema(params);
+	if (isZodSchema(params)) return zodToWireSchema(params);
 	return stamp(params as Record<string, unknown>, kJsonWireSchema, p => {
 		const raw = isArkJsonAst(p) ? arkJsonAstToWire(p) : p;
 		const upgraded = upgradeJsonSchemaTo202012(raw) as Record<string, unknown>;

@@ -102,13 +102,11 @@ const FORK_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			if (verb && verb !== "save") {
 				return usage("Usage: /knowledge <save|build|update|compact>", runtime);
 			}
-			try {
-				const result = await runtime.session.saveKnowledge();
-				await runtime.output(result.message);
-				return commandConsumed();
-			} catch (err) {
-				return usage(`Knowledge save failed: ${errorMessage(err)}`, runtime);
-			}
+			const result = await runtime.session.saveKnowledge();
+			await runtime.output(
+				result.committed ? `Knowledge saved${result.sha ? ` (${result.sha})` : ""}.` : "Knowledge save failed.",
+			);
+			return commandConsumed();
 		},
 	},
 	{
@@ -147,6 +145,51 @@ const FORK_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			} catch (err) {
 				return usage(`Failed: ${errorMessage(err)}`, runtime);
 			}
+		},
+	},
+	{
+		name: "git",
+		description: "Git checkpoint / status via the git tool",
+		subcommands: [
+			{ name: "checkpoint", description: "Commit outstanding work with the git tool", usage: "[reason]" },
+			{ name: "status", description: "Show working-tree status" },
+		],
+		allowArgs: true,
+		handle: async (command, runtime) => {
+			const { verb, rest } = parseSubcommand(command.args);
+			if (verb !== "checkpoint" && verb !== "status") {
+				return usage("Usage: /git <checkpoint [reason]|status>", runtime);
+			}
+			const tool = runtime.session.getToolByName("git");
+			if (!tool) {
+				await runtime.output("git is unavailable. Run inside a top-level Git-backed session.");
+				return commandConsumed();
+			}
+			if (verb === "checkpoint") {
+				const reason = rest.trim() || "slash-invoked checkpoint";
+				try {
+					const result = await tool.execute("slash-git-checkpoint", { op: "checkpoint", reason });
+					const text = result.content
+						.map(c => (c.type === "text" ? c.text : ""))
+						.join("\n")
+						.trim();
+					await runtime.output(text || "Checkpoint complete.");
+				} catch (err) {
+					await runtime.output(`Checkpoint failed: ${err instanceof Error ? err.message : String(err)}`);
+				}
+				return commandConsumed();
+			}
+			try {
+				const result = await tool.execute("slash-git-status", { op: "status" });
+				const text = result.content
+					.map(c => (c.type === "text" ? c.text : ""))
+					.join("\n")
+					.trim();
+				await runtime.output(text || "Working tree clean.");
+			} catch (err) {
+				await runtime.output(`Status failed: ${err instanceof Error ? err.message : String(err)}`);
+			}
+			return commandConsumed();
 		},
 	},
 ];
@@ -189,11 +232,14 @@ function materializeTuiBuiltinSlashCommand(
 	runtime?: TuiSlashCommandRuntime,
 ): TuiBuiltinSlashCommand {
 	const materialized: TuiBuiltinSlashCommand = { ...cmd };
-	if (cmd.subcommands?.length) {
-		materialized.getArgumentCompletions = prefix => buildArgumentCompletions(prefix, cmd.subcommands ?? []);
-		materialized.getInlineHint = argumentText => buildSubcommandInlineHint(argumentText, cmd.subcommands ?? []);
-	} else if (cmd.getArgumentCompletions) {
-		materialized.getArgumentCompletions = prefix => cmd.getArgumentCompletions?.(prefix, runtime);
+	if (cmd.subcommands) {
+		materialized.getArgumentCompletions =
+			cmd.name === "mcp" && runtime
+				? buildMcpArgumentCompletions(cmd.subcommands, runtime)
+				: buildArgumentCompletions(cmd.subcommands);
+		materialized.getInlineHint = buildSubcommandInlineHint(cmd.subcommands);
+	} else if (cmd.name === "move") {
+		materialized.getArgumentCompletions = buildDirectoryArgumentCompletions();
 		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
 	} else if (cmd.inlineHint) {
 		materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
@@ -242,27 +288,48 @@ export async function executeBuiltinSlashCommand(
 	if (parsed.args.length > 0 && !command.allowArgs) {
 		return false;
 	}
-	if (!command.handleTui) return false;
-	return command.handleTui(parsed, runtime);
+	// Collab guests run a read-mostly replica: session-mutating builtins are
+	// host-only; the allowlist covers purely local/read-only commands.
+	if (runtime.ctx.collabGuest && !COLLAB_GUEST_ALLOWED_COMMANDS[command.name]) {
+		runtime.ctx.showStatus(`/${command.name} is host-only during a collab session`);
+		runtime.ctx.editor.setText("");
+		return true;
+	}
+	if (command.handleTui) {
+		const result = await command.handleTui(parsed, runtime);
+		if (result && typeof result === "object" && "prompt" in result) return result.prompt;
+		return true;
+	}
+	if (command.handle) {
+		// No TUI-specific override → adapt the ACP/text-mode `handle` to the
+		// TUI by routing `runtime.output` through `ctx.showStatus`, clearing
+		// the editor after the call, and reusing the active session's plugin
+		// reload pipeline. Spec authors get a single body usable from either
+		// dispatcher without forcing every TUI test to construct the full
+		// `SlashCommandRuntime` shape.
+		const ctx = runtime.ctx;
+		const adapted: SlashCommandRuntime = {
+			session: ctx.session,
+			sessionManager: ctx.sessionManager,
+			settings: ctx.settings,
+			cwd: ctx.sessionManager.getCwd(),
+			output: (text: string) => {
+				ctx.showStatus(text);
+			},
+			refreshCommands: () => ctx.refreshSlashCommandState(),
+			reloadPlugins: () => reloadTuiPluginState(ctx),
+		};
+		const result = await command.handle(parsed, adapted);
+		ctx.editor.setText("");
+		if (result && typeof result === "object" && "prompt" in result) return result.prompt;
+		return true;
+	}
+	return false;
 }
 
-/** Execute a builtin slash command in an ACP session. */
-export async function executeBuiltinSlashCommandForAcp(
-	text: string,
-	runtime: SlashCommandRuntime,
-): Promise<SlashCommandResult | undefined> {
-	const parsed: ParsedSlashCommand | undefined = parseSlashCommand(text);
-	if (!parsed) return undefined;
-
-	const command = BUILTIN_SLASH_COMMAND_LOOKUP.get(parsed.name);
-	if (!command?.handle) return undefined;
-	if (parsed.args.length > 0 && !command.allowArgs) return undefined;
-	return command.handle(parsed, runtime);
+/** Look up a unified spec by name or alias. Used by the ACP dispatcher. */
+export function lookupBuiltinSlashCommand(name: string): SlashCommandSpec | undefined {
+	return BUILTIN_SLASH_COMMAND_LOOKUP.get(name);
 }
 
-/** Returns true when a collaboration guest can run this builtin command. */
-export function isGuestAllowedBuiltinCommand(name: string): boolean {
-	return COLLAB_GUEST_ALLOWED_COMMANDS.has(name);
-}
-
-export { buildDirectoryArgumentCompletions, buildMcpArgumentCompletions, reloadTuiPluginState };
+export type { ParsedSlashCommand, SlashCommandResult, SlashCommandRuntime, SlashCommandSpec, TuiSlashCommandRuntime };

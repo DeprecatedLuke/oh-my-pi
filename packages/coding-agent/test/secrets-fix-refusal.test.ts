@@ -817,6 +817,25 @@ describe("managed secrets load/append", () => {
 			await fs.rm(cwd, { recursive: true, force: true });
 		}
 	});
+	it.skipIf(process.platform === "win32")(
+		"repairs managed secret directory and file permissions on POSIX",
+		async () => {
+			const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-agent-"));
+			const managedPath = path.join(agentDir, "secrets-managed.yml");
+			try {
+				await fs.chmod(agentDir, 0o777);
+				await fs.writeFile(managedPath, "[]\n");
+				await fs.chmod(managedPath, 0o666);
+
+				await appendManagedSecrets(agentDir, [{ type: "regex", content: "SecretCorp" }]);
+
+				expect((await fs.stat(agentDir)).mode & 0o777).toBe(0o700);
+				expect((await fs.stat(managedPath)).mode & 0o777).toBe(0o600);
+			} finally {
+				await fs.rm(agentDir, { recursive: true, force: true });
+			}
+		},
+	);
 });
 
 describe("resolveRefusalModelPattern", () => {
