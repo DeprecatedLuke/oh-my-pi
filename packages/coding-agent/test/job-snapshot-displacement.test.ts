@@ -165,9 +165,9 @@ describe("EventController displaces consecutive todo snapshots", () => {
 			toolOutputExpanded: false,
 			pendingTools,
 			chatContainer,
-			session: { getToolByName: () => undefined },
+			session: { getToolByName: () => undefined, hasBuiltInTool: () => true },
 			showWarning: vi.fn(),
-			viewSession: { getToolByName: () => undefined },
+			viewSession: { getToolByName: () => undefined, hasBuiltInTool: () => true },
 			sessionManager: { getCwd: () => process.cwd() },
 			setTodos: vi.fn(),
 		} as unknown as InteractiveModeContext;
@@ -411,6 +411,7 @@ describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () 
 			session: {
 				retryAttempt: 0,
 				getToolByName: () => undefined,
+				hasBuiltInTool: () => true,
 				sessionManager: { getCwd: () => process.cwd() },
 			},
 			get viewSession() {
@@ -490,6 +491,7 @@ describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () 
 			session: {
 				retryAttempt: 0,
 				getToolByName: () => undefined,
+				hasBuiltInTool: () => true,
 				sessionManager: { getCwd: () => process.cwd() },
 				isStreaming: true,
 			},

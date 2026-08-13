@@ -7,6 +7,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { type } from "@oh-my-pi/omptype";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Context, Message, TextContent } from "@oh-my-pi/pi-ai";
 import {
@@ -22,16 +23,16 @@ import {
 	obfuscateMessages,
 	obfuscateProviderContext,
 	obfuscateToolArguments,
-	type SecretEntry,
-	SecretObfuscator,
+} from "@oh-my-pi/pi-coding-agent/secrets/message-transform";
+import { type SecretEntry, SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
+import {
 	sanitizeSecretFriendlyName,
 	secretEntriesNeedPlaceholderKey,
 	secretEntryNeedsPlaceholderKey,
 	stripPendingSecretPlaceholderSuffix,
-} from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
+} from "@oh-my-pi/pi-coding-agent/secrets/placeholder";
 import { compileSecretRegex } from "@oh-my-pi/pi-coding-agent/secrets/regex";
 import { getActiveProfile, getAgentDir, setProfile } from "@oh-my-pi/pi-utils/dirs";
-import { type } from "arktype";
 
 describe("compileSecretRegex", () => {
 	it("adds global flag when not provided", () => {

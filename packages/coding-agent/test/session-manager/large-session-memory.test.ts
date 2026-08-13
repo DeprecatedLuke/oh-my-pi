@@ -11,7 +11,7 @@ import { MemorySessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-
 class CountingMemorySessionStorage extends MemorySessionStorage {
 	writeTextSyncCalls = 0;
 
-	writeTextSync(filePath: string, content: string): void {
+	override writeTextSync(filePath: string, content: string): void {
 		this.writeTextSyncCalls++;
 		super.writeTextSync(filePath, content);
 	}

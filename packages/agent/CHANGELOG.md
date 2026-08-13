@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [17.2.13] - 2026-08-11
+
+### Fixed
+
+- Fixed Cursor sessions re-executing settled tools when an owned dialect projector rebuilds toolCall blocks: `snapshotAssistantContentBlock` now copies `kCursorExecResolved` explicitly so agent-loop still skips already-settled calls.
+
+## [17.2.10] - 2026-08-06
+
+### Fixed
+
+- Fixed an issue in remote OpenAI response compaction replay where output-only `status` fields were incorrectly sent back as input, affecting persisted native and V1/V2 replacement history.
+
+## [17.2.9] - 2026-08-05
+
+### Fixed
+
+- Preserved queued steering and follow-up messages when a continuation is cancelled before or during pre-dequeue hooks, and propagated the caller's cancellation signal through every continuation model-call loop.
+
+## [17.2.6] - 2026-08-03
+
+### Fixed
+
+- Fixed an issue where peer-IRC interrupts (such as subagent messages) incorrectly skipped non-interruptible tool calls queued in the same batch.
+- Improved interruption messaging to clearly distinguish between parent-agent steering and system-advisory interruptions.
+
 ## [17.2.5] - 2026-08-03
 
 ### Breaking Changes

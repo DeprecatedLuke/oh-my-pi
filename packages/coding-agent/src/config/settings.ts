@@ -30,6 +30,7 @@ import {
 	setWorktreesDir,
 	toError,
 } from "@oh-my-pi/pi-utils";
+import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { JSONC, YAML } from "bun";
 import { invalidate as invalidateCapabilityFsCache } from "../capability/fs";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
@@ -37,12 +38,10 @@ import type { ModelRole } from "../config/model-roles";
 import { loadCapability } from "../discovery";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { AgentStorage } from "../session/agent-storage";
-import { normalizeToolName } from "../tools/builtin-names";
 import { AUTO_IMAGE_PROVIDER_ORDER, isImageProviderId } from "../tools/image-providers";
 import { type EditMode, normalizeEditMode } from "../utils/edit-mode";
 import { INSPECT_IMAGE_MODES } from "../utils/inspect-image-mode";
 import { isSearchProviderId, SEARCH_PROVIDER_ORDER } from "../web/search/types";
-import { withFileLock } from "./file-lock";
 import {
 	type BashInterceptorRule,
 	type GroupPrefix,
@@ -443,11 +442,15 @@ export class Settings {
 	}
 
 	/**
-	 * Create an isolated instance for testing.
-	 * Does not affect the global singleton.
+	 * Create an in-memory settings instance without affecting the global singleton.
+	 * A supplied storage handle remains shared for runtime data while setting overrides stay non-persistent.
 	 */
-	static isolated(overrides: Partial<Record<SettingPath, unknown>> = {}): Settings {
+	static isolated(
+		overrides: Partial<Record<SettingPath, unknown>> = {},
+		options: { storage?: AgentStorage | null } = {},
+	): Settings {
 		const instance = new Settings({ inMemory: true, overrides });
+		instance.#storage = options.storage ?? null;
 		instance.#rebuildMerged();
 		return instance;
 	}
@@ -1724,72 +1727,12 @@ export class Settings {
 			delete raw["search.contextAfter"];
 		}
 
-		// 3. Tool-name arrays use wire IDs too. Preserve user overrides across
-		// the rename without duplicating entries if they already added grep/glob.
-		const migrateToolNameList = (names: unknown): unknown => {
-			if (!Array.isArray(names)) return names;
-			const out: unknown[] = [];
-			const seen = new Set<string>();
-			for (const name of names) {
-				const migrated = typeof name === "string" ? normalizeToolName(name) : name;
-				if (typeof migrated === "string") {
-					if (seen.has(migrated)) continue;
-					seen.add(migrated);
-				}
-				out.push(migrated);
-			}
-			return out;
-		};
-		const ensureToolsObject = (): Record<string, unknown> => {
-			const current = raw.tools;
-			if (isRecord(current)) return current;
-			const created: Record<string, unknown> = {};
-			raw.tools = created;
-			return created;
-		};
-		const toolsObj = isRecord(raw.tools) ? raw.tools : undefined;
-		if (toolsObj && "essentialOverride" in toolsObj) {
-			toolsObj.essentialOverride = migrateToolNameList(toolsObj.essentialOverride);
+		// Also clean up any empty nested objects we might have created or left behind
+		if (raw.glob && typeof raw.glob === "object" && Object.keys(raw.glob).length === 0) {
+			delete raw.glob;
 		}
-		if ("tools.essentialOverride" in raw) {
-			const nestedToolsObj = ensureToolsObject();
-			if (!("essentialOverride" in nestedToolsObj)) {
-				nestedToolsObj.essentialOverride = migrateToolNameList(raw["tools.essentialOverride"]);
-			}
-			delete raw["tools.essentialOverride"];
-		}
-		// Approval policies are keyed by wire tool name. Keep explicit user
-		// denials/approvals effective after search/find become grep/glob.
-		const ensureApprovalObject = (): Record<string, unknown> => {
-			const tools = ensureToolsObject();
-			if (isRecord(tools.approval)) return tools.approval;
-			const created: Record<string, unknown> = {};
-			tools.approval = created;
-			return created;
-		};
-		const approvalObj = toolsObj && isRecord(toolsObj.approval) ? toolsObj.approval : undefined;
-		for (const [legacy, canonical] of [
-			["search", "grep"],
-			["find", "glob"],
-		] as const) {
-			if (approvalObj && legacy in approvalObj) {
-				if (!(canonical in approvalObj)) approvalObj[canonical] = approvalObj[legacy];
-				delete approvalObj[legacy];
-			}
-			const flatKey = `tools.approval.${legacy}`;
-			if (flatKey in raw) {
-				const approval = ensureApprovalObject();
-				if (!(canonical in approval)) approval[canonical] = raw[flatKey];
-				delete raw[flatKey];
-			}
-		}
-
-		// Also clean up any empty nested objects we might have created or left behind.
-		if (isRecord(raw.find) && Object.keys(raw.find).length === 0) {
-			delete raw.find;
-		}
-		if (isRecord(raw.search) && Object.keys(raw.search).length === 0) {
-			delete raw.search;
+		if (raw.grep && typeof raw.grep === "object" && Object.keys(raw.grep).length === 0) {
+			delete raw.grep;
 		}
 		// readHashLines: removed. Hashline anchors are now driven solely by
 		// edit.mode === "hashline"; the separate read toggle only ever produced
@@ -1863,6 +1806,25 @@ export class Settings {
 			value => typeof value === "number" && Number.isFinite(value),
 		);
 
+		// BM25 tool discovery removal: tools.discoveryMode / tools.essentialOverride /
+		// mcp.discoveryMode / mcp.discoveryDefaultServers are gone with no
+		// replacement (`tools.xdev` stays at its own default). Dead keys are
+		// deleted so they stop lingering in config.yml.
+		const toolsObj = raw.tools as Record<string, unknown> | undefined;
+		if (toolsObj) {
+			delete toolsObj.discoveryMode;
+			delete toolsObj.essentialOverride;
+		}
+		delete raw["tools.discoveryMode"];
+		delete raw["tools.essentialOverride"];
+		const mcpObj = raw.mcp as Record<string, unknown> | undefined;
+		if (mcpObj) {
+			delete mcpObj.discoveryMode;
+			delete mcpObj.discoveryDefaultServers;
+		}
+		delete raw["mcp.discoveryMode"];
+		delete raw["mcp.discoveryDefaultServers"];
+
 		// providers.webSearch / providers.image (single preferred provider) →
 		// providers.webSearchOrder / providers.imageOrder (priority lists). A
 		// concrete legacy choice becomes the head of the new list with every
@@ -1901,6 +1863,53 @@ export class Settings {
 				? [value, ...AUTO_IMAGE_PROVIDER_ORDER.filter(id => id !== value)]
 				: undefined,
 		);
+
+		// Consolidate the retired Exa suite toggles onto the sole remaining
+		// provider switch. The old runtime required both `enabled` and
+		// `enableSearch`, so preserve that AND semantics when both are present.
+		// Researcher and Websets were removed with the standalone Exa tools.
+		const exaObj = isRecord(raw.exa) ? raw.exa : undefined;
+		const exaEnabledValues = [
+			exaObj?.enabled,
+			raw["exa.enabled"],
+			exaObj?.enableSearch,
+			raw["exa.enableSearch"],
+		].filter((value): value is boolean => typeof value === "boolean");
+		const hasFlatExaSetting =
+			"exa.enabled" in raw ||
+			"exa.enableSearch" in raw ||
+			"exa.enableResearcher" in raw ||
+			"exa.enableWebsets" in raw;
+		if (exaObj || hasFlatExaSetting) {
+			const exaRoot = exaObj ?? {};
+			if (exaEnabledValues.length > 0) {
+				exaRoot.enabled = exaEnabledValues.every(Boolean);
+			}
+			delete exaRoot.enableSearch;
+			delete exaRoot.enableResearcher;
+			delete exaRoot.enableWebsets;
+			if (Object.keys(exaRoot).length > 0) {
+				raw.exa = exaRoot;
+			} else {
+				delete raw.exa;
+			}
+			delete raw["exa.enabled"];
+			delete raw["exa.enableSearch"];
+			delete raw["exa.enableResearcher"];
+			delete raw["exa.enableWebsets"];
+		}
+
+		// computer.backend and model-specific controller routing were removed
+		// when the computer tool moved to one native desktop implementation.
+		const computerObj = isRecord(raw.computer) ? raw.computer : undefined;
+		if (computerObj && "backend" in computerObj) {
+			delete computerObj.backend;
+			if (Object.keys(computerObj).length === 0) {
+				delete raw.computer;
+			}
+		}
+		delete raw["computer.backend"];
+
 		return raw;
 	}
 

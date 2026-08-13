@@ -17,7 +17,7 @@ import type {
 	ServerConfig,
 	WorkspaceEdit,
 } from "./types";
-import { detectLanguageId, fileToUri } from "./utils";
+import { detectLanguageId, EquivalentUriMap, fileToUri } from "./utils";
 
 // =============================================================================
 // Client State
@@ -787,7 +787,7 @@ export async function getOrCreateClient(
 			proc,
 			config,
 			requestId: 0,
-			diagnostics: new Map(),
+			diagnostics: new EquivalentUriMap(),
 			diagnosticsVersion: 0,
 			dynamicCapabilityRegistrations: new Map(),
 			openFiles: new Map(),
@@ -1339,6 +1339,7 @@ export async function sendRequest(
 		timeout = setTimeout(() => {
 			if (client.pendingRequests.has(id)) {
 				client.pendingRequests.delete(id);
+				void sendNotification(client, "$/cancelRequest", { id }).catch(() => {});
 				const err = new Error(`LSP request ${method} timed out after ${effectiveTimeoutMs}ms`);
 				cleanup();
 				reject(err);
@@ -1405,6 +1406,7 @@ export async function sendNotification(
  * Shutdown all LSP clients.
  */
 export async function shutdownAll(): Promise<void> {
+	stopIdleChecker();
 	const clientsToShutdown = Array.from(clients.values());
 	clients.clear();
 	// Mid-initialize clients live only in clientLocks (publication is deferred

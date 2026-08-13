@@ -61,6 +61,22 @@ export declare class DesktopSession {
   close(): Promise<undefined>
 }
 
+/**
+ * Process-owned cross-platform advisory lock.
+ *
+ * `tryAcquire()` is non-blocking; its returned handle reports whether it won
+ * through `acquired`. Ownership ends on `release()`, garbage collection, or
+ * process exit; `release()` is idempotent.
+ */
+export declare class FileLock {
+  /** Try to acquire `path` without blocking. */
+  static tryAcquire(path: string): FileLock
+  /** Whether this handle owns the requested lock. */
+  get acquired(): boolean
+  /** Release this handle's ownership without affecting a successor. */
+  release(): void
+}
+
 /** WebRTC peer that accepts 16 kHz mono PCM and renders remote Opus audio. */
 export declare class LiveWebRtcPeer {
   /**
@@ -263,7 +279,7 @@ export declare function __ompInstallTokioRuntime(): void
  * `packages/natives/native/index.js` (which derives the name from
  * `package.json#version`).
  */
-export declare function __piNativesV17_2_5(): void
+export declare function __piNativesV17_2_15(): void
 
 /**
  * Apply ast-grep rewrite rules to matching files; honors `dryRun` and returns
@@ -686,8 +702,10 @@ export interface DesktopSessionOptions {
 /** One capturable top-level window in global logical desktop coordinates. */
 export interface DesktopWindow {
   /**
-   * Stable numeric window id, valid as a capture target while the window
-   * lives.
+   * Backend-defined opaque window id, valid as a capture target while the
+   * window lives. Numeric on X11/Win32/macOS; a composite AT-SPI string on
+   * Wayland (e.g. `atspi::1.31:/org/a11y/atspi/accessible/1`). Never parse
+   * it.
    */
   id: string
   /** Window title; may be empty for untitled windows. */

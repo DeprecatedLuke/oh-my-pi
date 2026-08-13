@@ -90,6 +90,11 @@ export class SessionObserverRegistry {
 		this.#notifyListeners("lifecycle");
 	}
 
+	/** Return one tracked session without copying or sorting the registry. */
+	getSession(id: string): ObservableSession | undefined {
+		return this.#sessions.get(id);
+	}
+
 	getSessions(): ObservableSession[] {
 		const sessions = [...this.#sessions.values()];
 		sessions.sort((a, b) => {

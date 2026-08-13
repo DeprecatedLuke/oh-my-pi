@@ -4,8 +4,10 @@ import * as path from "node:path";
 import { SENSITIVE_TOKEN_RE } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { getSecretPlaceholderKeyPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
-import { regexHasUnresolvableShortMatchFallback, type SecretEntry, sanitizeSecretFriendlyName } from "./obfuscator";
+import { type SecretEntry, SecretObfuscator } from "./obfuscator";
+import { sanitizeSecretFriendlyName, secretEntriesNeedPlaceholderKey } from "./placeholder";
 import { compileSecretRegex } from "./regex";
+import { regexHasUnresolvableShortMatchFallback } from "./replacement";
 
 const PLACEHOLDER_KEY_RE = /^[A-Za-z0-9_-]{43}$/;
 const cachedPlaceholderKeys = new Map<string, string>();
@@ -147,111 +149,33 @@ async function readPlaceholderKeyFile(keyPath: string, retry: boolean): Promise<
 
 type RawSecretEntry = Omit<SecretEntry, "friendlyName"> & { friendlyName?: unknown };
 
-export * from "./fix-refusal-state";
 export {
 	deobfuscateSessionContext,
 	deobfuscateToolArguments,
 	obfuscateMessages,
 	obfuscateProviderContext,
-	obfuscateProviderTools,
-	type SecretEntry,
-	SecretObfuscator,
-	secretEntriesNeedPlaceholderKey,
-	secretEntryNeedsPlaceholderKey,
-} from "./obfuscator";
-
-/** Hand-authored secrets file basename (`<scope>/secrets.yml`). */
-const SECRETS_BASENAME = "secrets.yml";
-/** Machine-managed secrets file basename, written by `/fix-refusal`. */
-export const MANAGED_SECRETS_BASENAME = "secrets-managed.yml";
+} from "./message-transform";
+export { type SecretEntry, SecretObfuscator } from "./obfuscator";
+export { secretEntriesNeedPlaceholderKey, secretEntryNeedsPlaceholderKey } from "./placeholder";
 
 /**
- * Load secrets from the global and project-local `secrets.yml` files plus their
- * machine-managed `secrets-managed.yml` siblings (written by `/fix-refusal`).
- * Later files override earlier ones by content, so within a scope managed
- * entries override hand-authored ones, and project entries override global.
+ * Load secrets from project-local and global secrets.yml files.
+ * Project-local entries override global entries with matching content.
  */
 export async function loadSecrets(cwd: string, agentDir: string): Promise<SecretEntry[]> {
-	const files = [
-		path.join(agentDir, SECRETS_BASENAME),
-		path.join(agentDir, MANAGED_SECRETS_BASENAME),
-		path.join(cwd, ".omp", SECRETS_BASENAME),
-		path.join(cwd, ".omp", MANAGED_SECRETS_BASENAME),
-	];
-	const groups = await Promise.all(files.map(loadSecretsFile));
-	const byContent = new Map<string, SecretEntry>();
-	for (const group of groups) {
-		for (const entry of group) byContent.set(entry.content, entry);
-	}
-	return [...byContent.values()];
-}
+	const projectPath = path.join(cwd, ".omp", "secrets.yml");
+	const globalPath = path.join(agentDir, "secrets.yml");
 
-/** Outcome of {@link appendManagedSecrets}. */
-export interface AppendManagedSecretsResult {
-	/** Absolute path of the managed secrets file written. */
-	path: string;
-	/** Number of entries newly appended (already-present ones are skipped). */
-	added: number;
-	/** Total entry count in the file after the write. */
-	total: number;
-}
+	const globalEntries = await loadSecretsFile(globalPath);
+	const projectEntries = await loadSecretsFile(projectPath);
 
-/**
- * Append regex secret entries to the global machine-managed secrets file
- * (`<agentDir>/secrets-managed.yml`), preserving existing raw entries. Entries
- * whose (type, content, flags) triple already exists are skipped so repeated
- * `/fix-refusal` runs never duplicate. Returns the path and counts.
- */
-export async function appendManagedSecrets(
-	agentDir: string,
-	entries: SecretEntry[],
-): Promise<AppendManagedSecretsResult> {
-	const filePath = path.join(agentDir, MANAGED_SECRETS_BASENAME);
-	let raw: unknown[] = [];
-	try {
-		const parsed = YAML.parse(await Bun.file(filePath).text());
-		if (Array.isArray(parsed)) raw = parsed;
-	} catch (err) {
-		if (!isEnoent(err)) throw err;
-	}
+	if (globalEntries.length === 0) return projectEntries;
+	if (projectEntries.length === 0) return globalEntries;
 
-	const seen = new Set<string>();
-	for (const item of raw) {
-		if (item !== null && typeof item === "object") {
-			const e = item as Record<string, unknown>;
-			if (typeof e.content === "string") seen.add(secretKey(String(e.type), e.content, e.flags));
-		}
-	}
-
-	const additions: Record<string, unknown>[] = [];
-	for (const entry of entries) {
-		const key = secretKey(entry.type, entry.content, entry.flags);
-		if (seen.has(key)) continue;
-		seen.add(key);
-		additions.push(toManagedRecord(entry));
-	}
-
-	if (additions.length === 0) return { path: filePath, added: 0, total: raw.length };
-	const merged = [...raw, ...additions];
-	await Bun.write(filePath, YAML.stringify(merged, null, 2));
-	return { path: filePath, added: additions.length, total: merged.length };
-}
-
-function secretKey(type: string, content: string, flags: unknown): string {
-	return `${type}\u0000${content}\u0000${typeof flags === "string" ? flags : ""}`;
-}
-
-/** Serialize a {@link SecretEntry} to a minimal YAML record (omitting empty optionals). */
-function toManagedRecord(entry: SecretEntry): Record<string, unknown> {
-	const record: Record<string, unknown> = {
-		type: entry.type,
-		content: entry.content,
-		mode: entry.mode ?? "obfuscate",
-	};
-	if (entry.flags) record.flags = entry.flags;
-	if (entry.friendlyName) record.friendlyName = entry.friendlyName;
-	if (entry.replacement) record.replacement = entry.replacement;
-	return record;
+	// Merge: project overrides global by content match
+	const projectContents = new Set(projectEntries.map(e => e.content));
+	const merged = [...globalEntries.filter(e => !projectContents.has(e.content)), ...projectEntries];
+	return merged;
 }
 
 /** Minimum env var value length to consider as a secret. */
@@ -297,6 +221,51 @@ export function builtinCredentialSecretEntries(): SecretEntry[] {
 			friendlyName: "Credential",
 		},
 	];
+}
+
+/**
+ * Build the session secret obfuscator from every configured source: secrets.yml
+ * (project + global), secret-shaped environment variables, and the built-in
+ * credential patterns. Callers gate on `secrets.enabled`.
+ *
+ * Only CONFIGURED entries force startup key creation: a configured
+ * obfuscate-mode secret — or a default (no custom `replacement`) replace-mode
+ * regex whose key-derived idempotent fallback marker needs a stable key across
+ * restarts (see `secretEntryNeedsPlaceholderKey`) — mints placeholders as soon
+ * as the obfuscator is built. The built-in credential-pattern entry matches
+ * dynamically, so it resolves the persisted key lazily on first match instead
+ * of creating the key file for every secrets-enabled session.
+ *
+ * When no configured entry produced an active secret but a persisted key
+ * exists, returns a redaction-only obfuscator so a tool read of the key file
+ * does not ship the reusable HMAC key to the provider. Returns undefined when
+ * there is nothing to protect.
+ *
+ * `keyDir` is the explicit agent dir override for the placeholder-key file
+ * (default XDG/agent location when omitted).
+ */
+export async function buildSecretObfuscator(
+	cwd: string,
+	agentDir: string,
+	keyDir?: string,
+): Promise<SecretObfuscator | undefined> {
+	const fileEntries = await logger.time("loadSecrets", loadSecrets, cwd, agentDir);
+	const envEntries = collectEnvSecrets();
+	// Built-in credential-pattern entries come last so user-configured entries
+	// (plain literals, custom regexes) take precedence in the scan order.
+	const allEntries = [...envEntries, ...fileEntries, ...builtinCredentialSecretEntries()];
+	const needsPlaceholderKey = secretEntriesNeedPlaceholderKey([...envEntries, ...fileEntries]);
+	const placeholderKey = needsPlaceholderKey
+		? await getSecretPlaceholderKey(keyDir)
+		: await getExistingSecretPlaceholderKey(keyDir);
+	let obfuscator: SecretObfuscator | undefined;
+	if (allEntries.length > 0) {
+		obfuscator = new SecretObfuscator(allEntries, placeholderKey ?? (() => getSecretPlaceholderKeySync(keyDir)));
+	}
+	if (obfuscator?.hasSecrets() !== true && placeholderKey !== undefined) {
+		obfuscator = new SecretObfuscator([{ type: "plain", mode: "replace", content: placeholderKey }], placeholderKey);
+	}
+	return obfuscator;
 }
 
 async function loadSecretsFile(filePath: string): Promise<SecretEntry[]> {

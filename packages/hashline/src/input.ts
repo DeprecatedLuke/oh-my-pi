@@ -561,7 +561,7 @@ export class PatchSection {
 			onUnresolved: "throw",
 			onWarning: warning => resolveWarnings.push(warning),
 		});
-		const result = applyEdits(text, resolved, { clipboard: clipboard ?? {} });
+		const result = applyEdits(text, resolved, { clipboard: clipboard ?? {}, path: this.path });
 		// Preserve parse warnings so consumers don't need to call `parse()`
 		// separately.
 		const merged = [...warnings, ...resolveWarnings, ...(result.warnings ?? [])];
@@ -588,7 +588,11 @@ export class PatchSection {
 			onUnresolved: "drop",
 			onWarning: warning => resolveWarnings.push(warning),
 		});
-		const result = applyEdits(text, resolved, { clipboard: clipboard ?? {}, onEmptyPaste: "drop" });
+		const result = applyEdits(text, resolved, {
+			clipboard: clipboard ?? {},
+			onEmptyPaste: "drop",
+			path: this.path,
+		});
 		const merged = [...warnings, ...resolveWarnings, ...(result.warnings ?? [])];
 		return merged.length > 0
 			? { ...result, warnings: merged }

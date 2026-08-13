@@ -87,7 +87,14 @@ describe("InteractiveMode tiny-title prewarm", () => {
 		const prewarm = vi.spyOn(tinyTitleClient, "prewarm").mockImplementation(() => {});
 
 		await mode.init();
-		await Bun.sleep(0);
+		// The prewarm call is deferred behind a setImmediate queued during
+		// init() (see interactive-mode.ts); init()'s own awaits are promise
+		// microtasks that can resolve without yielding to the immediate
+		// queue, so the prewarm may not have fired yet when init() settles.
+		// Flush one immediate tick before asserting.
+		const immediateFlushed = Promise.withResolvers<void>();
+		setImmediate(immediateFlushed.resolve);
+		await immediateFlushed.promise;
 
 		expect(prewarm).toHaveBeenCalledWith("lfm2-350m");
 	});
@@ -98,7 +105,6 @@ describe("InteractiveMode tiny-title prewarm", () => {
 		const prewarm = vi.spyOn(tinyTitleClient, "prewarm").mockImplementation(() => {});
 
 		await mode.init();
-		await Bun.sleep(0);
 
 		expect(prewarm).not.toHaveBeenCalled();
 	});

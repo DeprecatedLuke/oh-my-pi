@@ -38,6 +38,10 @@ export const completionsHelp = {
 
 export const completeHelp = { hidden: true } satisfies CommandMetadata;
 
+export const compressHelp = {
+	description: "Rewrite a text file into the dense prompt register, reporting what it drops",
+} satisfies CommandMetadata;
+
 export const configHelp = { description: "Manage configuration settings" } satisfies CommandMetadata;
 
 export const dryBalanceHelp = {
@@ -75,6 +79,10 @@ export const sayHelp = {
 } satisfies CommandMetadata;
 
 export const searchHelp = { description: "Test web search providers" } satisfies CommandMetadata;
+
+export const shareHelp = {
+	description: "Share a saved session via an encrypted link (same as /share)",
+} satisfies CommandMetadata;
 
 export const setupHelp = {
 	description: "Run onboarding setup or install dependencies for optional features",
