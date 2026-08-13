@@ -352,10 +352,21 @@ export async function buildSecretObfuscator(
 
 /** Read a managed secrets file while excluding concurrent `/fix-refusal` appends. */
 async function loadManagedSecretsFile(filePath: string): Promise<SecretEntry[]> {
+	const parentDir = path.dirname(filePath);
+	if (!(await isExistingDirectory(parentDir))) return [];
 	try {
 		return await withFileLock(filePath, async () => await loadSecretsFile(filePath));
 	} catch (err) {
-		if (isEnoent(err)) return [];
+		if (isEnoent(err) || !(await isExistingDirectory(parentDir))) return [];
+		throw err;
+	}
+}
+
+async function isExistingDirectory(directory: string): Promise<boolean> {
+	try {
+		return (await fs.promises.stat(directory)).isDirectory();
+	} catch (err) {
+		if (isEnoent(err)) return false;
 		throw err;
 	}
 }
