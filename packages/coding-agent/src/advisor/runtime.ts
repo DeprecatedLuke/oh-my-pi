@@ -41,6 +41,8 @@ export interface AdvisorRuntimeHost {
 	enqueueAdvice(note: string, severity?: "nit" | "concern" | "blocker"): void;
 	/** Redact primary transcript bytes before they reach the advisor model. */
 	obfuscator?: SecretObfuscator;
+	/** Returns the current primary-session obfuscator when it can change live. */
+	getObfuscator?(): SecretObfuscator | undefined;
 	/**
 	 * Pre-prompt context maintenance for the advisor's own append-only context.
 	 * Promotes the advisor model to a larger sibling when its context nears the
@@ -705,7 +707,7 @@ export class AdvisorRuntime {
 		const delta = preparedMessages;
 		if (delta.length === 0) return null;
 
-		const obfuscator = this.host.obfuscator;
+		const obfuscator = this.host.getObfuscator?.() ?? this.host.obfuscator;
 		// Side effects the pure renderer cannot own: collect secrets, scrub the
 		// advisor's own history and refresh pending placeholder prefixes (shared
 		// helper — see #collectAdvisorSecrets; idempotent for this drain's
@@ -769,7 +771,7 @@ export class AdvisorRuntime {
 	#renderPreparedDelta(preparedMessages: AgentMessage[], wip = false): string | null {
 		const delta = preparedMessages;
 		if (delta.length === 0) return null;
-		const obfuscator = this.host.obfuscator;
+		const obfuscator = this.host.getObfuscator?.() ?? this.host.obfuscator;
 		let md = formatSessionHistoryMarkdown(delta, {
 			...ADVISOR_RENDER_OPTIONS,
 			includeThinking: this.#includeThinking,

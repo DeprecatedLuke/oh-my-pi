@@ -237,7 +237,7 @@ export interface SessionAdvisorsHost {
 	settings: Settings;
 	modelRegistry: ModelRegistry;
 	yieldQueue: YieldQueue;
-	obfuscator: SecretObfuscator | undefined;
+	getObfuscator(): SecretObfuscator | undefined;
 	providerSessionState: Map<string, ProviderSessionState>;
 	preferWebsockets: boolean | undefined;
 	onPayload: SimpleStreamOptions["onPayload"] | undefined;
@@ -900,7 +900,7 @@ export class SessionAdvisors {
 				enqueueAdvice: (note, severity) => this.#routeAdvice(advisorRef, note, severity),
 				maintainContext: (incomingTokens, signal) =>
 					this.#maintainAdvisorContext(advisorRef, incomingTokens, signal),
-				obfuscator: this.#host.obfuscator,
+				getObfuscator: () => this.#host.getObfuscator(),
 				getModelIdentity: () => formatModelString(advisorRef.agent.state.model),
 				beginAdvisorUpdate: inProgress => {
 					advisorRef.reviewInProgress = inProgress;

@@ -36,7 +36,7 @@ export interface SessionProviderBoundaryHost {
 	onPayload: SimpleStreamOptions["onPayload"] | undefined;
 	onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
-	obfuscator: SecretObfuscator | undefined;
+	getObfuscator(): SecretObfuscator | undefined;
 }
 
 /** Owns the transformations at the session/provider boundary. */
@@ -67,7 +67,7 @@ export class SessionProviderBoundary {
 
 	/** Builds the current deobfuscated context for agent display and replay. */
 	buildDisplaySessionContext(): SessionContext {
-		return deobfuscateSessionContext(this.#host.sessionManager.buildSessionContext(), this.#host.obfuscator);
+		return deobfuscateSessionContext(this.#host.sessionManager.buildSessionContext(), this.#host.getObfuscator());
 	}
 
 	/** Builds the full display-only transcript context. */
@@ -80,19 +80,20 @@ export class SessionProviderBoundary {
 				collapseCompactedHistory: options?.collapseCompactedHistory,
 				keepDanglingToolCalls: options?.keepDanglingToolCalls,
 			}),
-			this.#host.obfuscator,
+			this.#host.getObfuscator(),
 		);
 	}
 
 	/** Obfuscates optional plaintext before a provider request. */
 	obfuscateText(text: string | undefined): string | undefined {
-		if (!text || !this.#host.obfuscator?.hasSecrets()) return text;
-		return this.#host.obfuscator.obfuscate(text);
+		const obfuscator = this.#host.getObfuscator();
+		if (!text || !obfuscator?.hasSecrets()) return text;
+		return obfuscator.obfuscate(text);
 	}
 
 	/** Obfuscates summaries and snapcompact plaintext carried into compaction. */
 	obfuscateCompactionPreparation(preparation: CompactionPreparation): CompactionPreparation {
-		if (!this.#host.obfuscator?.hasSecrets()) return preparation;
+		if (!this.#host.getObfuscator()?.hasSecrets()) return preparation;
 		const previousSummary = this.obfuscateText(preparation.previousSummary);
 		const previousPreserveData = this.#obfuscatePreservedArchiveText(preparation.previousPreserveData);
 		if (
@@ -106,21 +107,23 @@ export class SessionProviderBoundary {
 
 	/** Deobfuscates provider text before exposing it to the session. */
 	deobfuscateText(text: string): string {
-		if (!this.#host.obfuscator?.hasSecrets()) return text;
-		return this.#host.obfuscator.deobfuscate(text);
+		const obfuscator = this.#host.getObfuscator();
+		if (!obfuscator?.hasSecrets()) return text;
+		return obfuscator.deobfuscate(text);
 	}
 
 	/** Deobfuscates a streamed delta and removes an incomplete secret placeholder suffix. */
 	deobfuscateDelta(text: string): string {
 		const deobfuscated = this.deobfuscateText(text);
-		if (!this.#host.obfuscator?.hasSecrets()) return deobfuscated;
+		if (!this.#host.getObfuscator()?.hasSecrets()) return deobfuscated;
 		return stripPendingSecretPlaceholderSuffix(deobfuscated);
 	}
 
 	/** Converts side-request messages through the session's secret boundary. */
 	convertToLlmForSideRequest(messages: AgentMessage[]): Message[] {
 		const converted = convertToLlm(messages);
-		return this.#host.obfuscator?.hasSecrets() ? obfuscateMessages(this.#host.obfuscator, converted) : converted;
+		const obfuscator = this.#host.getObfuscator();
+		return obfuscator?.hasSecrets() ? obfuscateMessages(obfuscator, converted) : converted;
 	}
 
 	/** Converts session messages using the configured pre-LLM pipeline. */
@@ -278,7 +281,7 @@ export class SessionProviderBoundary {
 	#obfuscatePreservedArchiveText(
 		preserveData: Record<string, unknown> | undefined,
 	): Record<string, unknown> | undefined {
-		const obfuscator = this.#host.obfuscator;
+		const obfuscator = this.#host.getObfuscator();
 		const slot = preserveData?.[snapcompact.PRESERVE_KEY];
 		if (
 			!obfuscator?.hasSecrets() ||

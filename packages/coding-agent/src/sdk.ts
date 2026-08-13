@@ -3103,11 +3103,13 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		};
 
 		// Final convertToLlm: live provider replay drops API-level refusal errors,
-		// then applies secret obfuscation to the remaining outbound context.
+		// then applies the current session secret obfuscator to the remaining
+		// outbound context. `/fix-refusal` can replace it while this session lives.
 		const convertToLlmFinal = (messages: AgentMessage[]): Message[] => {
 			const converted = filterProviderReplayMessages(convertToLlmWithBlockImages(messages));
-			if (!obfuscator?.hasSecrets()) return converted;
-			return obfuscateMessages(obfuscator, converted);
+			const currentObfuscator = session?.obfuscator;
+			if (!currentObfuscator?.hasSecrets()) return converted;
+			return obfuscateMessages(currentObfuscator, converted);
 		};
 
 		const transformContext = async (messages: AgentMessage[], _signal?: AbortSignal) => {
@@ -3132,7 +3134,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					)
 				: undefined;
 		const transformProviderContext = async (context: Context, transformModel: Model): Promise<Context> => {
-			let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
+			const currentObfuscator = session?.obfuscator;
+			let transformed = currentObfuscator ? obfuscateProviderContext(currentObfuscator, context) : context;
 			if (snapcompactInline) transformed = await snapcompactInline.transform(transformed, transformModel);
 			return clampProviderContextImages(transformed, transformModel);
 		};
@@ -3189,8 +3192,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (maxTimeout > 0 && typeof result.timeout === "number") {
 				result = { ...result, timeout: Math.min(result.timeout, maxTimeout) };
 			}
-			if (obfuscator?.hasSecrets()) {
-				result = deobfuscateToolArguments(obfuscator, result);
+			const currentObfuscator = session?.obfuscator;
+			if (currentObfuscator?.hasSecrets()) {
+				result = deobfuscateToolArguments(currentObfuscator, result);
 			}
 			return result;
 		};
@@ -3775,7 +3779,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					convertToLlm: convertToLlmFinal,
 					transformContext: async messages => wrapSteeringForModel(messages),
 					transformProviderContext: async (context, transformModel) => {
-						const transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
+						const currentObfuscator = session?.obfuscator;
+						const transformed = currentObfuscator
+							? obfuscateProviderContext(currentObfuscator, context)
+							: context;
 						return clampProviderContextImages(transformed, transformModel);
 					},
 					thinkingBudgets: agent.thinkingBudgets,

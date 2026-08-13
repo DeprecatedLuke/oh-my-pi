@@ -591,6 +591,105 @@ describe("AgentSession message pipeline", () => {
 			expect(JSON.stringify(sideContext?.messages)).not.toContain(secret);
 		});
 	});
+	it("uses the live obfuscator for outbound context and tool arguments after a session swap", async () => {
+		using tempDir = TempDir.createSync("@pi-live-obfuscator-swap-");
+		const api = "test-live-obfuscator-swap";
+		const originalValue = "live-obfuscator-original-value";
+		let placeholder = "";
+		let requestCount = 0;
+		const capturedContexts: Context[] = [];
+		let receivedToolValue: string | undefined;
+
+		registerCustomApi(api, (_model, context) => {
+			capturedContexts.push(context);
+			const stream = new AssistantMessageEventStream();
+			queueMicrotask(() => {
+				if (requestCount++ === 0) {
+					const message = createAssistantMessage("");
+					const toolCall = {
+						type: "toolCall",
+						id: "call-live-secret",
+						name: "secret_echo",
+						arguments: { value: placeholder },
+					} as const;
+					message.content = [toolCall];
+					message.stopReason = "toolUse";
+					stream.push({ type: "toolcall_start", contentIndex: 0, partial: message });
+					stream.push({ type: "toolcall_end", contentIndex: 0, toolCall: toolCall as never, partial: message });
+					stream.push({ type: "done", reason: "toolUse", message });
+					return;
+				}
+				const message = createAssistantMessage("done");
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		});
+
+		const model = buildModel({
+			id: "live-obfuscator-swap-model",
+			name: "Live Obfuscator Swap Model",
+			api,
+			provider: "test-provider",
+			baseUrl: "",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 4096,
+			maxTokens: 1024,
+		} as ModelSpec<Api>) as Model<Api>;
+		const captureTool: ExtensionFactory = pi => {
+			pi.registerTool({
+				name: "secret_echo",
+				label: "Secret Echo",
+				description: "Captures the received value.",
+				parameters: pi.arktype({ value: pi.arktype("string") }),
+				async execute(_toolCallId, params) {
+					receivedToolValue = (params as { value: string }).value;
+					return { content: [{ type: "text", text: "captured" }], details: {} };
+				},
+			});
+		};
+		const authStorage = await AuthStorage.create(tempDir.join("auth.db"));
+		authStorage.setRuntimeApiKey("test-provider", "test-key");
+		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
+		let session: AgentSession | undefined;
+		try {
+			({ session } = await createAgentSession({
+				cwd: tempDir.path(),
+				agentDir: tempDir.path(),
+				sessionManager: SessionManager.inMemory(tempDir.path()),
+				authStorage,
+				modelRegistry,
+				settings: Settings.isolated({ "compaction.enabled": false, "secrets.enabled": false }),
+				model,
+				disableExtensionDiscovery: true,
+				extensions: [captureTool],
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+				skipPythonPreflight: true,
+				toolNames: ["secret_echo"],
+			}));
+			const obfuscator = new SecretObfuscator([{ type: "plain", content: originalValue }]);
+			placeholder = obfuscator.obfuscate(originalValue);
+			session.setObfuscator(obfuscator);
+
+			await session.sendUserMessage(`Please use this value: ${originalValue}`);
+
+			const firstContext = capturedContexts[0];
+			expect(firstContext).toBeDefined();
+			const serializedFirstContext = JSON.stringify(firstContext);
+			expect(serializedFirstContext).not.toContain(originalValue);
+			expect(serializedFirstContext).toContain(placeholder);
+			expect(receivedToolValue).toBe(originalValue);
+		} finally {
+			await session?.dispose();
+			authStorage.close();
+		}
+	});
 
 	it("records raw SSE diagnostics into the session buffer before request hooks", async () => {
 		const requestOnSseEvent = vi.fn();

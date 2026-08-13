@@ -25,7 +25,7 @@ export interface StreamGuardsHost {
 	agent: Agent;
 	settings: Settings;
 	sessionManager: SessionManager;
-	obfuscator: SecretObfuscator | undefined;
+	getObfuscator(): SecretObfuscator | undefined;
 	model(): Model | undefined;
 	isDisposed(): boolean;
 	promptGeneration(): number;
@@ -115,7 +115,8 @@ export class StreamingEditGuard {
 
 		let normalizedDiff = normalizeDiff(diffForCheck.replace(/\r/g, ""));
 		if (!normalizedDiff) return;
-		if (this.#host.obfuscator) normalizedDiff = this.#host.obfuscator.deobfuscate(normalizedDiff);
+		const obfuscator = this.#host.getObfuscator();
+		if (obfuscator) normalizedDiff = obfuscator.deobfuscate(normalizedDiff);
 		if (!normalizedDiff) return;
 		const lines = normalizedDiff.split("\n");
 		if (!lines.some(line => line.startsWith("+") || line.startsWith("-"))) return;
