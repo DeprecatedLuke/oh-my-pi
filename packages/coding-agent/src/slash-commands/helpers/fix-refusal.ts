@@ -42,6 +42,8 @@ export interface FixRefusalDeps {
 	session: InteractiveModeContext["session"];
 	settings: Settings;
 	cwd: string;
+	/** Optional placeholder-key directory used to construct the active session obfuscator. */
+	keyDir?: string;
 	signal?: AbortSignal;
 	ui: FixRefusalUi;
 }
@@ -70,7 +72,7 @@ export function resolveRefusalModelPattern(settings: Settings): string | undefin
  * session obfuscator so they apply without a restart.
  */
 export async function executeFixRefusal(deps: FixRefusalDeps): Promise<FixRefusalOutcome> {
-	const { session, settings, cwd, signal, ui } = deps;
+	const { session, settings, cwd, keyDir, signal, ui } = deps;
 	const registry = session.modelRegistry;
 
 	const mainModel = session.model;
@@ -194,7 +196,7 @@ export async function executeFixRefusal(deps: FixRefusalDeps): Promise<FixRefusa
 
 	// Rebuild from every configured source, including built-in credential patterns,
 	// so newly managed patterns take effect without dropping existing protection.
-	session.setObfuscator(await buildSecretObfuscator(cwd, agentDir));
+	session.setObfuscator(await buildSecretObfuscator(cwd, agentDir, keyDir));
 
 	ui.step(
 		added === 0

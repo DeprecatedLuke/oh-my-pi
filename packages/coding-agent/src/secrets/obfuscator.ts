@@ -371,14 +371,9 @@ export class SecretObfuscator {
 						origin = replaceRange(origin, match.start, match.end, "I".repeat(replacement.length));
 					}
 				} else {
-					if (match.scanMatchLength < MIN_OBFUSCATE_SECRET_LEN) {
-						// Tone down short regex matches to avoid obfuscating small
-						// words/fragments. Measure the regex's own match length in the
-						// canonical (placeholder-expanded) scan view, not the rewritten
-						// source span, so the threshold reflects how much content the regex
-						// actually matched.
-						continue;
-					}
+					// Regex entries are explicit author- or judge-specified redaction
+					// rules. Unlike plain literals, short matches are intentional
+					// triggers and must remain maskable for /fix-refusal.
 					if (match.preserveInputPlaceholders) {
 						// The match straddled a prior-call placeholder. When the placeholder's
 						// own value already satisfies the regex on its own AND the surrounding

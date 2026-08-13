@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { SENSITIVE_TOKEN_RE } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { getSecretPlaceholderKeyPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { YAML } from "bun";
 import { type SecretEntry, SecretObfuscator } from "./obfuscator";
 import { sanitizeSecretFriendlyName, secretEntriesNeedPlaceholderKey } from "./placeholder";
@@ -206,37 +207,40 @@ export async function appendManagedSecrets(
 	entries: SecretEntry[],
 ): Promise<AppendManagedSecretsResult> {
 	const filePath = path.join(agentDir, MANAGED_SECRETS_BASENAME);
-	let raw: unknown[] = [];
-	try {
-		const parsed = YAML.parse(await Bun.file(filePath).text());
-		if (Array.isArray(parsed)) raw = parsed;
-	} catch (err) {
-		if (!isEnoent(err)) throw err;
-	}
-
-	const seen = new Set<string>();
-	for (const item of raw) {
-		if (item !== null && typeof item === "object") {
-			const entry = item as Record<string, unknown>;
-			if (typeof entry.content === "string") seen.add(secretKey(String(entry.type), entry.content, entry.flags));
-		}
-	}
-
-	const additions: Record<string, unknown>[] = [];
-	for (const entry of entries) {
-		const key = secretKey(entry.type, entry.content, entry.flags);
-		if (seen.has(key)) continue;
-		seen.add(key);
-		additions.push(toManagedRecord(entry));
-	}
-	if (additions.length === 0) return { path: filePath, added: 0, total: raw.length };
-	const merged = [...raw, ...additions];
-
 	await fs.promises.mkdir(agentDir, { recursive: true, mode: 0o700 });
 	if (process.platform !== "win32") await fs.promises.chmod(agentDir, 0o700);
-	await fs.promises.writeFile(filePath, YAML.stringify(merged, null, 2), { mode: 0o600 });
-	if (process.platform !== "win32") await fs.promises.chmod(filePath, 0o600);
-	return { path: filePath, added: additions.length, total: merged.length };
+
+	return await withFileLock(filePath, async () => {
+		let raw: unknown[] = [];
+		try {
+			const parsed = YAML.parse(await Bun.file(filePath).text());
+			if (Array.isArray(parsed)) raw = parsed;
+		} catch (err) {
+			if (!isEnoent(err)) throw err;
+		}
+
+		const seen = new Set<string>();
+		for (const item of raw) {
+			if (item !== null && typeof item === "object") {
+				const entry = item as Record<string, unknown>;
+				if (typeof entry.content === "string") seen.add(secretKey(String(entry.type), entry.content, entry.flags));
+			}
+		}
+
+		const additions: Record<string, unknown>[] = [];
+		for (const entry of entries) {
+			const key = secretKey(entry.type, entry.content, entry.flags);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			additions.push(toManagedRecord(entry));
+		}
+
+		if (additions.length === 0) return { path: filePath, added: 0, total: raw.length };
+		const merged = [...raw, ...additions];
+		await fs.promises.writeFile(filePath, YAML.stringify(merged, null, 2), { mode: 0o600 });
+		if (process.platform !== "win32") await fs.promises.chmod(filePath, 0o600);
+		return { path: filePath, added: additions.length, total: merged.length };
+	});
 }
 
 function secretKey(type: string, content: string, flags: unknown): string {

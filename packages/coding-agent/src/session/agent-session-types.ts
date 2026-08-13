@@ -159,6 +159,8 @@ export interface AgentSessionConfig {
 	skillsSettings?: SkillsSettings;
 	/** Agent directory used when changing memory backends in a live session. */
 	memoryAgentDir?: string;
+	/** Explicit placeholder-key directory used when rebuilding session secret obfuscation. */
+	secretPlaceholderKeyDir?: string;
 	/** Recursion depth used to suppress live backend replacement in subagents. */
 	memoryTaskDepth?: number;
 	/** Creates built-in memory tools for the current backend. */

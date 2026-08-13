@@ -2456,6 +2456,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				session: this.session,
 				settings: this.settings,
 				cwd: this.sessionManager.getCwd(),
+				keyDir: this.session.getSecretPlaceholderKeyDir(),
 				signal,
 				ui,
 			});

@@ -817,6 +817,24 @@ describe("managed secrets load/append", () => {
 			await fs.rm(cwd, { recursive: true, force: true });
 		}
 	});
+	it("preserves distinct concurrent appends and dedupes duplicate entries", async () => {
+		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-agent-"));
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-cwd-"));
+		try {
+			await Promise.all([
+				appendManagedSecrets(agentDir, [{ type: "regex", content: "ConcurrentAlpha" }]),
+				appendManagedSecrets(agentDir, [{ type: "regex", content: "ConcurrentBeta" }]),
+				appendManagedSecrets(agentDir, [{ type: "regex", content: "ConcurrentAlpha" }]),
+			]);
+
+			const merged = await loadSecrets(cwd, agentDir);
+			expect(merged.filter(entry => entry.content === "ConcurrentAlpha")).toHaveLength(1);
+			expect(merged.filter(entry => entry.content === "ConcurrentBeta")).toHaveLength(1);
+		} finally {
+			await fs.rm(agentDir, { recursive: true, force: true });
+			await fs.rm(cwd, { recursive: true, force: true });
+		}
+	});
 	it.skipIf(process.platform === "win32")(
 		"repairs managed secret directory and file permissions on POSIX",
 		async () => {

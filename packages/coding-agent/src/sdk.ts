@@ -3397,6 +3397,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			modelRegistry,
 			toolRegistry,
 			memoryAgentDir: agentDir,
+			secretPlaceholderKeyDir: options.agentDir,
 			memoryTaskDepth: taskDepth,
 			createMemoryTools: restrictToolNames
 				? undefined

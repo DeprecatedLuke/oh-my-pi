@@ -122,6 +122,7 @@ const FORK_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					session: ctx.session,
 					settings: ctx.settings,
 					cwd: ctx.sessionManager.getCwd(),
+					keyDir: ctx.session.getSecretPlaceholderKeyDir(),
 					signal,
 					ui,
 				});
@@ -139,6 +140,7 @@ const FORK_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					session: runtime.session,
 					settings: runtime.settings,
 					cwd: runtime.cwd,
+					keyDir: runtime.session.getSecretPlaceholderKeyDir(),
 					ui: { step: line => void runtime.output(line), working: () => {} },
 				});
 				return commandConsumed();

@@ -461,6 +461,7 @@ export class AgentSession {
 	readonly #tools: SessionTools;
 	readonly #prewalk: PrewalkCoordinator;
 
+	readonly #secretPlaceholderKeyDir: string | undefined;
 	readonly #providerBoundary: SessionProviderBoundary;
 	#promptTemplates: PromptTemplate[];
 	#slashCommands: FileSlashCommand[];
@@ -969,6 +970,7 @@ export class AgentSession {
 		this.settings = config.settings;
 		this.#modelRegistry = config.modelRegistry;
 		this.#eventBus = config.eventBus;
+		this.#secretPlaceholderKeyDir = config.secretPlaceholderKeyDir;
 		this.#codexResetCoordinator = config.codexResetCoordinator ?? defaultCodexAutoRedeemCoordinator;
 		const bashHost: BashRunnerHost = {
 			agent: this.agent,
@@ -6289,6 +6291,9 @@ export class AgentSession {
 			normalizedAppMessage.attribution,
 		);
 		return false;
+	}
+	getSecretPlaceholderKeyDir(): string | undefined {
+		return this.#secretPlaceholderKeyDir;
 	}
 
 	/**
