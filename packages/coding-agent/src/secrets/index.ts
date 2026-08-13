@@ -173,12 +173,12 @@ export const MANAGED_SECRETS_BASENAME = "secrets-managed.yml";
  */
 export async function loadSecrets(cwd: string, agentDir: string): Promise<SecretEntry[]> {
 	const files = [
-		path.join(agentDir, SECRETS_BASENAME),
-		path.join(agentDir, MANAGED_SECRETS_BASENAME),
-		path.join(cwd, ".omp", SECRETS_BASENAME),
-		path.join(cwd, ".omp", MANAGED_SECRETS_BASENAME),
+		loadSecretsFile(path.join(agentDir, SECRETS_BASENAME)),
+		loadManagedSecretsFile(path.join(agentDir, MANAGED_SECRETS_BASENAME)),
+		loadSecretsFile(path.join(cwd, ".omp", SECRETS_BASENAME)),
+		loadManagedSecretsFile(path.join(cwd, ".omp", MANAGED_SECRETS_BASENAME)),
 	];
-	const groups = await Promise.all(files.map(loadSecretsFile));
+	const groups = await Promise.all(files);
 	const byContent = new Map<string, SecretEntry>();
 	for (const group of groups) {
 		for (const entry of group) byContent.set(entry.content, entry);
@@ -348,6 +348,16 @@ export async function buildSecretObfuscator(
 		obfuscator = new SecretObfuscator([{ type: "plain", mode: "replace", content: placeholderKey }], placeholderKey);
 	}
 	return obfuscator;
+}
+
+/** Read a managed secrets file while excluding concurrent `/fix-refusal` appends. */
+async function loadManagedSecretsFile(filePath: string): Promise<SecretEntry[]> {
+	try {
+		return await withFileLock(filePath, async () => await loadSecretsFile(filePath));
+	} catch (err) {
+		if (isEnoent(err)) return [];
+		throw err;
+	}
 }
 
 async function loadSecretsFile(filePath: string): Promise<SecretEntry[]> {

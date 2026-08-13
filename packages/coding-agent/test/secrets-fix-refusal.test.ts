@@ -31,6 +31,7 @@ import {
 	probeSliceEnd,
 	resolveRefusalModelPattern,
 } from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/fix-refusal";
+import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 
 const MAIN = { provider: "anthropic", id: "main", api: "anthropic-messages" } as unknown as Model;
 const UNCENSORED = { provider: "anthropic", id: "uncensored", api: "anthropic-messages" } as unknown as Model;
@@ -831,6 +832,41 @@ describe("managed secrets load/append", () => {
 			expect(merged.filter(entry => entry.content === "ConcurrentAlpha")).toHaveLength(1);
 			expect(merged.filter(entry => entry.content === "ConcurrentBeta")).toHaveLength(1);
 		} finally {
+			await fs.rm(agentDir, { recursive: true, force: true });
+			await fs.rm(cwd, { recursive: true, force: true });
+		}
+	});
+	it("waits for the managed-file lock before reading a partial write", async () => {
+		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-agent-"));
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-cwd-"));
+		const managedPath = path.join(agentDir, "secrets-managed.yml");
+		const lockHeld = Promise.withResolvers<void>();
+		const releaseLock = Promise.withResolvers<void>();
+		let lockTask: Promise<void> | undefined;
+		try {
+			lockTask = withFileLock(managedPath, async () => {
+				await fs.writeFile(managedPath, '[{ type: regex, content: "partial');
+				lockHeld.resolve();
+				await releaseLock.promise;
+				await fs.writeFile(managedPath, '- { type: regex, content: "LOCKED_VALID" }\n');
+			});
+			await lockHeld.promise;
+
+			let settled = false;
+			const loaded = loadSecrets(cwd, agentDir).then(secrets => {
+				settled = true;
+				return secrets;
+			});
+			await new Promise<void>(resolve => setImmediate(resolve));
+			expect(settled).toBe(false);
+
+			releaseLock.resolve();
+			await lockTask;
+			const secrets = await loaded;
+			expect(secrets.some(entry => entry.type === "regex" && entry.content === "LOCKED_VALID")).toBe(true);
+		} finally {
+			releaseLock.resolve();
+			await lockTask?.catch(() => {});
 			await fs.rm(agentDir, { recursive: true, force: true });
 			await fs.rm(cwd, { recursive: true, force: true });
 		}
