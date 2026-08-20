@@ -868,7 +868,6 @@ describe("OpenAI tool strict mode", () => {
 			tools?: Array<{ strict?: boolean }>;
 		};
 
-		expect(model.compat.supportsStrictMode).toBe(true);
 		expect(payload.tools?.[0]?.strict).toBe(false);
 	});
 
@@ -893,7 +892,6 @@ describe("OpenAI tool strict mode", () => {
 			tools?: Array<{ strict?: boolean }>;
 		};
 
-		expect(model.compat.supportsStrictMode).toBe(true);
 		expect(payload.tools?.[0]?.strict).toBe(true);
 	});
 

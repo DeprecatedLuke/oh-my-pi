@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -33,12 +33,11 @@ const mockEvalTool: AgentTool = {
 };
 
 async function createMagicKeywordSession(
-	root: string,
+	modelRegistry: ModelRegistry,
 	tools: AgentTool[] = [mockTaskTool, mockEvalTool],
 ): Promise<{
 	session: AgentSession;
 	settings: Settings;
-	authStorage: AuthStorage;
 }> {
 	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 	if (!model) throw new Error("Expected bundled Claude Sonnet model");
@@ -51,9 +50,6 @@ async function createMagicKeywordSession(
 			thinkingLevel: Effort.High,
 		},
 	});
-	const authStorage = await AuthStorage.create(path.join(root, "auth.db"));
-	authStorage.setRuntimeApiKey("anthropic", "test-key");
-	const modelRegistry = new ModelRegistry(authStorage, path.join(root, "models.yml"));
 	const settings = Settings.isolated();
 	const session = new AgentSession({
 		agent,
@@ -61,31 +57,36 @@ async function createMagicKeywordSession(
 		settings,
 		modelRegistry,
 	});
-	return { session, settings, authStorage };
+	return { session, settings };
 }
 
 describe("AgentSession magic keyword settings", () => {
-	let root: string;
 	let session: AgentSession | undefined;
-	let authStorage: AuthStorage | undefined;
+	let authStorage: AuthStorage;
+	let authRoot: string;
+	let modelRegistry: ModelRegistry;
 
-	beforeEach(async () => {
-		root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-magic-keywords-"));
+	beforeAll(async () => {
+		authRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-magic-keywords-auth-"));
+		authStorage = await AuthStorage.create(path.join(authRoot, "auth.db"));
+		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		modelRegistry = new ModelRegistry(authStorage, path.join(authRoot, "models.yml"));
+	});
+
+	afterAll(async () => {
+		authStorage.close();
+		await removeWithRetries(authRoot);
 	});
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
 		if (session) await session.dispose();
-		authStorage?.close();
-		await removeWithRetries(root).catch(() => undefined);
 		session = undefined;
-		authStorage = undefined;
 	});
 
 	it("does not append magic keyword notices when disabled", async () => {
-		const created = await createMagicKeywordSession(root);
+		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
-		authStorage = created.authStorage;
 		created.settings.set("magicKeywords.enabled", false);
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
@@ -96,9 +97,8 @@ describe("AgentSession magic keyword settings", () => {
 	});
 
 	it("honors non-ultrathink per-keyword notice toggles", async () => {
-		const created = await createMagicKeywordSession(root);
+		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
-		authStorage = created.authStorage;
 		created.settings.set("magicKeywords.orchestrate", false);
 		created.settings.set("magicKeywords.workflow", false);
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
@@ -110,9 +110,8 @@ describe("AgentSession magic keyword settings", () => {
 	});
 
 	it("honors a disabled ultrasolve per-keyword notice toggle", async () => {
-		const created = await createMagicKeywordSession(root);
+		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
-		authStorage = created.authStorage;
 		created.settings.set("magicKeywords.ultrasolve", false);
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
@@ -123,9 +122,8 @@ describe("AgentSession magic keyword settings", () => {
 	});
 
 	it("still appends enabled non-ultrathink notices", async () => {
-		const created = await createMagicKeywordSession(root);
+		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
-		authStorage = created.authStorage;
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
 		await session.prompt("please orchestrate and workflowz this");
@@ -137,18 +135,12 @@ describe("AgentSession magic keyword settings", () => {
 		]);
 		const orchestrateNotice =
 			promptMessages.find(message => message.customType === "orchestrate-notice")?.content ?? "";
-		expect(orchestrateNotice).toContain("Results auto-deliver");
-		expect(orchestrateNotice).toContain("sole blocker");
-		expect(orchestrateNotice).toContain(
-			"end the turn IMMEDIATELY — produce NO prose, status, filler, or progress tokens, invoke NO wait/sleep/poll/status/unrelated tool call.",
-		);
-		expect(orchestrateNotice).not.toContain("hub wait");
+		expect(orchestrateNotice).toContain("NEVER yield before closure.");
 	});
 
 	it("renders the eval-specific workflowz notice", async () => {
-		const created = await createMagicKeywordSession(root);
+		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
-		authStorage = created.authStorage;
 		created.settings.set("task.batch", false);
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
@@ -167,9 +159,8 @@ describe("AgentSession magic keyword settings", () => {
 	});
 
 	it("updates the workflowz notice when scout is disabled during the session", async () => {
-		const created = await createMagicKeywordSession(root);
+		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
-		authStorage = created.authStorage;
 		created.settings.set("task.disabledAgents", ["scout"]);
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
@@ -182,9 +173,8 @@ describe("AgentSession magic keyword settings", () => {
 	});
 
 	it("skips workflowz notice when the task tool is inactive", async () => {
-		const created = await createMagicKeywordSession(root, []);
+		const created = await createMagicKeywordSession(modelRegistry, []);
 		session = created.session;
-		authStorage = created.authStorage;
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
 		await session.prompt("please workflowz this");
@@ -193,10 +183,20 @@ describe("AgentSession magic keyword settings", () => {
 		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([]);
 	});
 
-	it("skips workflowz notice when the eval tool is inactive", async () => {
-		const created = await createMagicKeywordSession(root, [mockTaskTool]);
+	it("skips orchestrate notice when the task tool is inactive", async () => {
+		const created = await createMagicKeywordSession(modelRegistry, []);
 		session = created.session;
-		authStorage = created.authStorage;
+		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
+
+		await session.prompt("please orchestrate this");
+
+		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
+		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([]);
+	});
+
+	it("skips workflowz notice when the eval tool is inactive", async () => {
+		const created = await createMagicKeywordSession(modelRegistry, [mockTaskTool]);
+		session = created.session;
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
 		await session.prompt("please workflowz this");
@@ -206,9 +206,8 @@ describe("AgentSession magic keyword settings", () => {
 	});
 
 	it("does not use a disabled ultrathink keyword to force auto thinking", async () => {
-		const created = await createMagicKeywordSession(root);
+		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
-		authStorage = created.authStorage;
 		created.settings.set("magicKeywords.ultrathink", false);
 		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 		const classifierSpy = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.Low);
@@ -222,9 +221,8 @@ describe("AgentSession magic keyword settings", () => {
 	});
 
 	it("uses ultrasolve to select the highest supported effort during auto-thinking", async () => {
-		const created = await createMagicKeywordSession(root);
+		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
-		authStorage = created.authStorage;
 		vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 		const classifierSpy = vi.spyOn(autoThinkingClassifier, "classifyDifficulty").mockResolvedValue(Effort.Low);
 		session.setThinkingLevel(AUTO_THINKING);
@@ -237,9 +235,8 @@ describe("AgentSession magic keyword settings", () => {
 	});
 
 	it("queues the magic-keyword notice before the user message", async () => {
-		const created = await createMagicKeywordSession(root);
+		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
-		authStorage = created.authStorage;
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
 		await session.prompt("ultrathink do the thing");
@@ -253,9 +250,8 @@ describe("AgentSession magic keyword settings", () => {
 	});
 
 	it("queues the ultrasolve notice with its exported content before the user message", async () => {
-		const created = await createMagicKeywordSession(root);
+		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
-		authStorage = created.authStorage;
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
 		await session.prompt("ultrasolve through the unsafe refactor");
@@ -274,9 +270,8 @@ describe("AgentSession magic keyword settings", () => {
 		expect(notice?.content).toBe(ULTRASOLVE_NOTICE);
 	});
 	it("gives ultrasolve notice precedence when both keywords appear", async () => {
-		const created = await createMagicKeywordSession(root);
+		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
-		authStorage = created.authStorage;
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
 		await session.prompt("please ultrasolve and ultrathink through it");

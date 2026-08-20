@@ -3,10 +3,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { resolveExplicitSearchPaths } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { GrepTool } from "../../src/tools/grep";
 
+const testSettings = Settings.isolated();
 const isWindows = process.platform === "win32";
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
@@ -15,7 +17,7 @@ function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): T
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
+		settings: testSettings,
 		...overrides,
 	};
 }
@@ -58,12 +60,10 @@ describe.skipIf(isWindows)("search with omitted paths", () => {
 	});
 
 	it("defaults to the workspace root when paths is omitted", async () => {
-		const tools = await createTools(createTestSession(cwd));
-		const tool = tools.find(entry => entry.name === "grep");
-		if (!tool) throw new Error("Missing grep tool");
+		const tool = new GrepTool(createTestSession(cwd));
 
-		// Callers that omit `path` would otherwise be rejected at schema
-		// validation with `path: Invalid input` and never run. Omission must
+		// Callers that omit `paths` would otherwise be rejected at schema
+		// validation with `paths: Invalid input` and never run. Omission must
 		// degrade to a workspace-root scan rather than fail the tool call.
 		const result = await tool.execute("search-default-paths", { pattern: "default-needle" });
 
@@ -73,14 +73,12 @@ describe.skipIf(isWindows)("search with omitted paths", () => {
 		expect(details?.fileCount).toBe(1);
 	});
 
-	it("defaults to the workspace root when path is an empty JSON array", async () => {
-		const tools = await createTools(createTestSession(cwd));
-		const tool = tools.find(entry => entry.name === "grep");
-		if (!tool) throw new Error("Missing grep tool");
+	it("defaults to the workspace root when paths is an empty JSON array", async () => {
+		const tool = new GrepTool(createTestSession(cwd));
 
 		const result = await tool.execute("search-empty-paths", {
 			pattern: "default-needle",
-			path: "[]",
+			paths: "[]",
 		});
 
 		expect(getText(result)).toContain("default-needle here");
@@ -97,25 +95,27 @@ describe.skipIf(isWindows)("search across unrelated filesystem trees", () => {
 		// ancestor is the filesystem root. Without the multi-target fanout, the
 		// search tool would scan from `/` and walk the entire filesystem.
 		dirA = await fs.mkdtemp(path.join("/tmp", "pi-search-multi-A-"));
-		dirB = await fs.mkdtemp(path.join("/var/tmp", "pi-search-multi-B-"));
+		dirB = await fs.mkdtemp(path.join(process.cwd(), ".pi-search-multi-B-"));
 		cwd = await fs.mkdtemp(path.join(os.tmpdir(), "pi-search-multi-cwd-"));
 		await Bun.write(path.join(dirA, "alpha.txt"), "shared-needle alpha\n");
 		await Bun.write(path.join(dirB, "beta.txt"), "shared-needle beta\n");
 	});
 
 	afterEach(async () => {
-		await Promise.all([removeWithRetries(dirA), removeWithRetries(dirB), removeWithRetries(cwd)]);
+		await Promise.all([
+			dirA ? removeWithRetries(dirA) : Promise.resolve(),
+			dirB ? removeWithRetries(dirB) : Promise.resolve(),
+			cwd ? removeWithRetries(cwd) : Promise.resolve(),
+		]);
 	});
 
 	it("returns matches from both trees without rooting the scan at /", async () => {
-		const tools = await createTools(createTestSession(cwd));
-		const tool = tools.find(entry => entry.name === "grep");
-		if (!tool) throw new Error("Missing grep tool");
+		const tool = new GrepTool(createTestSession(cwd));
 
 		const start = performance.now();
 		const result = await tool.execute("search-cross-tree", {
 			pattern: "shared-needle",
-			path: `${dirA}; ${dirB}`,
+			paths: `${dirA}; ${dirB}`,
 		});
 		const durationMs = performance.now() - start;
 
@@ -202,13 +202,11 @@ describe.skipIf(isWindows)("search with explicit walker-pruned file targets", ()
 		// The directory walker prunes `.git` unconditionally, so folding the
 		// explicit file into the walk's glob union silently returned 0 matches.
 		// The file must be read directly as its own target.
-		const tools = await createTools(createTestSession(repo));
-		const tool = tools.find(entry => entry.name === "grep");
-		if (!tool) throw new Error("Missing grep tool");
+		const tool = new GrepTool(createTestSession(repo));
 
 		const result = await tool.execute("search-git-config", {
 			pattern: "followTags",
-			path: ".; .git/config",
+			paths: ".; .git/config",
 		});
 		const details = result.details as { matchCount?: number; files?: string[] } | undefined;
 		expect(getText(result)).toContain("followTags = true");
@@ -219,13 +217,11 @@ describe.skipIf(isWindows)("search with explicit walker-pruned file targets", ()
 	it("dedupes matches when a file target overlaps a directory target", async () => {
 		await fs.mkdir(path.join(repo, "src"), { recursive: true });
 		await Bun.write(path.join(repo, "src", "a.ts"), "needle-dup\n");
-		const tools = await createTools(createTestSession(repo));
-		const tool = tools.find(entry => entry.name === "grep");
-		if (!tool) throw new Error("Missing grep tool");
+		const tool = new GrepTool(createTestSession(repo));
 
 		const result = await tool.execute("search-overlap", {
 			pattern: "needle-dup",
-			path: ".; src/a.ts",
+			paths: ".; src/a.ts",
 		});
 		const details = result.details as { matchCount?: number } | undefined;
 		expect(details?.matchCount).toBe(1);

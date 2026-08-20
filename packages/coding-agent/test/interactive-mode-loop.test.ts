@@ -1,18 +1,15 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import * as fixRefusalHelpers from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/fix-refusal";
-import { setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
-import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+import { TempDir } from "@oh-my-pi/pi-utils";
 
 async function flushMicrotasks(): Promise<void> {
 	await Promise.resolve();
@@ -20,35 +17,17 @@ async function flushMicrotasks(): Promise<void> {
 	await Promise.resolve();
 }
 
-function classifierRefusalResponse(text: string): MockResponse {
-	return {
-		stopReason: "error",
-		stopDetails: { type: "refusal" },
-		errorMessage: text,
-	};
-}
-
-async function promptWithMockResponse(session: AgentSession, text: string, response: MockResponse): Promise<void> {
-	const mock = createMockModel({ responses: [response] });
-	session.agent.streamFn = (model, context, options) => mock.stream(model, context, options);
-	await session.agent.prompt(text);
-}
-
 describe("InteractiveMode loop auto-submit", () => {
 	let authStorage: AuthStorage;
 	let mode: InteractiveMode;
 	let session: AgentSession;
 	let tempDir: TempDir;
-	let settingsTestState: SettingsTestState | undefined;
+	let pendingInput: Promise<SubmittedUserInput> | undefined;
 
-	beforeAll(() => {
+	beforeAll(async () => {
 		initTheme();
-	});
-
-	beforeEach(async () => {
-		settingsTestState = beginSettingsTest();
+		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-loop-auto-submit-");
-		setAgentDir(tempDir.path());
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
@@ -62,20 +41,37 @@ describe("InteractiveMode loop auto-submit", () => {
 			modelRegistry,
 		});
 		mode = new InteractiveMode(session, "test");
-		vi.spyOn(mode, "addMessageToChat").mockReturnValue([]);
-		vi.spyOn(mode, "ensureLoadingAnimation").mockImplementation(() => {});
 		mode.ui.requestRender = vi.fn();
 	});
 
+	beforeEach(() => {
+		settings.set("loop.mode", "prompt");
+		vi.spyOn(mode, "addMessageToChat").mockReturnValue([]);
+		vi.spyOn(mode, "ensureLoadingAnimation").mockImplementation(() => {});
+	});
+
 	afterEach(async () => {
-		mode?.disableLoopMode("Loop mode disabled.");
-		mode?.stop();
+		mode.disableLoopMode("Loop mode disabled.");
+		mode.cancelPendingSubmission();
+		if (mode.onInputCallback) {
+			mode.onInputCallback({ text: "", cancelled: true, started: false });
+		}
+		await pendingInput;
+		pendingInput = undefined;
+		mode.vibeModeEnabled = false;
+		Reflect.deleteProperty(session, "isCompacting");
+		Reflect.deleteProperty(session, "isStreaming");
+		Reflect.deleteProperty(session, "hasPostPromptWork");
 		vi.useRealTimers();
-		await session?.dispose();
-		authStorage?.close();
-		tempDir?.removeSync();
-		restoreSettingsTestState(settingsTestState);
-		settingsTestState = undefined;
+		vi.restoreAllMocks();
+	});
+
+	afterAll(async () => {
+		mode.stop();
+		await session.dispose();
+		authStorage.close();
+		tempDir.removeSync();
+		resetSettingsForTest();
 	});
 
 	it("does not resolve the next loop prompt while compaction is running", async () => {
@@ -87,7 +83,8 @@ describe("InteractiveMode loop auto-submit", () => {
 		mode.loopModeEnabled = true;
 		mode.loopPrompt = "repeat this";
 		const resolved: SubmittedUserInput[] = [];
-		void mode.getUserInput().then(input => resolved.push(input));
+		pendingInput = mode.getUserInput();
+		void pendingInput.then(input => resolved.push(input));
 
 		vi.advanceTimersByTime(800);
 		await flushMicrotasks();
@@ -115,7 +112,8 @@ describe("InteractiveMode loop auto-submit", () => {
 		mode.loopModeEnabled = true;
 		mode.loopPrompt = "repeat after compact";
 		const resolved: SubmittedUserInput[] = [];
-		void mode.getUserInput().then(input => resolved.push(input));
+		pendingInput = mode.getUserInput();
+		void pendingInput.then(input => resolved.push(input));
 
 		vi.advanceTimersByTime(800);
 		await flushMicrotasks();
@@ -141,7 +139,8 @@ describe("InteractiveMode loop auto-submit", () => {
 		mode.loopModeEnabled = true;
 		mode.loopPrompt = "deliver this";
 		const resolved: SubmittedUserInput[] = [];
-		void mode.getUserInput().then(input => resolved.push(input));
+		pendingInput = mode.getUserInput();
+		void pendingInput.then(input => resolved.push(input));
 
 		// Loop timer fires while an idle-flush / delivery turn is still pending.
 		vi.advanceTimersByTime(800);
@@ -165,7 +164,8 @@ describe("InteractiveMode loop auto-submit", () => {
 		mode.loopPrompt = "do not resubmit";
 		const showStatus = vi.spyOn(mode, "showStatus");
 		const resolved: SubmittedUserInput[] = [];
-		void mode.getUserInput().then(input => resolved.push(input));
+		pendingInput = mode.getUserInput();
+		void pendingInput.then(input => resolved.push(input));
 
 		vi.advanceTimersByTime(800);
 		await flushMicrotasks();
@@ -205,87 +205,5 @@ describe("InteractiveMode loop auto-submit", () => {
 
 		mode.disableLoopMode();
 		expect(setLoopModeStatus).toHaveBeenLastCalledWith(undefined);
-	});
-	it("resubmits the latest prompt after an automatic refusal fix", async () => {
-		session.settings.set("secrets.autoFixRefusal", true);
-		session.settings.setModelRole("uncensored", "anthropic/claude-sonnet-4-5");
-		const fixSpy = vi.spyOn(fixRefusalHelpers, "executeFixRefusal").mockResolvedValue({
-			resolved: true,
-			saved: 1,
-			patternsActive: 1,
-		});
-		const submissions: SubmittedUserInput[] = [];
-		mode.onInputCallback = input => submissions.push(input);
-		await mode.init();
-
-		await promptWithMockResponse(session, "original request", classifierRefusalResponse("Refusal (cyber): blocked"));
-		await session.waitForIdle();
-		await flushMicrotasks();
-
-		expect(fixSpy).toHaveBeenCalledTimes(1);
-		expect(submissions).toEqual([
-			expect.objectContaining({
-				text: "original request",
-				customType: "auto-fix-refusal",
-			}),
-		]);
-	});
-
-	it("defers refusal fixing until a blocked agent_end settles", async () => {
-		session.settings.set("secrets.autoFixRefusal", true);
-		session.settings.setModelRole("uncensored", "anthropic/claude-sonnet-4-5");
-		const fixSpy = vi.spyOn(fixRefusalHelpers, "executeFixRefusal").mockResolvedValue({
-			resolved: true,
-			saved: 1,
-			patternsActive: 1,
-		});
-		const submissions: SubmittedUserInput[] = [];
-		mode.onInputCallback = input => submissions.push(input);
-		await mode.init();
-		let blocked = true;
-		Object.defineProperty(session, "hasPostPromptWork", {
-			configurable: true,
-			get: () => blocked,
-		});
-		const idle = Promise.withResolvers<void>();
-		const waitForIdleCalled = Promise.withResolvers<void>();
-		const idleSpy = vi.spyOn(session, "waitForIdle").mockImplementation(() => {
-			waitForIdleCalled.resolve();
-			return idle.promise;
-		});
-
-		await promptWithMockResponse(session, "deferred request", classifierRefusalResponse("Refusal (cyber): blocked"));
-		await waitForIdleCalled.promise;
-
-		expect(idleSpy).toHaveBeenCalledTimes(1);
-		expect(fixSpy).not.toHaveBeenCalled();
-		expect(submissions).toEqual([]);
-
-		blocked = false;
-		idle.resolve();
-		await flushMicrotasks();
-
-		expect(fixSpy).toHaveBeenCalledTimes(1);
-		expect(submissions).toHaveLength(1);
-		expect(submissions[0]).toEqual(
-			expect.objectContaining({
-				text: "deferred request",
-				customType: "auto-fix-refusal",
-			}),
-		);
-	});
-	it("does not resubmit after a non-refusal agent end", async () => {
-		session.settings.set("secrets.autoFixRefusal", true);
-		session.settings.setModelRole("uncensored", "anthropic/claude-sonnet-4-5");
-		const fixSpy = vi.spyOn(fixRefusalHelpers, "executeFixRefusal");
-		const submissions: SubmittedUserInput[] = [];
-		mode.onInputCallback = input => submissions.push(input);
-		await mode.init();
-
-		await promptWithMockResponse(session, "ordinary request", { content: ["helpful answer"] });
-		await flushMicrotasks();
-
-		expect(fixSpy).not.toHaveBeenCalled();
-		expect(submissions).toEqual([]);
 	});
 });

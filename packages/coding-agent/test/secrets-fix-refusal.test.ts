@@ -833,6 +833,27 @@ describe("managed secrets load/append", () => {
 			await fs.rm(cwd, { recursive: true, force: true });
 		}
 	});
+	it("loads managed secrets once when agentDir is the project .omp directory", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-cwd-"));
+		const agentDir = path.join(cwd, ".omp");
+		try {
+			await fs.mkdir(agentDir, { recursive: true });
+			await Bun.write(
+				path.join(agentDir, "secrets-managed.yml"),
+				`- { type: regex, content: "SAME_PATH_FIRST" }
+- { type: plain, content: "SAME_PATH_SECOND" }
+`,
+			);
+
+			const loaded = await loadSecrets(cwd, agentDir);
+			expect(loaded.map(entry => ({ type: entry.type, content: entry.content }))).toEqual([
+				{ type: "regex", content: "SAME_PATH_FIRST" },
+				{ type: "plain", content: "SAME_PATH_SECOND" },
+			]);
+		} finally {
+			await fs.rm(cwd, { recursive: true, force: true });
+		}
+	});
 	it("preserves distinct concurrent appends and dedupes duplicate entries", async () => {
 		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-agent-"));
 		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-cwd-"));

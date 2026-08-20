@@ -224,7 +224,7 @@ describe("job renderer task-result preview", () => {
 				details: {
 					op: "jobs" as const,
 					jobs: [],
-					agents: [{ id: "Worker", parentId: "Main", activity: "grepping the tree", ageMs: 65_000 }],
+					agents: [{ id: "Worker", parentId: "Main", activity: "grepping the tree", ageMs: 65_000, live: true }],
 				},
 			};
 			const component = hubToolRenderer.renderResult(
@@ -241,8 +241,8 @@ describe("job renderer task-result preview", () => {
 
 		it("keeps a jobs snapshot visible when it carries an agent roster", () => {
 			const result = {
-				content: [{ type: "text" as const, text: "No background jobs." }],
-				details: { op: "jobs" as const, jobs: [], agents: [{ id: "Worker", ageMs: 1_000 }] },
+				content: [{ type: "text" as const, text: "No running background jobs to wait for." }],
+				details: { op: "wait" as const, jobs: [], agents: [{ id: "Worker", ageMs: 1_000, live: false }] },
 			};
 			const component = hubToolRenderer.renderResult(
 				result,
@@ -252,6 +252,9 @@ describe("job renderer task-result preview", () => {
 			);
 			const output = Bun.stripANSI((component.render(120) as readonly string[]).join("\n"));
 			expect(output).toContain("Worker");
+			// A ref claiming `running` with no turn in flight is flagged, not shown
+			// as live work.
+			expect(output).toContain("no turn");
 		});
 	});
 });

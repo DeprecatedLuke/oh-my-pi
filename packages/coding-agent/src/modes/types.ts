@@ -331,6 +331,17 @@ export interface InteractiveModeContext {
 		message: AgentMessage,
 		options?: { imageLinks?: readonly (string | undefined)[] },
 	): void;
+	/** True while an optimistically-rendered `/skill:` row awaits its canonical `message_start`. */
+	optimisticSkillMessagePending: boolean;
+	/** Optimistically renders a user-invoked `/skill:` row before its awaited dispatch (issue #8895). */
+	renderOptimisticSkillMessage(
+		message: AgentMessage,
+		options?: { imageLinks?: readonly (string | undefined)[] },
+	): void;
+	/** Swaps the optimistic `/skill:` row for the canonical message emitted by the session. */
+	reconcileOptimisticSkillMessage(message: AgentMessage): void;
+	/** Drops the optimistic `/skill:` row when dispatch fails or bails before reaching the agent. */
+	clearOptimisticSkillMessage(): void;
 	isKnownSlashCommand(text: string): boolean;
 	addMessageToChat(
 		message: AgentMessage,
@@ -341,7 +352,13 @@ export interface InteractiveModeContext {
 		},
 	): Component[];
 	renderSessionContext(sessionContext: SessionContext, options?: RenderSessionContextOptions): void;
-	renderInitialMessages(options?: { preserveExistingChat?: boolean; clearTerminalHistory?: boolean }): void;
+	/** Render a session context in bounded chunks so terminal input runs between transcript paints. */
+	renderSessionContextIncrementally(
+		sessionContext: SessionContext,
+		options: RenderSessionContextOptions,
+		renderChunk?: () => void,
+	): Promise<void>;
+	renderInitialMessages(options?: { preserveExistingChat?: boolean; clearTerminalHistory?: boolean }): Promise<void>;
 	getUserMessageText(message: Message): string;
 	findLastAssistantMessage(): AssistantMessage | undefined;
 	extractAssistantText(message: AssistantMessage): string;

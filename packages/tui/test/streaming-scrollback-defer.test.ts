@@ -5,6 +5,7 @@ import {
 	type NativeScrollbackLiveRegion,
 	TUI,
 } from "@oh-my-pi/pi-tui";
+import { VirtualRenderScheduler } from "./virtual-render-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 
 class LineList implements Component {
@@ -90,21 +91,18 @@ class SnapshotLiveLineList extends LineList implements NativeScrollbackLiveRegio
 	}
 }
 
+/** One scheduler per file; `beforeEach` rewinds it so each test starts at t=0 with an empty queue. */
+const scheduler = new VirtualRenderScheduler();
+
 async function settle(term: VirtualTerminal): Promise<void> {
-	const nextTick = Promise.withResolvers<void>();
-	process.nextTick(nextTick.resolve);
-	await nextTick.promise;
-	await Bun.sleep(40);
-	await term.flush();
+	await scheduler.settle(term);
 }
 
 // The non-multiplexer resize fast path paints the viewport at once and defers
 // the authoritative full replay (the ED3 scrollback rebuild) until the drag has
-// been quiet for the resize settle window (120 ms). This is an integration test
-// against the real render scheduler, so the window is driven with a real delay.
+// been quiet for the resize settle window (120 ms). Open that window explicitly.
 async function settleResize(term: VirtualTerminal): Promise<void> {
-	await Bun.sleep(160);
-	await settle(term);
+	await scheduler.advance(term, 160);
 }
 
 function capture(term: VirtualTerminal): string[] {
@@ -140,12 +138,14 @@ function rows(prefix: string, count: number): string[] {
 describe("streaming scrollback defer", () => {
 	let savedTerminalEnv: Record<string, string | undefined> = {};
 	beforeEach(() => {
+		scheduler.reset();
 		// A resize on Warp takes the in-place path (no ED3), and multiplexer
 		// panes intentionally avoid scrollback clearing. Neutralize the ambient
 		// terminal identity so direct-terminal scrollback assertions stay
 		// deterministic on any dev machine, including CI running inside tmux.
 		for (const key of [
 			"TERM_PROGRAM",
+			"HERDR_ENV",
 			"PI_TUI_RESIZE_IN_PLACE",
 			"TMUX",
 			"STY",
@@ -175,7 +175,7 @@ describe("streaming scrollback defer", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const sealed = new LineList(rows("prior-", 12));
 		const live = new LiveLineList([]);
 
@@ -219,7 +219,7 @@ describe("streaming scrollback defer", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		// The only block is the live one (liveRegionStart === 0). Rows that scroll
 		// above the viewport are committed by the engine floor so they reach native
 		// scrollback rather than vanishing; the block grows append-only here, so no
@@ -250,7 +250,7 @@ describe("streaming scrollback defer", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(60, 8, 1_000);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const wall = new PinnedSeamLineList([]);
 
 		try {
@@ -287,7 +287,7 @@ describe("streaming scrollback defer", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		// The only block is the live one (liveRegionStart === 0), but unlike a
 		// volatile tool preview it is append-only (a streaming assistant reply).
 		// Rows that scroll above the viewport must reach native scrollback rather
@@ -319,7 +319,7 @@ describe("streaming scrollback defer", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(24, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const sealed = new LineList(rows("prior-", 12));
 		const live = new LiveLineList([]);
 
@@ -357,7 +357,7 @@ describe("streaming scrollback defer", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(24, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const sealed = new LineList(rows("prior-", 12));
 		// Volatile live transcript block: seam at 0, no commit-safe end.
 		const live = new LiveLineList([]);
@@ -398,7 +398,7 @@ describe("streaming scrollback defer", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(40, 10);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const component = new LineList([...rows("init-", 10), "prompt"]);
 
 		try {
@@ -446,7 +446,7 @@ describe("streaming scrollback defer", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(40, 10);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const component = new LineList([...rows("init-", 10), "prompt"]);
 
 		try {
@@ -481,7 +481,7 @@ describe("streaming scrollback defer", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		// Sealed prefix above a live block: growth commits the sealed rows to
 		// native scrollback; a later collapse must not repaint them back into the
 		// viewport (which would duplicate them in history with no ED3 to erase).
@@ -520,7 +520,7 @@ describe("streaming scrollback defer", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(24, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const sealed = new LineList(rows("base-", 12));
 
 		try {
@@ -559,7 +559,7 @@ describe("streaming scrollback defer", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(40, 10);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const component = new LineList([...rows("init-", 5), "prompt"]);
 
 		try {
@@ -602,7 +602,7 @@ describe("streaming scrollback defer", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const probe = new CommittedRowsProbe([]);
 
 		try {
@@ -632,7 +632,7 @@ describe("streaming scrollback defer", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		// Durable but volatile: an interior row re-lays-out every frame (a table
 		// re-aligning), so it never earns a byte-stable commit-safe end. The block
 		// alone overflows the 4-row viewport. Its scrolled-off head must reach
@@ -670,7 +670,7 @@ describe("streaming scrollback defer", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const live = new SnapshotLiveLineList(rows("row-", 12));
 
 		try {
@@ -774,6 +774,7 @@ function expectNoLoss(term: VirtualTerminal, frame: string[]): string[] {
 describe("scrollback commit gap — commit-unstable barriers", () => {
 	let savedTerminalEnv: Record<string, string | undefined> = {};
 	beforeEach(() => {
+		scheduler.reset();
 		for (const key of ["TERM_PROGRAM", "PI_TUI_RESIZE_IN_PLACE"]) {
 			savedTerminalEnv[key] = Bun.env[key];
 			delete Bun.env[key];
@@ -792,7 +793,7 @@ describe("scrollback commit gap — commit-unstable barriers", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const root = new SeamComponent();
 
 		try {
@@ -832,7 +833,7 @@ describe("scrollback commit gap — commit-unstable barriers", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const root = new SeamComponent();
 
 		try {
@@ -867,7 +868,7 @@ describe("scrollback commit gap — commit-unstable barriers", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const root = new SeamComponent();
 
 		try {
@@ -906,7 +907,7 @@ describe("scrollback commit gap — commit-unstable barriers", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 5);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		// Realistic transcript shape: a still-live barrier block above a finalized
 		// tail block. The container concatenates them; the topmost seam (the
 		// barrier at row 0) pins the boundary, forcing the finalized tail to commit
@@ -947,7 +948,7 @@ describe("scrollback commit gap — commit-unstable barriers", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 5);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const root = new SeamComponent();
 
 		try {
@@ -988,7 +989,7 @@ describe("scrollback commit gap — commit-unstable barriers", () => {
 		// the prose tail's in-place re-wrap must NOT spray duplicate snapshots.
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const root = new SeamComponent();
 
 		try {
@@ -1024,7 +1025,7 @@ describe("scrollback commit gap — commit-unstable barriers", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const root = new SeamComponent();
 
 		try {
@@ -1067,7 +1068,7 @@ describe("scrollback commit gap — commit-unstable barriers", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const root = new SeamComponent();
 
 		try {
@@ -1108,7 +1109,7 @@ describe("scrollback commit gap — commit-unstable barriers", () => {
 		if (process.platform === "win32") return;
 		const term = new VirtualTerminal(20, 4);
 		overrideProbe(term, undefined);
-		const tui = new TUI(term);
+		const tui = new TUI(term, undefined, { renderScheduler: scheduler });
 		const root = new SeamComponent();
 
 		try {

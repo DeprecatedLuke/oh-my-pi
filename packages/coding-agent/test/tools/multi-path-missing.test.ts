@@ -3,8 +3,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { GlobTool } from "../../src/tools/glob";
+import { GrepTool } from "../../src/tools/grep";
+
+const testSettings = Settings.isolated();
 
 // Regression for grievances #208 (find) and #209 (search): a multi-path call
 // that includes an entry which does not exist on disk must not abort the whole
@@ -17,7 +21,7 @@ function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): T
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
-		settings: Settings.isolated(),
+		settings: testSettings,
 		...overrides,
 	};
 }
@@ -44,13 +48,11 @@ describe("multi-path tools tolerate missing entries", () => {
 	});
 
 	it("search returns matches from existing paths and reports the missing one", async () => {
-		const tools = await createTools(createTestSession(tempDir));
-		const tool = tools.find(entry => entry.name === "grep");
-		if (!tool) throw new Error("Missing grep tool");
+		const tool = new GrepTool(createTestSession(tempDir));
 
 		const result = await tool.execute("search-multi-missing", {
+			paths: "src/; tests/",
 			pattern: "shared-needle",
-			path: "src/; tests/",
 		});
 
 		const text = getText(result);
@@ -64,25 +66,21 @@ describe("multi-path tools tolerate missing entries", () => {
 	});
 
 	it("search errors only when every path is missing", async () => {
-		const tools = await createTools(createTestSession(tempDir));
-		const tool = tools.find(entry => entry.name === "grep");
-		if (!tool) throw new Error("Missing grep tool");
+		const tool = new GrepTool(createTestSession(tempDir));
 
 		const promise = tool.execute("search-all-missing", {
+			paths: "does-not-exist/; also-missing/",
 			pattern: "shared-needle",
-			path: "does-not-exist/; also-missing/",
 		});
 
 		await expect(promise).rejects.toThrow(/Path not found.*does-not-exist.*also-missing/s);
 	});
 
 	it("find returns matches from existing globs and reports the missing one", async () => {
-		const tools = await createTools(createTestSession(tempDir));
-		const tool = tools.find(entry => entry.name === "glob");
-		if (!tool) throw new Error("Missing glob tool");
+		const tool = new GlobTool(createTestSession(tempDir), { rootPathAlias: true });
 
 		const result = await tool.execute("find-multi-missing", {
-			path: "src/**/*.ts; tests/**/*.ts",
+			paths: ["src/**/*.ts", "tests/**/*.ts"],
 		});
 
 		const text = getText(result);
@@ -98,12 +96,10 @@ describe("multi-path tools tolerate missing entries", () => {
 	});
 
 	it("find errors only when every glob's base directory is missing", async () => {
-		const tools = await createTools(createTestSession(tempDir));
-		const tool = tools.find(entry => entry.name === "glob");
-		if (!tool) throw new Error("Missing glob tool");
+		const tool = new GlobTool(createTestSession(tempDir), { rootPathAlias: true });
 
 		const promise = tool.execute("find-all-missing", {
-			path: "nope/**/*.ts; also-nope/**/*.ts",
+			paths: ["nope/**/*.ts", "also-nope/**/*.ts"],
 		});
 
 		await expect(promise).rejects.toThrow(/Path not found.*nope.*also-nope/s);

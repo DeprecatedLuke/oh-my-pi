@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
@@ -25,37 +25,15 @@ describe("InteractiveMode todo HUD persistence", () => {
 	let session: AgentSession;
 	let mode: InteractiveMode;
 	let eventBus: EventBus;
+	let modelRegistry: ModelRegistry;
 
-	beforeAll(async () => {
-		await initTheme();
-	});
-
-	beforeEach(async () => {
-		resetSettingsForTest();
-		tempDir = TempDir.createSync("@pi-todo-clear-");
-	});
-
-	afterEach(async () => {
-		mode?.stop();
-		await session?.dispose();
-		authStorage?.close();
-		tempDir?.removeSync();
-		vi.useRealTimers();
-		vi.restoreAllMocks();
-		resetSettingsForTest();
-	});
-
-	async function createMode(todoClearDelay: number, asyncJobManager?: AsyncJobManager): Promise<void> {
-		await Settings.init({
-			inMemory: true,
-			cwd: tempDir.path(),
-			overrides: { "tasks.todoClearDelay": todoClearDelay },
-		});
-		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage);
+	async function replaceMode(asyncJobManager?: AsyncJobManager): Promise<void> {
+		if (mode) {
+			mode.stop();
+			await session.dispose();
+		}
 		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
-
 		eventBus = new EventBus();
 		session = new AgentSession({
 			agent: new Agent({
@@ -67,15 +45,44 @@ describe("InteractiveMode todo HUD persistence", () => {
 				},
 			}),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated({ "tasks.todoClearDelay": todoClearDelay }),
+			settings: Settings.isolated(),
 			modelRegistry,
 			ownedAsyncJobManager: asyncJobManager,
 		});
 		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, eventBus);
 	}
 
-	it("clears closed todos from the panel instantly without mutating session history", async () => {
-		await createMode(0);
+	beforeAll(async () => {
+		await initTheme();
+		resetSettingsForTest();
+		tempDir = TempDir.createSync("@pi-todo-clear-");
+		await Settings.init({ inMemory: true, cwd: tempDir.path() });
+		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
+		modelRegistry = new ModelRegistry(authStorage);
+		await replaceMode();
+	});
+
+	afterEach(() => {
+		session.setTodoPhases([]);
+		mode.setTodos([]);
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+
+	afterAll(async () => {
+		mode?.stop();
+		await session?.dispose();
+		authStorage?.close();
+		tempDir?.removeSync();
+		resetSettingsForTest();
+	});
+
+	function setTodoClearDelay(todoClearDelay: number): void {
+		session.settings.override("tasks.todoClearDelay", todoClearDelay);
+	}
+
+	it("clears closed todos from the panel instantly without mutating session history", () => {
+		setTodoClearDelay(0);
 		const phases: TodoPhase[] = [
 			{
 				name: "Implementation",
@@ -112,8 +119,8 @@ describe("InteractiveMode todo HUD persistence", () => {
 		},
 	];
 
-	it("keeps an unfinished plan's progress when the auto-clear delay elapses", async () => {
-		await createMode(1);
+	it("keeps an unfinished plan's progress when the auto-clear delay elapses", () => {
+		setTodoClearDelay(1);
 		vi.useFakeTimers();
 
 		mode.setTodos(unfinishedPlan());
@@ -126,8 +133,8 @@ describe("InteractiveMode todo HUD persistence", () => {
 		expect(rendered).toContain("current task");
 	});
 
-	it("keeps an unfinished plan's progress when auto-clear is instant", async () => {
-		await createMode(0);
+	it("keeps an unfinished plan's progress when auto-clear is instant", () => {
+		setTodoClearDelay(0);
 
 		mode.setTodos(unfinishedPlan());
 
@@ -136,16 +143,16 @@ describe("InteractiveMode todo HUD persistence", () => {
 		expect(rendered).toContain("current task");
 	});
 
-	it("leaves closed todos visible when auto-clear is disabled", async () => {
-		await createMode(-1);
+	it("leaves closed todos visible when auto-clear is disabled", () => {
+		setTodoClearDelay(-1);
 
 		mode.setTodos([{ name: "Implementation", tasks: [{ content: "done task", status: "completed" }] }]);
 
 		expect(renderTodos(mode)).toContain("done task");
 	});
 
-	it("clears closed todos after the configured delay", async () => {
-		await createMode(1);
+	it("clears closed todos after the configured delay", () => {
+		setTodoClearDelay(1);
 		vi.useFakeTimers();
 
 		mode.setTodos([{ name: "Implementation", tasks: [{ content: "done task", status: "completed" }] }]);
@@ -158,8 +165,8 @@ describe("InteractiveMode todo HUD persistence", () => {
 		expect(renderTodos(mode)).not.toContain("done task");
 	});
 
-	it("keeps the anchored todo panel in the live region while visible", async () => {
-		await createMode(-1);
+	it("keeps the anchored todo panel in the live region while visible", () => {
+		setTodoClearDelay(-1);
 
 		mode.setTodos([{ name: "Implementation", tasks: [{ content: "pending task", status: "pending" }] }]);
 		const liveRegion = mode.todoContainer as unknown as NativeScrollbackLiveRegion;
@@ -170,7 +177,8 @@ describe("InteractiveMode todo HUD persistence", () => {
 	});
 
 	it("marks todos complete when subagent reconciliation reports a finished agent", async () => {
-		await createMode(-1);
+		await replaceMode();
+		setTodoClearDelay(-1);
 		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
 		session.setTodoPhases([
 			{ name: "Implementation", tasks: [{ content: "Fix review comments", status: "pending" }] },
@@ -178,6 +186,8 @@ describe("InteractiveMode todo HUD persistence", () => {
 		mode.setTodos(session.getTodoPhases());
 
 		await mode.init();
+		// Subagent lifecycle changes coalesce behind a 100ms observer UI sync
+		// timer before todo reconciliation runs; flush it deterministically.
 		vi.useFakeTimers();
 		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
 			id: "ReviewFixer",
@@ -193,7 +203,8 @@ describe("InteractiveMode todo HUD persistence", () => {
 	});
 
 	it("completes a blocked todo when the detached subagent it waits on finishes", async () => {
-		await createMode(-1);
+		await replaceMode();
+		setTodoClearDelay(-1);
 		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
 		// A todo blocked while waiting on a detached subagent. Blocked todos are
 		// excluded from the stop reminder, so if reconciliation skipped them this
@@ -226,7 +237,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 
 	it("keeps the Background Jobs panel after a detached observer refresh", async () => {
 		const manager = new AsyncJobManager({});
-		await createMode(-1, manager);
+		await replaceMode(manager);
 		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
 		const jobGate = Promise.withResolvers<string>();
 		manager.register(
@@ -299,9 +310,6 @@ describe("InteractiveMode todo HUD anchor", () => {
 
 	beforeAll(async () => {
 		await initTheme();
-	});
-
-	beforeEach(async () => {
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-todo-hud-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
@@ -320,13 +328,17 @@ describe("InteractiveMode todo HUD anchor", () => {
 		mode = new InteractiveMode(session, "test");
 	});
 
-	afterEach(async () => {
+	afterEach(() => {
+		mode.setTodos([]);
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+
+	afterAll(async () => {
 		mode?.stop();
 		await session?.dispose();
 		authStorage?.close();
 		tempDir?.removeSync();
-		vi.useRealTimers();
-		vi.restoreAllMocks();
 		resetSettingsForTest();
 	});
 

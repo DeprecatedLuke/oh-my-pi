@@ -14,6 +14,7 @@ import {
 	setHostLlmBackend,
 } from "@oh-my-pi/pi-mnemopi/core/llm-backends";
 import {
+	type MnemopiLlmCompletionTask,
 	type ResolvedMnemopiRuntimeOptions,
 	withMnemopiRuntimeOptions,
 } from "@oh-my-pi/pi-mnemopi/core/runtime-options";
@@ -116,6 +117,7 @@ describe("structured extraction", () => {
 		process.env.MNEMOPI_LLM_ENABLED = "true";
 		let capturedPrompt = "";
 		let capturedTemperature = -1;
+		let capturedTask: MnemopiLlmCompletionTask | undefined;
 		const resolved: ResolvedMnemopiRuntimeOptions = {
 			llm: {
 				enabled: true,
@@ -123,6 +125,7 @@ describe("structured extraction", () => {
 				complete: (prompt, opts) => {
 					capturedPrompt = prompt;
 					capturedTemperature = opts?.temperature ?? -1;
+					capturedTask = opts?.task;
 					return "Sam works at Globex\nSam prefers dark mode";
 				},
 			},
@@ -135,6 +138,10 @@ describe("structured extraction", () => {
 		expect(facts).toEqual(["Sam works at Globex", "Sam prefers dark mode"]);
 		expect(capturedPrompt).toContain("ONLY-LINES for: Sam works at Globex and prefers dark mode.");
 		expect(capturedTemperature).toBe(0);
+		expect(capturedTask).toEqual({
+			kind: "memory-extraction",
+			input: "Sam works at Globex and prefers dark mode.",
+		});
 		expect(getExtractionStats().by_tier.host.successes).toBe(1);
 	});
 

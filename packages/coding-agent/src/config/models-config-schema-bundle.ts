@@ -42,6 +42,7 @@ export const getModelsConfigSchemaBundle = once(() => {
 		"disableReasoningOnForcedToolChoice?": "boolean",
 		"disableReasoningOnToolChoice?": "boolean",
 		"thinkingFormat?": '"openai" | "openrouter" | "zai" | "qwen" | "qwen-chat-template"',
+		"qwenTemplateReasoningEffort?": "boolean",
 		"openRouterRouting?": OpenRouterRoutingSchema,
 		"vercelGatewayRouting?": VercelGatewayRoutingSchema,
 		"extraBody?": { "[string]": "unknown" },
@@ -167,6 +168,7 @@ export const getModelsConfigSchemaBundle = once(() => {
 		"reasoning?": "boolean",
 		"thinking?": ModelThinkingSchema,
 		"input?": '("text" | "image")[]',
+		"imageInputDecoder?": '"stb"',
 		"supportsTools?": "boolean",
 		"cost?": {
 			input: "number",
@@ -216,6 +218,7 @@ export const getModelsConfigSchemaBundle = once(() => {
 		"reasoning?": "boolean",
 		"thinking?": ModelThinkingSchema,
 		"input?": '("text" | "image")[]',
+		"imageInputDecoder?": '"stb"',
 		"supportsTools?": "boolean",
 		"cost?": {
 			"input?": "number",

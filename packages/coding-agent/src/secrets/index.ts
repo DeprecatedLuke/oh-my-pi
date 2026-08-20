@@ -172,11 +172,20 @@ export const MANAGED_SECRETS_BASENAME = "secrets-managed.yml";
  * entries override hand-authored ones, and project entries override global.
  */
 export async function loadSecrets(cwd: string, agentDir: string): Promise<SecretEntry[]> {
+	const managedPromises = new Map<string, Promise<SecretEntry[]>>();
+	const loadManaged = (filePath: string): Promise<SecretEntry[]> => {
+		const normalizedPath = path.resolve(filePath);
+		const existing = managedPromises.get(normalizedPath);
+		if (existing) return existing;
+		const promise = loadManagedSecretsFile(filePath);
+		managedPromises.set(normalizedPath, promise);
+		return promise;
+	};
 	const files = [
 		loadSecretsFile(path.join(agentDir, SECRETS_BASENAME)),
-		loadManagedSecretsFile(path.join(agentDir, MANAGED_SECRETS_BASENAME)),
+		loadManaged(path.join(agentDir, MANAGED_SECRETS_BASENAME)),
 		loadSecretsFile(path.join(cwd, ".omp", SECRETS_BASENAME)),
-		loadManagedSecretsFile(path.join(cwd, ".omp", MANAGED_SECRETS_BASENAME)),
+		loadManaged(path.join(cwd, ".omp", MANAGED_SECRETS_BASENAME)),
 	];
 	const groups = await Promise.all(files);
 	const byContent = new Map<string, SecretEntry>();
@@ -367,7 +376,11 @@ async function isExistingDirectory(directory: string): Promise<boolean> {
 		return (await fs.promises.stat(directory)).isDirectory();
 	} catch (err) {
 		if (isEnoent(err)) return false;
-		throw err;
+		logger.warn("Failed to access managed secrets parent directory", {
+			path: directory,
+			error: String(err),
+		});
+		return false;
 	}
 }
 
