@@ -140,6 +140,7 @@ describe("AgentSession handoff", () => {
 		const handoffText = "## Goal\nContinue from here";
 		const previousSessionFile = session.sessionFile;
 		const previousSessionId = session.sessionId;
+		const previousBranchIds = sessionManager.getBranch().map(entry => entry.id);
 		const generateHandoffSpy = vi
 			.spyOn(compactionModule, "generateHandoffFromContext")
 			.mockResolvedValue(handoffText);
@@ -151,7 +152,10 @@ describe("AgentSession handoff", () => {
 		expect(result?.document).toBe(handoffText);
 		expect(session.sessionFile).toBe(previousSessionFile);
 		expect(session.sessionId).toBe(previousSessionId);
-		const compaction = sessionManager.getBranch().at(-1);
+		expect(sessionManager.getSessionId()).toBe(previousSessionId);
+		const branch = sessionManager.getBranch();
+		expect(branch.map(entry => entry.id)).toEqual(expect.arrayContaining(previousBranchIds));
+		const compaction = branch.at(-1);
 		expect(compaction).toMatchObject({ type: "compaction" });
 		if (compaction?.type !== "compaction") throw new Error("Expected handoff compaction entry");
 		expect(compaction.summary).toContain(handoffText);

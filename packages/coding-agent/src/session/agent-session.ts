@@ -1669,15 +1669,12 @@ export class AgentSession {
 			sessionManager: this.sessionManager,
 			settings: this.settings,
 			modelRegistry: this.#modelRegistry,
-			extensionRunner: this.#extensionRunner,
 			sideStreamFn: this.#sideStreamFn,
 			getObfuscator: () => this.#obfuscator,
 			model: () => this.model,
 			thinkingLevel: () => this.thinkingLevel,
 			sessionId: () => this.sessionId,
-			sessionFile: () => this.sessionFile,
 			baseSystemPrompt: () => this.#tools.baseSystemPrompt,
-			assertVibeSessionTransitionAllowed: action => this.#assertVibeSessionTransitionAllowed(action),
 			setSkipPostTurnMaintenance: timestamp => {
 				this.#maintenance.skipPostTurnMaintenanceAssistantTimestamp = timestamp;
 				if (timestamp === undefined) this.#skippedPostTurnSpeculationCompletion = undefined;
@@ -1687,29 +1684,6 @@ export class AgentSession {
 			convertMessagesToLlm: (messages, signal) => this.convertMessagesToLlm(messages, signal),
 			prepareSimpleStreamOptions: (options, provider) => this.prepareSimpleStreamOptions(options, provider),
 			effectiveServiceTier: model => this.#models.effectiveServiceTier(model),
-			flushPendingBash: () => this.#bash.flushPending(),
-			beginBashSessionTransition: () => this.#bash.beginSessionTransition(),
-			markBashSessionTransition: transition => this.#bash.markSessionTransition(transition),
-			finishBashSessionTransition: (transition, success) => this.#bash.finishSessionTransition(transition, success),
-			cancelOwnAsyncJobs: () => this.#cancelOwnAsyncJobs(),
-			clearCheckpointRuntimeState: () => this.#clearCheckpointRuntimeState(),
-			clearSessionScopedToolState: () => this.#clearSessionScopedToolState(),
-			clearFreshProviderSessionId: () => {
-				this.#freshProviderSessionId = undefined;
-			},
-			syncAgentSessionId: () => this.#syncAgentSessionId(),
-			rekeyMemoryForCurrentSessionId: () => this.#memory.rekeyForCurrentSessionId(),
-			resetMemoryContextForNewTranscript: () => this.#memory.resetContextForNewTranscript(),
-			clearPendingNextTurnMessages: () => {
-				this.#pendingNextTurnMessages = [];
-			},
-			resetTodoCycle: () => this.#todo.resetCycle(),
-			buildDisplaySessionContext: () => this.buildDisplaySessionContext(),
-			resetAdvisorSessionState: () => this.#advisors.resetSessionState(),
-			drainAndDetachAdvisorRecorders: () => this.#advisors.drainAndDetachRecorders(),
-			reattachAdvisorRecorderFeeds: () => this.#advisors.reattachRecorderFeeds(),
-			clearAdvisorCost: () => this.#advisors.clearCost(),
-			syncTodoPhasesFromBranch: () => this.#todo.syncFromBranch(),
 		};
 		this.#handoff = new SessionHandoff(handoffHost);
 

@@ -13,77 +13,11 @@ import type { Message, Model, ServiceTier, SimpleStreamOptions } from "@oh-my-pi
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
-import type { ExtensionRunner, SessionBeforeSwitchResult } from "../extensibility/extensions";
-import { copyLocalArtifacts, resolveLocalUrlToPath } from "../internal-urls";
 import { obfuscateProviderContext } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import type { HandoffResult, SessionHandoffOptions } from "./agent-session-types";
-import type { BashSessionTransition } from "./bash-runner";
-import type { SessionContext } from "./session-context";
-import type { SessionEntry } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 
-function extractVerbatimMessageText(message: AgentMessage): string | undefined {
-	if (!("content" in message)) return undefined;
-	const content = message.content;
-	if (typeof content === "string") return content.trim() ? content : undefined;
-	if (!Array.isArray(content)) return undefined;
-	const parts: string[] = [];
-	for (const block of content) {
-		if (!("text" in block) || typeof block.text !== "string") continue;
-		parts.push(block.text);
-	}
-	const text = parts.join("");
-	return text.trim() ? text : undefined;
-}
-
-const ASYNC_RESULT_CUSTOM_TYPE = "async-result";
-
-function isAssistantResponseToBackgroundJob(
-	entry: SessionEntry,
-	entriesById: ReadonlyMap<string, SessionEntry>,
-): boolean {
-	if (entry.type !== "message" || entry.message.role !== "assistant") return false;
-	for (let parentId = entry.parentId; parentId; ) {
-		const parent = entriesById.get(parentId);
-		if (!parent) return false;
-		if (parent.type === "custom_message") return parent.customType === ASYNC_RESULT_CUSTOM_TYPE;
-		if (parent.type !== "message") {
-			parentId = parent.parentId;
-			continue;
-		}
-		if (parent.message.role === "custom") {
-			return parent.message.customType === ASYNC_RESULT_CUSTOM_TYPE;
-		}
-		if (parent.message.role !== "assistant" && parent.message.role !== "toolResult") return false;
-		parentId = parent.parentId;
-	}
-	return false;
-}
-
-function findLastSessionMessageText(entries: readonly SessionEntry[]): string | undefined {
-	const entriesById = new Map(entries.map(entry => [entry.id, entry]));
-	for (let i = entries.length - 1; i >= 0; i--) {
-		const entry = entries[i];
-		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-		if (isAssistantResponseToBackgroundJob(entry, entriesById)) continue;
-		const text = extractVerbatimMessageText(entry.message);
-		if (text) return text;
-	}
-	for (let i = entries.length - 1; i >= 0; i--) {
-		const entry = entries[i];
-		if (entry.type !== "message" || entry.message.role !== "user") continue;
-		const text = extractVerbatimMessageText(entry.message);
-		if (text) return text;
-	}
-	return undefined;
-}
-
-function createHandoffContext(document: string, lastSessionMessage: string | undefined): string {
-	let content = `<handoff-context>\n${document}\n</handoff-context>\n\nThe above is a handoff document from a previous session. Use this context to continue the work seamlessly.`;
-	if (lastSessionMessage) content += `\n\n### Last Session Message\n\n${lastSessionMessage}`;
-	return content;
-}
 function createHandoffFileName(date = new Date()): string {
 	const fileTimestamp = date.toISOString().replace(/[:.]/g, "-");
 	return `handoff-${fileTimestamp}.md`;
@@ -106,40 +40,18 @@ export interface SessionHandoffHost {
 	sessionManager: SessionManager;
 	settings: Settings;
 	modelRegistry: ModelRegistry;
-	extensionRunner: ExtensionRunner | undefined;
 	sideStreamFn: StreamFn;
 	getObfuscator(): SecretObfuscator | undefined;
 	model(): Model | undefined;
 	thinkingLevel(): ThinkingLevel | undefined;
 	sessionId(): string;
-	sessionFile(): string | undefined;
 	baseSystemPrompt(): string[];
-	assertVibeSessionTransitionAllowed(action: string): void;
 	setSkipPostTurnMaintenance(timestamp: number | undefined): void;
 	obfuscateTextForProvider(text: string | undefined): string | undefined;
 	deobfuscateFromProvider(text: string): string;
 	convertMessagesToLlm(messages: AgentMessage[], signal?: AbortSignal): Promise<Message[]>;
 	prepareSimpleStreamOptions(options: SimpleStreamOptions, provider?: string): SimpleStreamOptions;
 	effectiveServiceTier(model: Model | undefined): ServiceTier | undefined;
-	flushPendingBash(): Promise<void>;
-	beginBashSessionTransition(): BashSessionTransition;
-	markBashSessionTransition(transition: BashSessionTransition): void;
-	finishBashSessionTransition(transition: BashSessionTransition, success: boolean): void;
-	cancelOwnAsyncJobs(): void;
-	clearCheckpointRuntimeState(): void;
-	clearSessionScopedToolState(): void;
-	clearFreshProviderSessionId(): void;
-	syncAgentSessionId(): void;
-	rekeyMemoryForCurrentSessionId(): void;
-	resetMemoryContextForNewTranscript(): Promise<void>;
-	clearPendingNextTurnMessages(): void;
-	resetTodoCycle(): void;
-	buildDisplaySessionContext(): SessionContext;
-	resetAdvisorSessionState(): void;
-	drainAndDetachAdvisorRecorders(): Promise<void>;
-	reattachAdvisorRecorderFeeds(): void;
-	clearAdvisorCost(): void;
-	syncTodoPhasesFromBranch(): void;
 }
 
 /** Generates handoff documents with a cache-friendly oneshot LLM call. */
@@ -165,25 +77,22 @@ export class SessionHandoff {
 	}
 
 	/**
-	 * Generate a handoff document with a oneshot LLM call, then start a new session with it.
+	 * Generate a handoff document with a oneshot LLM call.
+	 *
+	 * The request is built through the same pipeline a live turn uses so the
+	 * oneshot reads the provider prompt cache the main turn populated. The
+	 * caller (SessionMaintenance) commits the returned document as a compaction
+	 * entry; this method rewrites no history.
 	 *
 	 * @param customInstructions Optional focus for the handoff document
 	 * @param options Handoff execution options
-	 * @returns The handoff document text, or undefined when cancelled/failed or
-	 *   an auto-triggered generation produced no content
+	 * @returns The handoff document text, or undefined when an auto-triggered
+	 *   generation produced no content (manual generation throws instead)
 	 */
 	async generateDocument(
 		customInstructions?: string,
 		options?: SessionHandoffOptions,
 	): Promise<HandoffResult | undefined> {
-		this.#host.assertVibeSessionTransitionAllowed("handoff to a new session");
-		const entries = this.#host.sessionManager.getBranch();
-		const messageCount = entries.filter(e => e.type === "message").length;
-
-		const lastSessionMessage = findLastSessionMessageText(entries);
-		if (messageCount < 2) {
-			throw new Error("Nothing to hand off (no messages yet)");
-		}
 		this.#host.setSkipPostTurnMaintenance(undefined);
 
 		this.#handoffAbortController = new AbortController();
@@ -202,8 +111,6 @@ export class SessionHandoff {
 			}
 		}
 
-		let advisorRecordersDetached = false;
-		let sessionTransitioned = false;
 		try {
 			throwIfHandoffAborted(handoffSignal);
 
@@ -299,100 +206,6 @@ export class SessionHandoff {
 				throw new Error("Handoff generation produced no content");
 			}
 
-			// Start a new session
-			const previousSessionFile = this.#host.sessionFile();
-			if (this.#host.extensionRunner?.hasHandlers("session_before_switch")) {
-				const result = (await this.#host.extensionRunner.emit({
-					type: "session_before_switch",
-					reason: "new",
-				})) as SessionBeforeSwitchResult | undefined;
-
-				if (result?.cancel) {
-					return undefined;
-				}
-			}
-			await this.#host.flushPendingBash();
-			await this.#host.sessionManager.flush();
-			advisorRecordersDetached = true;
-			// Stop and settle in-flight advisors while the old-session feeds can still
-			// observe message_end, then mute before opening the replacement session.
-			await this.#host.drainAndDetachAdvisorRecorders();
-			// Snapshot the outgoing session's local:// root BEFORE newSession() mints a
-			// fresh session id (and therefore a fresh, empty local root). The handoff
-			// document routinely references plans/scratch files under local://, so those
-			// artifacts must follow the session switch or every reference dangles.
-			const localProtocolOptions = {
-				getArtifactsDir: () => this.#host.sessionManager.getArtifactsDir(),
-				getSessionId: () => this.#host.sessionManager.getSessionId(),
-			};
-			const previousLocalRoot = resolveLocalUrlToPath("local://", localProtocolOptions);
-			const bashTransition = this.#host.beginBashSessionTransition();
-			this.#host.cancelOwnAsyncJobs();
-			try {
-				await this.#host.sessionManager.newSession(
-					previousSessionFile ? { parentSession: previousSessionFile } : undefined,
-				);
-				this.#host.markBashSessionTransition(bashTransition);
-				// The handoff opens a fresh conversation, so the spend of the one it
-				// summarizes stays with it. Clearing here, at the commit point, keeps the
-				// status line honest even if a later step throws.
-				this.#host.clearAdvisorCost();
-				sessionTransitioned = true;
-			} finally {
-				this.#host.finishBashSessionTransition(bashTransition, sessionTransitioned);
-			}
-
-			this.#host.clearSessionScopedToolState();
-
-			this.#host.clearCheckpointRuntimeState();
-			// agent.reset() clears the core steering/follow-up queues. Preserve any queued
-			// steers/follow-ups (RPC/SDK steer()/followUp() issued during the handoff, or a
-			// pre-loader TUI steer) so they survive into the post-handoff session instead of
-			// being silently dropped. Capture is synchronous immediately before reset and
-			// restore is synchronous immediately after — no await gap — so a steer arriving
-			// later (during ensureOnDisk/Bun.write below) appends to the restored queue
-			// rather than being clobbered.
-			const preservedSteering = this.#host.agent.peekSteeringQueue().slice();
-			const preservedFollowUp = this.#host.agent.peekFollowUpQueue().slice();
-			this.#host.agent.reset();
-			this.#host.agent.replaceQueues(preservedSteering, preservedFollowUp);
-			this.#host.clearFreshProviderSessionId();
-			this.#host.syncAgentSessionId();
-			this.#host.rekeyMemoryForCurrentSessionId();
-			await this.#host.resetMemoryContextForNewTranscript();
-			this.#host.clearPendingNextTurnMessages();
-			this.#host.resetTodoCycle();
-
-			// Carry local:// artifacts into the replacement session (best-effort: the
-			// switch is already committed, so a copy failure must not fail the handoff).
-			try {
-				const newLocalRoot = resolveLocalUrlToPath("local://", localProtocolOptions);
-				await copyLocalArtifacts(previousLocalRoot, newLocalRoot);
-			} catch (error) {
-				logger.warn("Failed to copy local artifacts into handoff session", {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
-
-			// Seed the handoff document as a custom message
-			const handoffContent = createHandoffContext(handoffText, lastSessionMessage);
-			this.#host.sessionManager.appendCustomMessageEntry("handoff", handoffContent, true, undefined, "agent");
-			await this.#host.sessionManager.ensureOnDisk();
-
-			// Rebuild agent messages from session
-			const sessionContext = this.#host.buildDisplaySessionContext();
-			this.#host.agent.replaceMessages(sessionContext.messages);
-			this.#host.resetAdvisorSessionState();
-			advisorRecordersDetached = false;
-			this.#host.syncTodoPhasesFromBranch();
-			if (this.#host.extensionRunner) {
-				await this.#host.extensionRunner.emit({
-					type: "session_switch",
-					reason: "new",
-					previousSessionFile,
-				});
-			}
-
 			let savedPath: string | undefined;
 			if (options?.autoTriggered && this.#host.settings.get("compaction.handoffSaveToDisk")) {
 				const artifactsDir = this.#host.sessionManager.getArtifactsDir();
@@ -420,10 +233,6 @@ export class SessionHandoff {
 			throwIfHandoffAborted(handoffSignal);
 			throw error;
 		} finally {
-			if (advisorRecordersDetached) {
-				if (sessionTransitioned) this.#host.resetAdvisorSessionState();
-				else this.#host.reattachAdvisorRecorderFeeds();
-			}
 			sourceSignal?.removeEventListener("abort", onSourceAbort);
 			this.#handoffAbortController = undefined;
 		}
