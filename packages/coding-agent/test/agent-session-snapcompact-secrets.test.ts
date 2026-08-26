@@ -82,9 +82,9 @@ describe("AgentSession snapcompact secret obfuscation", () => {
 			// Disable auto-maintenance so prompts never fire snapcompact themselves —
 			// the only call must be the manual compact() below (clean call count).
 			"compaction.enabled": false,
-			// Manual compact() honors the strategy; with the vision model above this
-			// routes to snapcompact.compact.
-			"compaction.strategy": "snapcompact",
+			// Manual compact() follows the method order; with the vision model above
+			// this routes to snapcompact.compact.
+			"compaction.methodOrder": ["snapcompact"],
 			// keepRecentTokens:1 forces the older turn into messagesToSummarize so the
 			// session is never "too small to compact" (compact() would throw first).
 			"compaction.keepRecentTokens": 1,

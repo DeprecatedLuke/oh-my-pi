@@ -208,12 +208,20 @@ export function applyGeneratedModelPolicies(models: ModelSpec<Api>[]): void {
 export function rebakeModelThinking(model: ModelSpec<Api>): void {
 	if (isVariantCollapsedSpec(model)) return;
 	if (
+		model.compat &&
+		"thinkingFormat" in model.compat &&
+		model.compat.thinkingFormat === "chat-template" &&
+		model.thinking
+	)
+		return;
+	if (
 		model.provider === "alibaba-token-plan" &&
 		(model.id === "qwen3.8-max-preview" || model.id === "qwen3.8-max") &&
 		model.thinking
 	) {
 		return;
 	}
+	if (model.provider === "openrouter" && model.thinking?.requiresEffort === true) return;
 	const requiresProviderAuthoredEffort =
 		model.provider === "umans" && (model.thinking?.requiresEffort === true || model.id === "umans-kimi-k2.7");
 	const thinking = resolveModelThinking({ ...model, thinking: undefined }, buildCompat(model));
@@ -508,12 +516,17 @@ function inferGeneratedApplyPatchToolType(
 
 function applyOpenAICatalogPolicy(model: ModelSpec<Api>, parsedModel: OpenAIModel): void {
 	const isFirstPartyResponses = model.provider === "openai" && model.api === "openai-responses";
+	// Subscription Codex rates usage at the same >272K long-context tier as the
+	// API (openai/codex#32486), so first-party Codex SKUs carry the tier too —
+	// it drives both cost attribution and the extended-context window clamp.
+	const isFirstPartyCodex = model.provider === "openai-codex" && model.api === "openai-codex-responses";
 	if (isFirstPartyResponses && modelOrRequestIdValue(model, OPENAI_NONE_EFFORT_MODEL_IDS)) {
 		model.compat = { ...(model.compat ?? {}), reasoningDisableMode: "none-effort" };
 	}
-	const longContextCost = isFirstPartyResponses
-		? modelOrRequestIdValue(model, OPENAI_GPT_5_6_LONG_CONTEXT_COST_BY_MODEL_ID)
-		: undefined;
+	const longContextCost =
+		isFirstPartyResponses || isFirstPartyCodex
+			? modelOrRequestIdValue(model, OPENAI_GPT_5_6_LONG_CONTEXT_COST_BY_MODEL_ID)
+			: undefined;
 	if (longContextCost) {
 		model.cost = { ...model.cost, longContext: longContextCost };
 	}

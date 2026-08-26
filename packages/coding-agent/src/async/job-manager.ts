@@ -16,9 +16,12 @@ const BATCH_BURST_SETTLE_MS = 500;
 // long = cheaper. 250ms is below human perception.
 const BATCH_SETTLE_CHECK_MS = 250;
 
+/** Kind of work a managed job runs; drives job-row badges and delivery labels. */
+export type AsyncJobType = "bash" | "task" | "eval";
+
 export interface AsyncJob {
 	id: string;
-	type: "bash" | "task";
+	type: AsyncJobType;
 	status: "running" | "completed" | "failed" | "cancelled";
 	startTime: number;
 	label: string;
@@ -187,6 +190,7 @@ export class AsyncJobManager {
 	readonly #inFlightDeliveries: AsyncJobDelivery[] = [];
 	readonly #suppressedDeliveries = new Set<string>();
 	readonly #watchedJobs = new Set<string>();
+	readonly #consumedJobResults = new Set<string>();
 	readonly #evictionTimers = new Map<string, NodeJS.Timeout>();
 	readonly #deliverySinks = new Map<string, AsyncJobDeliverySink>();
 	readonly #onJobComplete: AsyncJobManagerOptions["onJobComplete"];
@@ -227,7 +231,7 @@ export class AsyncJobManager {
 	}
 
 	register(
-		type: "bash" | "task",
+		type: AsyncJobType,
 		label: string,
 		run: (ctx: {
 			jobId: string;
@@ -255,6 +259,7 @@ export class AsyncJobManager {
 
 		const id = this.#resolveJobId(options?.id);
 		this.#suppressedDeliveries.delete(id);
+		this.#consumedJobResults.delete(id);
 		const abortController = new AbortController();
 		const startTime = Date.now();
 
@@ -445,6 +450,27 @@ export class AsyncJobManager {
 		);
 		this.#notifyDeliveryQueueChanged();
 		return before - this.#deliveries.length;
+	}
+
+	/**
+	 * Mark settled job results as recovered by a foreground snapshot.
+	 *
+	 * Suppresses queued delivery and marks retained bodies as consumed so later
+	 * snapshots report execution state without replaying the same result.
+	 */
+	consumeJobResults(jobIds: string[]): number {
+		const uniqueJobIds = Array.from(new Set(jobIds.map(id => id.trim()).filter(id => id.length > 0)));
+		this.acknowledgeDeliveries(uniqueJobIds);
+		let consumed = 0;
+		for (const jobId of uniqueJobIds) {
+			if (this.#consumeJobResult(jobId)) consumed += 1;
+		}
+		return consumed;
+	}
+
+	/** True once a result was auto-delivered or recovered by a foreground snapshot. */
+	isJobResultConsumed(jobId: string): boolean {
+		return this.#consumedJobResults.has(jobId);
 	}
 
 	/**
@@ -662,8 +688,17 @@ export class AsyncJobManager {
 		this.#inFlightDeliveries.length = 0;
 		this.#suppressedDeliveries.clear();
 		this.#watchedJobs.clear();
+		this.#consumedJobResults.clear();
 		this.#deliverySinks.clear();
 		return jobsSettled && drained;
+	}
+
+	#consumeJobResult(jobId: string): boolean {
+		const job = this.#jobs.get(jobId);
+		if (!job || job.status === "running" || this.#consumedJobResults.has(jobId)) return false;
+		if (job.resultText === undefined && job.errorText === undefined) return false;
+		this.#consumedJobResults.add(jobId);
+		return true;
 	}
 
 	#resolveJobId(preferredId?: string): string {
@@ -696,6 +731,7 @@ export class AsyncJobManager {
 		this.#evictionTimers.delete(jobId);
 		this.#suppressedDeliveries.delete(jobId);
 		this.#watchedJobs.delete(jobId);
+		this.#consumedJobResults.delete(jobId);
 		return this.#jobs.delete(jobId);
 	}
 

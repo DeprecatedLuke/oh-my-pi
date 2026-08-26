@@ -149,7 +149,7 @@ tools:
 
 ### Bash command approval patterns
 
-`tools.approval` sets default policy by tool name. For bash, you can add ordered command rules with `bash.patterns`; the first matching rule wins. Patterns support literal text plus `*` as a wildcard.
+`tools.approval` is a record keyed by tool name; dotted forms such as `tools.approval.eval` and `tools.approval.computer` identify entries in that record, not separate settings-schema paths. Each entry sets that tool's default policy. For bash, you can add ordered command rules with `bash.patterns`; the first matching rule wins. Patterns support literal text plus `*` as a wildcard.
 
 ```yaml
 tools:
@@ -325,7 +325,7 @@ The default is an empty array (nothing disabled). For the two subsystems' provid
 
 ## Settings catalog
 
-Every key below is defined in the settings schema; `omp config list` shows the full set with current values. Defaults and enum values are taken from the schema. Settings that accept an env or flag override are noted; those overrides are process-local and not persisted.
+The catalog below highlights common settings; it is not the complete schema. `omp config list` is the authoritative reference for every key, current value, type, and description. Defaults and enum values shown here come from the schema. Settings that accept an env or flag override are noted; those overrides are process-local and not persisted.
 
 ### Models
 
@@ -392,36 +392,37 @@ thinkingBudgets:
   max: 32768
 ```
 
-| Key | Type | Default | Values |
-|---|---|---|---|
-| `defaultThinkingLevel` | enum | `high` | `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `auto`. Override per run with `--thinking`. |
-| `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in output. `--hide-thinking` sets it for the run (display only). |
-| `thinkingBudgets.minimal` | number | `1024` | Token budget for the `minimal` level. |
-| `thinkingBudgets.low` | number | `2048` | Token budget for `low`. |
-| `thinkingBudgets.medium` | number | `8192` | Token budget for `medium`. |
-| `thinkingBudgets.high` | number | `16384` | Token budget for `high`. |
-| `thinkingBudgets.xhigh` | number | `32768` | Token budget for `xhigh`. |
-| `thinkingBudgets.max` | number | `32768` | Token budget for `max`. |
-| `providers.autoThinkingMaxEffort` | enum | `xhigh` | Highest effort `defaultThinkingLevel: auto` may resolve. `xhigh` keeps the classifier one tier below the top, so only `ultrathink` reaches `max`; `max` lets the classifier bill the top tier on models that expose it. The local on-device classifier stays capped at `xhigh` either way. This governs what `auto` *resolves*: a model whose ladder offers nothing under the ceiling gets no auto level at all, and one that also sets `thinking.requiresEffort` still receives its lowest supported effort from the transport — on a `["max"]` ladder that is `max`, because the model accepts nothing else. |
+| Key                               | Type    | Default | Values                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------------------- | ------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `defaultThinkingLevel`            | enum    | `high`  | `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `auto`. Override per run with `--thinking`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `hideThinkingBlock`               | boolean | `false` | Hide thinking blocks in output. `--hide-thinking` sets it for the run (display only).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `thinkingBudgets.minimal`         | number  | `1024`  | Token budget for the `minimal` level.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `thinkingBudgets.low`             | number  | `2048`  | Token budget for `low`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `thinkingBudgets.medium`          | number  | `8192`  | Token budget for `medium`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `thinkingBudgets.high`            | number  | `16384` | Token budget for `high`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `thinkingBudgets.xhigh`           | number  | `32768` | Token budget for `xhigh`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `thinkingBudgets.max`             | number  | `32768` | Token budget for `max`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `providers.autoThinkingMaxEffort` | enum    | `xhigh` | Highest effort `defaultThinkingLevel: auto` may resolve. `xhigh` keeps the classifier one tier below the top, so only `ultrathink` reaches `max`; `max` lets the classifier bill the top tier on models that expose it. The local on-device classifier stays capped at `xhigh` either way. This governs what `auto` _resolves_: a model whose ladder offers nothing under the ceiling gets no auto level at all, and one whose metadata requires explicit effort still receives its lowest supported effort from the transport — on a `["max"]` ladder that is `max`, because the model accepts nothing else. |
 
 ### Sampling
 
 A value of `-1` means "use the provider/model default" — `omp` does not send that parameter.
 
-| Key | Type | Default | Notes |
-|---|---|---|---|
-| `temperature` | number | `-1` | Sampling temperature. |
-| `topP` | number | `-1` | Nucleus sampling. |
-| `topK` | number | `-1` | Top-K sampling. |
-| `minP` | number | `-1` | Minimum-probability cutoff. |
-| `presencePenalty` | number | `-1` | Presence penalty. |
-| `repetitionPenalty` | number | `-1` | Repetition penalty. |
-| `tier.openai` | enum | `none` | `none`, `auto`, `default`, `flex`, `scale`, `priority`. Sent as `service_tier` for OpenAI / OpenAI-Codex and OpenAI-family OpenRouter models. |
-| `tier.anthropic` | enum | `none` | `none`, `priority`. `priority` realizes fast mode on supported direct Claude models (ignored on Bedrock/Vertex and via OpenRouter). |
-| `tier.google` | enum | `none` | `none`, `flex`, `priority`. Gemini API sends it in the body; Vertex sends `priority` via header (`flex` is a no-op on Vertex). |
-| `tier.subagent` | enum | `inherit` | `inherit`, `none`, `auto`, `default`, `flex`, `scale`, `priority`. Applied to the spawned model's family; `inherit` tracks the main agent. |
-| `tier.advisor` | enum | `none` | `inherit`, `none`, `auto`, `default`, `flex`, `scale`, `priority`. Applied to the advisor model's family. |
-| `personality` | enum | `default` | `default`, `friendly`, `pragmatic`, `none`. |
+| Key                 | Type   | Default   | Notes                                                                                                                                                                                                                                                                          |
+| ------------------- | ------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `temperature`       | number | `-1`      | Sampling temperature.                                                                                                                                                                                                                                                          |
+| `topP`              | number | `-1`      | Nucleus sampling.                                                                                                                                                                                                                                                              |
+| `topK`              | number | `-1`      | Top-K sampling.                                                                                                                                                                                                                                                                |
+| `minP`              | number | `-1`      | Minimum-probability cutoff.                                                                                                                                                                                                                                                    |
+| `presencePenalty`   | number | `-1`      | Presence penalty.                                                                                                                                                                                                                                                              |
+| `repetitionPenalty` | number | `-1`      | Repetition penalty.                                                                                                                                                                                                                                                            |
+| `textVerbosity`     | enum   | `medium`  | `low`, `medium`, `high`. Sent as response verbosity by OpenAI Responses and Codex transports.                                                                                                                                                                                  |
+| `tier.openai`       | enum   | `none`    | `none`, `auto`, `default`, `flex`, `scale`, `priority`. Sent as `service_tier` for OpenAI / OpenAI-Codex and OpenAI-family OpenRouter models. Launch with `--service-tier <value>` for a one-session OpenAI override; the flag is not persisted (`none` omits `service_tier`). |
+| `tier.anthropic`    | enum   | `none`    | `none`, `priority`. `priority` realizes fast mode on supported direct Claude models (ignored on Bedrock/Vertex and via OpenRouter).                                                                                                                                            |
+| `tier.google`       | enum   | `none`    | `none`, `flex`, `priority`. Gemini API sends it in the body; Vertex sends `priority` via header (`flex` is a no-op on Vertex).                                                                                                                                                 |
+| `tier.subagent`     | enum   | `inherit` | `inherit`, `none`, `auto`, `default`, `flex`, `scale`, `priority`. Applied to the spawned model's family; `inherit` tracks the main agent.                                                                                                                                     |
+| `tier.advisor`      | enum   | `none`    | `inherit`, `none`, `auto`, `default`, `flex`, `scale`, `priority`. Applied to the advisor model's family.                                                                                                                                                                      |
+| `personality`       | enum   | `default` | `default`, `friendly`, `pragmatic`, `none`. A user-level `<agent dir>/PERSONALITY.md` replaces the selected preset's text; `none` still omits the block. See [system-prompt-customization](./system-prompt-customization.md).                                                  |
 
 ### Retry and fallback
 
@@ -460,17 +461,20 @@ retry:
       - google-vertex/*
 ```
 
-| Key | Type | Default | Notes |
-|---|---|---|---|
-| `retry.enabled` | boolean | `true` | Retry transient provider errors. |
-| `retry.maxRetries` | number | `10` | Max retries per request. |
-| `retry.baseDelayMs` | number | `500` | Initial backoff. |
-| `retry.maxDelayMs` | number | `300000` | Backoff ceiling (5 min). |
-| `retry.modelFallback` | boolean | `true` | Fall back to another model when one is unavailable. |
-| `retry.fallbackChains` | record | `{}` | Maps roles, model selectors, or `provider/*` wildcards to ordered fallback selectors. Keys containing `/` are model-oriented and win over roles: `provider/model-id` matches that exact model, `provider/*` matches every model of the provider. A `provider/*` *entry* keeps the failing model's id and swaps the provider. The `default` chain covers every assigned role without its own chain. Unknown models/providers or malformed chains are reported as config warnings at startup. |
-| `retry.fallbackRevertPolicy` | enum | `cooldown-expiry` | `cooldown-expiry` returns to the primary model once its suppression window ends; `never` stays on the fallback until switched manually. |
+| Key                                      | Type    | Default           | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------------------------- | ------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `retry.enabled`                          | boolean | `true`            | Retry transient provider errors.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `retry.maxRetries`                       | number  | `10`              | Max retries per request.                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `retry.baseDelayMs`                      | number  | `500`             | Initial backoff.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `retry.maxDelayMs`                       | number  | `300000`          | Backoff ceiling (5 min). Provider-stated waits longer than this fail fast instead of sleeping when no credential or model fallback succeeds; `0` disables the cap (to auto-resume through provider-stated quota resets).                                                                                                                                                                                                                                                                                                                  |
+| `retry.modelFallback`                    | boolean | `true`            | Fall back to another model when one is unavailable.                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `retry.fallbackChains`                   | record  | `{}`              | Maps roles, model selectors, or `provider/*` wildcards to ordered fallback selectors. Keys containing `/` are model-oriented and win over roles: `provider/model-id` matches that exact model, `provider/*` matches every model of the provider. A `provider/*` _entry_ keeps the failing model's id and swaps the provider. The `default` chain covers every assigned role without its own chain. Unknown models/providers or malformed chains are reported as config warnings at startup. |
+| `retry.fallbackRevertPolicy`             | enum    | `cooldown-expiry` | `cooldown-expiry` returns to the primary model once its suppression window ends; `never` stays on the fallback until switched manually.                                                                                                                                                                                                                                                                                                                                                     |
+| `providers.anthropic.serverSideFallback` | boolean | `false`           | Opt in to Anthropic's `server-side-fallback-2026-06-01` beta. Only direct `anthropic` provider requests using the `anthropic-messages` API for Claude Fable or Mythos models are eligible. On an Anthropic safety-classifier block, the provider may retry server-side with `claude-opus-4-8`; every other provider, API, and model is unaffected.                                                                                                                                          |
+| `providers.openai-codex.codeMode`           | enum    | `off`             | Codex Code Mode for `code_mode_only` models (GPT-5.6 Sol/Terra/Luna), mirroring codex-rs: the direct tool surface collapses to `eval`/`ask`/`todo` and every other session tool is invoked from `eval` cells via its `tool.<name>()` bridge, collapsing multi-step tool work into one model round trip. `auto` follows the model catalog's `tool_mode` flag; `on` forces it for any Codex model; `off` (default) leaves the full direct surface. The turn metadata carries codex-rs's `tool_namespaces_info` exposure snapshot while active. |
+| `providers.openai-codex.codeModeDirectTools` | array   | `[]`              | Extra tool names to keep directly callable alongside `eval`/`ask`/`todo` when Codex Code Mode is active; entries that are not enabled in the session are ignored. |
 
-When the active model keeps failing (429s, quota walls, provider outages) and `retry.modelFallback` is on, the session picks the chain that owns the failing model, by specificity: an exact `provider/model-id` key, then a `provider/*` wildcard, then the current role's chain, then `default`. It skips models whose selectors are still cooling down and switches for the rest of the turn. Subagents get their own per-spawn chains when their agent definition lists multiple model patterns — the first resolvable pattern is primary and the rest become its fallbacks; there is no `agent:<name>` key in `fallbackChains`.
+When the active model keeps failing (429s, quota walls, provider outages) and `retry.modelFallback` is on, the session picks the chain that owns the failing model, by specificity: an exact `provider/model-id` key, then a `provider/*` wildcard, then the current role's chain, then `default`. If several roles assign the same model, yaml key order does not decide: the live session role wins, and `default` wins over other matching roles when the session is not on those roles. It skips models whose selectors are still cooling down and switches for the rest of the turn. Subagents get their own per-spawn chains when their agent definition lists multiple model patterns — the first resolvable pattern is primary and the rest become its fallbacks; there is no `agent:<name>` key in `fallbackChains`.
 
 ### Tools and approvals
 
@@ -527,7 +531,7 @@ Computer settings are captured when the desktop controller is created. A model s
 bash:
   enabled: true
   autoBackground:
-    enabled: false
+    enabled: true
     thresholdMs: 60000
 
 eval:
@@ -546,23 +550,24 @@ lsp:
   formatOnWrite: false
 ```
 
-| Key | Type | Default | Notes |
-|---|---|---|---|
-| `bash.enabled` | boolean | `true` | Enable the bash tool. |
-| `launch.enabled` | boolean | `true` | Enable the launch tool for shared long-running project processes. |
-| `bash.autoBackground.enabled` | boolean | `false` | Auto-background long-running commands. |
-| `bash.autoBackground.thresholdMs` | number | `60000` | Threshold before auto-backgrounding. |
-| `eval.py` | boolean | `true` | Python eval backend. `PI_PY=0` disables for the process. |
-| `eval.js` | boolean | `true` | JavaScript eval backend. `PI_JS=0` disables for the process. |
-| `python.kernelMode` | enum | `session` | `session` (persistent kernel) or `per-call`. |
-| `python.interpreter` | string | `""` | Path to a Python interpreter; empty = auto-detect. |
-| `lsp.enabled` | boolean | `true` | Language-server integration. `--no-lsp` disables for the run. |
-| `lsp.lazy` | boolean | `true` | Start servers on demand. |
-| `lsp.diagnosticsOnWrite` | boolean | `true` | Run diagnostics after a write. |
-| `lsp.diagnosticsOnEdit` | boolean | `false` | Run diagnostics after an edit. |
-| `lsp.formatOnWrite` | boolean | `false` | Format files on write. |
-| `lsp.diagnosticsDeduplicate` | boolean | `true` | Collapse duplicate diagnostics. |
-| `shellPath` | string | _(unset)_ | Override the shell binary used by bash. |
+| Key                               | Type    | Default   | Notes                                                                                                                                                       |
+| --------------------------------- | ------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bash.enabled`                    | boolean | `true`    | Enable the bash tool.                                                                                                                                       |
+| `launch.enabled`                  | boolean | `true`    | Enable the launch tool for shared long-running project processes.                                                                                           |
+| `bash.autoBackground.enabled`     | boolean | `true`   | Auto-background long-running commands.                                                                                                                      |
+| `bash.autoBackground.thresholdMs` | number  | `60000`   | Threshold before auto-backgrounding.                                                                                                                        |
+| `eval.py`                         | boolean | `true`    | Python eval backend. `PI_PY=0` disables for the process.                                                                                                    |
+| `eval.js`                         | boolean | `true`    | JavaScript eval backend. `PI_JS=0` disables for the process.                                                                                                |
+| `python.kernelMode`               | enum    | `session` | `session` (persistent kernel) or `per-call`.                                                                                                                |
+| `python.interpreter`              | string  | `""`      | Path to a Python interpreter; empty = auto-detect.                                                                                                          |
+| `lsp.enabled`                     | boolean | `true`    | Language-server integration. `--no-lsp` disables for the run.                                                                                               |
+| `lsp.lazy`                        | boolean | `true`    | Start servers on demand.                                                                                                                                    |
+| `lsp.shared`                      | boolean | `true`    | Share one language server per project across local `omp` processes through the daemon broker; falls back to private servers when the broker is unavailable. |
+| `lsp.diagnosticsOnWrite`          | boolean | `true`    | Run diagnostics after a write.                                                                                                                              |
+| `lsp.diagnosticsOnEdit`           | boolean | `false`   | Run diagnostics after an edit.                                                                                                                              |
+| `lsp.formatOnWrite`               | boolean | `false`   | Format files on write.                                                                                                                                      |
+| `lsp.diagnosticsDeduplicate`      | boolean | `true`    | Collapse duplicate diagnostics.                                                                                                                             |
+| `shellPath`                       | string  | _(unset)_ | Override the shell binary used by bash.                                                                                                                     |
 
 ### Files: editing and reading
 
@@ -572,6 +577,8 @@ edit:
   fuzzyMatch: true
   fuzzyThreshold: 0.95
   blockAutoGenerated: true
+  blackbox:
+    enabled: false
 
 read:
   defaultLimit: 300
@@ -581,18 +588,19 @@ read:
     prose: false
 ```
 
-| Key | Type | Default | Notes |
-|---|---|---|---|
-| `edit.mode` | enum | `hashline` | `apply_patch`, `hashline`, `patch`, `replace`. |
-| `edit.fuzzyMatch` | boolean | `true` | Allow fuzzy anchor matching. |
-| `edit.fuzzyThreshold` | number | `0.95` | Similarity threshold for fuzzy matching. |
-| `edit.blockAutoGenerated` | boolean | `true` | Refuse to edit generated/lockfile-like files. |
-| `edit.streamingAbort` | boolean | `false` | Abort on streaming edit mismatch. |
-| `read.defaultLimit` | number | `300` | Default line count for `read` without a selector. |
-| `read.summarize.enabled` | boolean | `true` | Structural summaries for code reads. |
-| `read.summarize.prose` | boolean | `false` | Summarize prose files too. |
-| `read.toolResultPreview` | boolean | `false` | Inline preview of tool results. |
-| `readLineNumbers` | boolean | `false` | Show plain line numbers. |
+| Key                       | Type    | Default    | Notes                                             |
+| ------------------------- | ------- | ---------- | ------------------------------------------------- |
+| `edit.mode`               | enum    | `hashline` | `apply_patch`, `hashline`, `patch`, `replace`.    |
+| `edit.fuzzyMatch`         | boolean | `true`     | Allow fuzzy anchor matching.                      |
+| `edit.fuzzyThreshold`     | number  | `0.95`     | Similarity threshold for fuzzy matching.          |
+| `edit.blockAutoGenerated` | boolean | `true`     | Refuse to edit generated/lockfile-like files.     |
+| `edit.streamingAbort`     | boolean | `false`    | Abort on streaming edit mismatch.                 |
+| `edit.blackbox.enabled`   | boolean | `false`    | Append full source for AST parse regressions.      |
+| `read.defaultLimit`       | number  | `300`      | Default line count for `read` without a selector. |
+| `read.summarize.enabled`  | boolean | `true`     | Structural summaries for code reads.              |
+| `read.summarize.prose`    | boolean | `false`    | Summarize prose files too.                        |
+| `read.toolResultPreview`  | boolean | `false`    | Inline preview of tool results.                   |
+| `readLineNumbers`         | boolean | `false`    | Show plain line numbers.                          |
 
 ### Context, compaction, and memory
 
@@ -602,32 +610,29 @@ contextPromotion:
 
 compaction:
   enabled: true
-  strategy: snapcompact     # context-full, handoff, shake, snapcompact, off
-  midTurnEnabled: true      # check thresholds between tool-loop provider requests
-  thresholdPercent: -1       # -1 = default reserve-based behavior
-  thresholdTokens: -1        # fixed token limit when > 0
-  remoteEnabled: true
-
+  methodOrder: [remote, snapcompact, handoff, shake, soft]
+  midTurnEnabled: true # check thresholds between tool-loop provider requests
+  thresholdPercent: -1 # -1 = default reserve-based behavior
+  thresholdTokens: -1 # fixed token limit when > 0
 memory:
   backend: off               # off, local, hindsight, mnemopi
 ```
 
-| Key | Type | Default | Notes |
-|---|---|---|---|
-| `contextPromotion.enabled` | boolean | `false` | Promote to the active model's explicit `contextPromotionTarget` on context overflow. |
-| `compaction.enabled` | boolean | `true` | Automatic conversation compaction. |
-| `compaction.midTurnEnabled` | boolean | `true` | Check thresholds at safe mid-turn tool-loop boundaries before the next provider request. |
-| `compaction.strategy` | enum | `snapcompact` | `context-full`, `handoff`, `shake`, `snapcompact`, `off`. |
-| `compaction.thresholdPercent` | number | `-1` | Percent-of-context trigger; `-1` = reserve-based default. |
-| `compaction.thresholdTokens` | number | `-1` | Fixed token trigger when `> 0`. |
-| `compaction.reserveTokens` | number | `16384` | Tokens reserved for the next turn. |
-| `compaction.keepRecentTokens` | number | `20000` | Recent tokens always preserved. |
-| `compaction.remoteEnabled` | boolean | `true` | Allow remote compaction service. |
-| `compaction.autoContinue` | boolean | `true` | Continue automatically after compaction. |
-| `memory.backend` | enum | `off` | `off`, `local`, `hindsight`, `mnemopi`. Each backend has its own `hindsight.*` / `mnemopi.*` / `memories.*` tuning keys. |
-| `autolearn.enabled` | boolean | `false` | Experimental: after the agent stops, nudge it to capture lessons to memory and create/enhance isolated managed skills under `~/.omp/agent/managed-skills`. Enables the `manage_skill` tool (and `learn` when a memory backend is active). |
-| `autolearn.autoContinue` | boolean | `false` | When `autolearn.enabled`, auto-run one capture turn at stop (uses extra tokens). Off = a passive reminder rides your next turn. |
-| `autolearn.minToolCalls` | number | `5` | Only nudge after a turn that used at least this many tools. |
+| Key                           | Type    | Default                                  | Notes                                                                                                                                                                                                                                     |
+| ----------------------------- | ------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `contextPromotion.enabled`    | boolean | `false`                                  | Promote to the active model's explicit `contextPromotionTarget` on context overflow.                                                                                                                                                      |
+| `compaction.enabled`          | boolean | `true`                                   | Automatic conversation compaction.                                                                                                                                                                                                        |
+| `compaction.midTurnEnabled`   | boolean | `true`                                   | Check thresholds at safe mid-turn tool-loop boundaries before the next provider request.                                                                                                                                                  |
+| `compaction.methodOrder`      | array   | `remote, snapcompact, handoff, shake, soft` | Ordered fallbacks. `remote` uses provider-native OpenAI-compatible server compaction; unavailable or failed methods advance. |
+| `compaction.thresholdPercent` | number  | `-1`                                     | Percent-of-context trigger; `-1` = reserve-based default.                                                                                                                                                                                 |
+| `compaction.thresholdTokens`  | number  | `-1`                                     | Fixed token trigger when `> 0`.                                                                                                                                                                                                           |
+| `compaction.reserveTokens`    | number  | _(unset)_                                | Absolute reserve floor. When unset, the effective reserve is the larger of `16384` and 15% of the context window; if that default would leave no practical small-window budget, it falls back to the 15% reserve.                         |
+| `compaction.keepRecentTokens` | number  | `20000`                                  | Recent tokens always preserved.                                                                                                                                                                                                           |
+| `compaction.autoContinue`     | boolean | `true`                                   | Continue automatically after compaction.                                                                                                                                                                                                  |
+| `memory.backend`              | enum    | `off`                                    | `off`, `local`, `hindsight`, `mnemopi`. Each backend has its own `hindsight.*` / `mnemopi.*` / `memories.*` tuning keys.                                                                                                                  |
+| `autolearn.enabled`           | boolean | `false`       | Experimental: after the agent stops, nudge it to capture lessons to memory and create/enhance isolated managed skills under `~/.omp/agent/managed-skills`. Enables the `manage_skill` tool (and `learn` when a memory backend is active). |
+| `autolearn.autoContinue`      | boolean | `false`       | When `autolearn.enabled`, auto-run one capture turn at stop (uses extra tokens). Off = a passive reminder rides your next turn.                                                                                                           |
+| `autolearn.minToolCalls`      | number  | `5`           | Only nudge after a turn that used at least this many tools.                                                                                                                                                                               |
 
 `compaction` has additional tuning keys (idle compaction, supersede/drop heuristics) visible in `omp config list`. See [Compaction](./compaction.md) for the full strategy reference.
 
@@ -676,16 +681,18 @@ For a custom status line, set `statusLine.preset: custom` and configure `statusL
 
 ### Interaction
 
-| Key | Type | Default | Values |
-|---|---|---|---|
-| `steeringMode` | enum | `one-at-a-time` | `all`, `one-at-a-time`. How queued steering messages are delivered. |
-| `followUpMode` | enum | `one-at-a-time` | `all`, `one-at-a-time`. |
-| `interruptMode` | enum | `immediate` | `immediate`, `wait`. |
-| `doubleEscapeAction` | enum | `tree` | `branch`, `tree`, `none`. |
-| `autoResume` | boolean | `false` | Auto-resume the most recent session in the cwd. |
-| `ask.timeout` | number | `0` | Seconds before an `ask` prompt times out; `0` = no timeout. (Legacy ms values are migrated to seconds.) |
-| `ask.notify` | enum | `on` | `on`, `off`. |
-| `completion.notify` | enum | `on` | `on`, `off`, `bell`. Alert when the agent finishes a turn with no background tasks running (`on` = desktop notification / BEL on bell-only terminals, `bell` = audible terminal bell on every terminal). |
+| Key                    | Type    | Default         | Values                                                                                                  |
+| ---------------------- | ------- | --------------- | ------------------------------------------------------------------------------------------------------- |
+| `steeringMode`         | enum    | `one-at-a-time` | `all`, `one-at-a-time`. How queued steering messages are delivered.                                     |
+| `followUpMode`         | enum    | `one-at-a-time` | `all`, `one-at-a-time`.                                                                                 |
+| `interruptMode`        | enum    | `immediate`     | `immediate`, `wait`.                                                                                    |
+| `doubleEscapeAction`   | enum    | `tree`          | `branch`, `tree`, `none`.                                                                               |
+| `autoResume`           | boolean | `false`         | Auto-resume the most recent session in the cwd.                                                         |
+| `plan.enabled`         | boolean | `true`          | Enable plan mode.                                                                                       |
+| `plan.defaultOnStartup` | boolean | `false`         | Start each fresh interactive session in plan mode when plan mode is enabled. Print/JSON (`--print`) mode ignores this and prints a note; use `--plan-yolo` for a headless plan flow. |
+| `ask.timeout`          | number  | `0`             | Seconds before an `ask` prompt times out; `0` = no timeout. (Legacy ms values are migrated to seconds.) |
+| `ask.notify`           | enum    | `on`            | `on`, `off`.                                                                                            |
+| `completion.notify`    | enum    | `on`            | `on`, `off`, `bell`. Alert when the agent finishes a turn with no background tasks running (`on` = desktop notification / BEL on bell-only terminals, `bell` = audible terminal bell on every terminal). |
 
 ### Providers and services
 
@@ -710,9 +717,7 @@ provider:
 
 exa:
   enabled: true
-  enableSearch: true
-  enableResearcher: false
-  enableWebsets: false
+  searchDelayMs: 1000
 
 searxng:
   endpoint: https://search.example.com
@@ -735,10 +740,8 @@ searxng:
 | `providers.kimiApiFormat`           | enum    | `auto`    | `auto`, `openai`, `anthropic`. `auto` follows live model metadata.                                                                                                                                                                                                                                                                                                                                                                     |
 | `providers.cacheRetention`          | enum    | `auto`    | `auto`, `short`, `long`, `none`. Prompt-cache retention forwarded to providers that support it. `auto` keeps provider defaults (Anthropic: 5m entries + idle keep-alive refreshes) and honors `PI_CACHE_RETENTION`; `short` forces 5m; `long` uses 1h TTLs where supported and disables keep-alive refreshes; `none` disables prompt caching and cache-affinity routing.                                                                 |
 | `provider.appendOnlyContext`        | enum    | `auto`    | `auto`, `on`, `off`.                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `exa.enabled`                       | boolean | `true`    | Enable Exa integration.                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `exa.enableSearch`                  | boolean | `true`    | Exa search.                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `exa.enableResearcher`              | boolean | `false`   | Exa researcher.                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `exa.enableWebsets`                 | boolean | `false`   | Exa websets.                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `exa.enabled`                       | boolean | `true`    | Enable the Exa web search provider.                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `exa.searchDelayMs`                 | number  | `1000`    | Minimum delay between Exa web search requests in milliseconds; set `0` to disable pacing.                                                                                                                                                                                                                                                                                                                                               |
 | `searxng.endpoint`                  | string  | _(unset)_ | SearXNG instance URL.                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `searxng.token`                     | string  | _(unset)_ | SearXNG token; also `searxng.basicUsername`/`searxng.basicPassword`/`searxng.categories`/`searxng.language`.                                                                                                                                                                                                                                                                                                                           |
 | `auth.broker.url`                   | string  | _(unset)_ | Auth-broker URL. Overridden by `OMP_AUTH_BROKER_URL`.                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -749,7 +752,15 @@ Provider credentials and custom model definitions are configured separately — 
 
 ### Other groups
 
-`omp config list` exposes many more grouped settings, including: `task.*` (subagent concurrency, isolation, model overrides), `skills.*` and `commands.*` (discovery toggles), `mcp.*`, `github.*`, `async.*`, `goal.*`, `loop.*`, `todo.*`, `magicKeywords.*`, `ttsr.*` (time-traveling stream rules), `display.*`, `startup.*`, `share.*`, `collab.*`, `stt.*`/`tts.*`, `memories.*`/`hindsight.*`/`mnemopi.*` (memory backends), and `bashInterceptor.*`. Each follows the same type/default rules shown above.
+Every schema path not individually tabulated in this catalog is explicitly deferred to `omp config list`. Additional groups include:
+
+- Agent behavior and safety: `ask.*`, `eval.*`, `features.*`, `goal.*`, `loop.*`, `model.loopGuard.*`, `model.toolCallLoopGuard.*`, `prewalk.*`, `recap.*`, `tools.*`, and `vault.*`.
+- Execution and content: `commit.*`, `completion.*`, `edit.*`, `error.*`, `extensionHandlers.*`, `generate_image.*`, `git.*`, `images.*`, `live.*`, `paste.*`, `power.*`, `read.*`, `shellMinimizer.*`, `speech.*`, `terminal.*`, and `title.*`.
+- Interface and startup: `display.*`, `statusLine.*`, `startup.*`, `stt.*`, `tui.*`, and `ttsr.*`.
+- Integrations, storage, and discovery: `async.*`, `bashInterceptor.*`, `codexResets.*`, `collab.*`, `commands.*`, `dev.*`, `exa.*`, `gc.*`, `github.*`, `hindsight.*`, `magicKeywords.*`, `mcp.*`, `memories.*`, `mnemopi.*`, `providers.*`, `searxng.*`, `share.*`, `skills.*`, `task.*`, `todo.*`, `tts.*`, and `workspace.*`.
+- Ungrouped keys: `setupVersion`, `proseOnlyThinking`, `omitThinking`, `externalThinking`, `includeWorkspaceTree`, `autocompleteMaxVisible`, `emojiAutocomplete`, `extendedContext`, `disabledExtensions`, `inlineToolDescriptors`, and `treeFilterMode`.
+
+These settings follow the same schema-defined type and default rules shown above.
 
 ## Legacy migration
 

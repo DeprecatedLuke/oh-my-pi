@@ -3,10 +3,11 @@
  * an all-running snapshot stays displaceable and a later hub call replaces it.
  *
  * Contracts under test:
- *  - ToolExecutionComponent: an all-running jobs snapshot stays un-finalized and
- *    displaceable; settled/error results finalize normally; seal() always freezes.
- *  - EventController: a follow-up `hub` call removes the tracked jobs snapshot;
- *    any other tool seals it in place.
+ *  - ToolExecutionComponent: a waiting-poll result stays displaceable but
+ *    finalizes like any other settled result (so it can retire as history
+ *    instead of pinning the live viewport); seal() always freezes.
+ *  - EventController: a follow-up `hub` call removes the tracked waiting
+ *    poll from the transcript; any other tool seals it in place.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
@@ -85,12 +86,12 @@ describe("hub jobs snapshot block lifecycle", () => {
 		return trackComponent(created, new ToolExecutionComponent("hub", { op: "jobs" }, {}, undefined, uiStub));
 	}
 
-	it("keeps an all-running jobs snapshot live and displaceable until sealed", () => {
+	it("keeps an all-running poll displaceable yet finalized until sealed", () => {
 		const component = makeJobComponent();
 		component.updateResult(jobsResult(["running", "running"]), false);
 
 		expect(component.isDisplaceableBlock()).toBe(true);
-		expect(component.isTranscriptBlockFinalized()).toBe(false);
+		expect(component.isTranscriptBlockFinalized()).toBe(true);
 
 		component.seal();
 		expect(component.isDisplaceableBlock()).toBe(false);
@@ -112,7 +113,7 @@ describe("hub jobs snapshot block lifecycle", () => {
 		expect(component.isTranscriptBlockFinalized()).toBe(true);
 	});
 
-	it("keeps successful todo snapshots live for replacement", () => {
+	it("keeps successful todo snapshots displaceable yet finalized", () => {
 		const component = trackComponent(
 			created,
 			new ToolExecutionComponent("todo", { op: "view" }, {}, undefined, uiStub),
@@ -120,7 +121,7 @@ describe("hub jobs snapshot block lifecycle", () => {
 		component.updateResult(todoResult(), false);
 
 		expect(component.isDisplaceableBlock()).toBe(true);
-		expect(component.isTranscriptBlockFinalized()).toBe(false);
+		expect(component.isTranscriptBlockFinalized()).toBe(true);
 
 		component.seal();
 		expect(component.isDisplaceableBlock()).toBe(false);
@@ -229,8 +230,8 @@ describe("EventController displaces consecutive todo snapshots", () => {
 	it("seals the jobs snapshot in place when a different tool runs next", async () => {
 		const { controller, children } = createFixture();
 
-		const snapshot = await runJobsSnapshot(controller, children, "t1");
-		expect(snapshot.isTranscriptBlockFinalized()).toBe(false);
+		const poll = await runJobsSnapshot(controller, children, "t1");
+		expect(poll.isDisplaceableBlock()).toBe(true);
 
 		await controller.handleEvent({
 			type: "tool_execution_start",
@@ -241,16 +242,16 @@ describe("EventController displaces consecutive todo snapshots", () => {
 		trackComponent(created, children[children.length - 1] as ToolExecutionComponent);
 
 		// The snapshot stays — it is final history now, not displaceable.
-		expect(children).toContain(snapshot);
-		expect(snapshot.isTranscriptBlockFinalized()).toBe(true);
-		expect(snapshot.isDisplaceableBlock()).toBe(false);
+		expect(children).toContain(poll);
+		expect(poll.isTranscriptBlockFinalized()).toBe(true);
+		expect(poll.isDisplaceableBlock()).toBe(false);
 	});
 	it("removes the previous todo snapshot when a later todo update lands in the same turn", async () => {
 		const { controller, children } = createFixture();
 
 		const first = await runTodo(controller, children, "todo-1", ["plan", "read"]);
 		expect(children).toContain(first);
-		expect(first.isTranscriptBlockFinalized()).toBe(false);
+		expect(first.isDisplaceableBlock()).toBe(true);
 
 		await controller.handleEvent({
 			type: "tool_execution_start",
@@ -292,7 +293,7 @@ describe("EventController displaces consecutive todo snapshots", () => {
 			result: todoResult(["plan", "read"]),
 			isError: false,
 		});
-		expect(first.isTranscriptBlockFinalized()).toBe(false);
+		expect(first.isDisplaceableBlock()).toBe(true);
 
 		await controller.handleEvent({
 			type: "tool_execution_start",
@@ -315,7 +316,7 @@ describe("EventController displaces consecutive todo snapshots", () => {
 		// Start alone is no longer enough — the prior snapshot stays so a failed
 		// follow-up cannot strand the user without a current todo panel.
 		expect(children).toContain(first);
-		expect(first.isTranscriptBlockFinalized()).toBe(false);
+		expect(first.isDisplaceableBlock()).toBe(true);
 
 		await controller.handleEvent({
 			type: "tool_execution_end",
@@ -336,7 +337,7 @@ describe("EventController displaces consecutive todo snapshots", () => {
 
 		const first = await runTodo(controller, children, "todo-1", ["plan", "read"]);
 		expect(children).toContain(first);
-		expect(first.isTranscriptBlockFinalized()).toBe(false);
+		expect(first.isDisplaceableBlock()).toBe(true);
 
 		await controller.handleEvent({
 			type: "tool_execution_start",
@@ -356,7 +357,7 @@ describe("EventController displaces consecutive todo snapshots", () => {
 
 		expect(children).toContain(first);
 		expect(children).toContain(errored);
-		expect(first.isTranscriptBlockFinalized()).toBe(false);
+		expect(first.isDisplaceableBlock()).toBe(true);
 	});
 
 	it("does not displace a jobs snapshot that observed completions", async () => {
@@ -546,6 +547,6 @@ describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () 
 		expect(inheritDisplaceableTodo).toHaveBeenCalledTimes(1);
 		expect(inheritDisplaceableTodo).toHaveBeenCalledWith(todos[0]);
 		expect(todos[0].canBeDisplacedBy("todo")).toBe(true);
-		expect(todos[0].isTranscriptBlockFinalized()).toBe(false);
+		expect(todos[0].isTranscriptBlockFinalized()).toBe(true);
 	});
 });

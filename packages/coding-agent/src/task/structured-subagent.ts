@@ -802,6 +802,10 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 	let requiresRecoveryArtifacts = false;
 	let completedSuccessfully = false;
 	let deferredCleanup: Promise<void> | undefined;
+	const onSubprocessResult =
+		request.invocationKind === "eval"
+			? (result: SingleResult) => request.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0)
+			: undefined;
 	try {
 		const id = await reserveStructuredSubagentId(request.session, {
 			...request.identity,
@@ -820,13 +824,13 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 				const message = error instanceof Error ? error.message : String(error);
 				throw new StructuredSubagentError(
 					"isolation",
-					`Isolated subagent execution requires a git repository. ${message}`,
+					`Isolated subagent execution could not be prepared: ${message}`,
 					{ cause: error },
 				);
 			}
 		}
 		const nativePatchMode = policy.isIsolated && policy.mergeMode === "patch-tool";
-		const result =
+		const result: SingleResult =
 			nativePatchMode && isolationContext
 				? await runNativePatchSubprocess(request, policy, baseOptions, isolationContext, id)
 				: !isolationContext
@@ -841,7 +845,11 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 							description: trimToUndefined(request.identity?.label),
 							buildCommitMessage: makeIsolationCommitMessage(request.session),
 							buildFailureResult: buildFailureResult(request, policy, id, Date.now()),
+							onSubprocessResult,
 						});
+		// The isolated paths report usage through `onSubprocessResult` themselves;
+		// only the direct subprocess path needs the outer observation.
+		if (!isolationContext) onSubprocessResult?.(result);
 		attachStructuredOutputMetadata(result, policy.schema);
 		requiresRecoveryArtifacts =
 			policy.isIsolated &&

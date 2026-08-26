@@ -3,7 +3,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
-import type { AsyncJob, AsyncJobManager } from "../async";
+import type { AsyncJob, AsyncJobManager, AsyncJobType } from "../async";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { shimmerEnabled, shimmerText } from "../modes/theme/shimmer";
 import type { Theme } from "../modes/theme/theme";
@@ -32,7 +32,7 @@ type JobParams = typeof jobSchema.infer;
 
 interface JobSnapshot {
 	id: string;
-	type: "bash" | "task";
+	type: AsyncJobType;
 	agentType?: string;
 	status: "running" | "completed" | "failed" | "cancelled";
 	label: string;
@@ -221,7 +221,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 	#snapshotJobs(
 		jobs: {
 			id: string;
-			type: "bash" | "task";
+			type: AsyncJobType;
 			agentType?: string;
 			status: string;
 			label: string;
@@ -251,7 +251,7 @@ export class JobTool implements AgentTool<typeof jobSchema, JobToolDetails> {
 		manager: AsyncJobManager,
 		jobs: {
 			id: string;
-			type: "bash" | "task";
+			type: AsyncJobType;
 			agentType?: string;
 			status: string;
 			label: string;

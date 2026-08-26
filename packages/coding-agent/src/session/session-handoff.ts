@@ -1,4 +1,4 @@
-/** Handoff generation and session transition orchestration. */
+/** Handoff document generation. Committing the document as a compaction entry is owned by SessionMaintenance. */
 
 import * as path from "node:path";
 import {
@@ -84,7 +84,6 @@ function createHandoffContext(document: string, lastSessionMessage: string | und
 	if (lastSessionMessage) content += `\n\n### Last Session Message\n\n${lastSessionMessage}`;
 	return content;
 }
-
 function createHandoffFileName(date = new Date()): string {
 	const fileTimestamp = date.toISOString().replace(/[:.]/g, "-");
 	return `handoff-${fileTimestamp}.md`;
@@ -143,7 +142,7 @@ export interface SessionHandoffHost {
 	syncTodoPhasesFromBranch(): void;
 }
 
-/** Generates handoff documents and owns the handoff session transition. */
+/** Generates handoff documents with a cache-friendly oneshot LLM call. */
 export class SessionHandoff {
 	#handoffAbortController: AbortController | undefined;
 	readonly #host: SessionHandoffHost;
@@ -170,9 +169,13 @@ export class SessionHandoff {
 	 *
 	 * @param customInstructions Optional focus for the handoff document
 	 * @param options Handoff execution options
-	 * @returns The handoff document text, or undefined if cancelled/failed
+	 * @returns The handoff document text, or undefined when cancelled/failed or
+	 *   an auto-triggered generation produced no content
 	 */
-	async handoff(customInstructions?: string, options?: SessionHandoffOptions): Promise<HandoffResult | undefined> {
+	async generateDocument(
+		customInstructions?: string,
+		options?: SessionHandoffOptions,
+	): Promise<HandoffResult | undefined> {
 		this.#host.assertVibeSessionTransitionAllowed("handoff to a new session");
 		const entries = this.#host.sessionManager.getBranch();
 		const messageCount = entries.filter(e => e.type === "message").length;
@@ -181,7 +184,6 @@ export class SessionHandoff {
 		if (messageCount < 2) {
 			throw new Error("Nothing to hand off (no messages yet)");
 		}
-
 		this.#host.setSkipPostTurnMaintenance(undefined);
 
 		this.#handoffAbortController = new AbortController();
@@ -240,8 +242,8 @@ export class SessionHandoff {
 			];
 			const handoffLlmMessages = await this.#host.convertMessagesToLlm(handoffSnapshot, handoffSignal);
 			// Base system prompt, not a per-turn `before_agent_start` hook override —
-			// the handoff seeds a fresh session and must not carry prompt-specific
-			// hook state. Matches the prompt the old handoff path sent.
+			// the document seeds the post-compaction context and must not carry
+			// prompt-specific hook state.
 			const handoffContext = await this.#host.agent.buildSideRequestContext(
 				handoffLlmMessages,
 				this.#host.baseSystemPrompt(),
@@ -289,8 +291,8 @@ export class SessionHandoff {
 					autoTriggered: options?.autoTriggered ?? false,
 				});
 				// Auto-handoff is best-effort: returning undefined lets maintenance fall
-				// back to context-full compaction. A user-initiated handoff must surface
-				// the failure instead of a silent, misleading "cancelled".
+				// back to the next compaction method. A user-initiated handoff must
+				// surface the failure instead of a silent, misleading "cancelled".
 				if (options?.autoTriggered) {
 					return undefined;
 				}
@@ -302,11 +304,10 @@ export class SessionHandoff {
 			if (this.#host.extensionRunner?.hasHandlers("session_before_switch")) {
 				const result = (await this.#host.extensionRunner.emit({
 					type: "session_before_switch",
-					reason: "handoff",
+					reason: "new",
 				})) as SessionBeforeSwitchResult | undefined;
 
 				if (result?.cancel) {
-					options?.onSwitchCancelled?.();
 					return undefined;
 				}
 			}
@@ -373,10 +374,25 @@ export class SessionHandoff {
 				});
 			}
 
-			// Inject the handoff document as a custom message
+			// Seed the handoff document as a custom message
 			const handoffContent = createHandoffContext(handoffText, lastSessionMessage);
 			this.#host.sessionManager.appendCustomMessageEntry("handoff", handoffContent, true, undefined, "agent");
 			await this.#host.sessionManager.ensureOnDisk();
+
+			// Rebuild agent messages from session
+			const sessionContext = this.#host.buildDisplaySessionContext();
+			this.#host.agent.replaceMessages(sessionContext.messages);
+			this.#host.resetAdvisorSessionState();
+			advisorRecordersDetached = false;
+			this.#host.syncTodoPhasesFromBranch();
+			if (this.#host.extensionRunner) {
+				await this.#host.extensionRunner.emit({
+					type: "session_switch",
+					reason: "new",
+					previousSessionFile,
+				});
+			}
+
 			let savedPath: string | undefined;
 			if (options?.autoTriggered && this.#host.settings.get("compaction.handoffSaveToDisk")) {
 				const artifactsDir = this.#host.sessionManager.getArtifactsDir();
@@ -394,20 +410,6 @@ export class SessionHandoff {
 				} else {
 					logger.debug("Skipping handoff document save because session is not persisted");
 				}
-			}
-
-			// Rebuild agent messages from session
-			const sessionContext = this.#host.buildDisplaySessionContext();
-			this.#host.agent.replaceMessages(sessionContext.messages);
-			this.#host.resetAdvisorSessionState();
-			advisorRecordersDetached = false;
-			this.#host.syncTodoPhasesFromBranch();
-			if (this.#host.extensionRunner) {
-				await this.#host.extensionRunner.emit({
-					type: "session_switch",
-					reason: "handoff",
-					previousSessionFile,
-				});
 			}
 
 			return { document: handoffText, savedPath };

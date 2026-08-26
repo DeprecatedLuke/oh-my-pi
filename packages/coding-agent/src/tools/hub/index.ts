@@ -31,6 +31,7 @@ import type { Theme } from "../../modes/theme/theme";
 import hubDescription from "../../prompts/tools/hub.md" with { type: "text" };
 import type { AgentRegistry } from "../../registry/agent-registry";
 import type { ToolSession } from "..";
+import type { ToolActivitySummary } from "../renderers";
 import { executeCancel, executeJobsSnapshot, jobsRenderCall, jobsRenderResult } from "./jobs";
 import {
 	executeLaunch,
@@ -50,7 +51,13 @@ import {
 	messagingRenderCall,
 	messagingRenderResult,
 } from "./messaging";
-import { type HubDetails, type HubRenderArgs, hubErrorResult } from "./types";
+import {
+	DEFAULT_HUB_LIST_LIMIT,
+	type HubDetails,
+	type HubRenderArgs,
+	hubErrorResult,
+	MAX_HUB_LIST_LIMIT,
+} from "./types";
 
 export { isRefreshableJobsSnapshotDetails } from "./jobs";
 export type { LaunchParams, LaunchToolDetails } from "./launch";
@@ -69,6 +76,10 @@ const hubSchema = type({
 	"ids?": type("string[]").describe("cancel: job ids to kill"),
 	"timeoutMs?": type("number").describe("wait (messages): timeout in milliseconds (0 waits indefinitely)"),
 	"peek?": type("boolean").describe("inbox: list messages without consuming them"),
+	"status?": type("'running' | 'idle' | 'parked'").describe("list: filter by status; omit for running+idle"),
+	"limit?": type("number > 0").describe(
+		`list: max peer rows; default ${DEFAULT_HUB_LIST_LIMIT}, max ${MAX_HUB_LIST_LIMIT}`,
+	),
 	"name?": type("string <= 48").describe("process ops: stable project-scoped launch name"),
 	"application?": type("string > 0").describe("start: executable or application path"),
 	"args?": type("string[]").describe("start: argv passed directly to the application"),
@@ -156,6 +167,10 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 			call: { op: "list" },
 		},
 		{
+			caption: "Inspect parked peer history",
+			call: { op: "list", status: "parked" },
+		},
+		{
 			caption: "Fire-and-forget DM — same send wakes idle/parked peers",
 			call: {
 				op: "send",
@@ -236,7 +251,15 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 			case "list": {
 				const messaging = this.#messaging();
 				if (!messaging) return hubErrorResult("Peer messaging is unavailable in this session.", { op: "list" });
-				return executeList(messaging.registry, messaging.senderId);
+				return executeList(
+					messaging.registry,
+					messaging.senderId,
+					{
+						status: params.status,
+						limit: params.limit,
+					},
+					this.session.getSessionFile(),
+				);
 			}
 			case "send": {
 				const toPeer = params.to?.trim();
@@ -405,6 +428,19 @@ function toLaunchArgs(args: HubRenderArgs | undefined): LaunchRenderArgs {
 export const hubToolRenderer = {
 	inline: true,
 	mergeCallAndResult: true,
+	/** Compact one-line activity: op plus its peer, process, or job target. */
+	activitySummary(args: unknown): ToolActivitySummary {
+		const hubArgs = (args ?? {}) as HubRenderArgs;
+		const op = hubArgs.op;
+		if (!op) return { label: "Hub" };
+		let detail = op;
+		if (op === "send" && (hubArgs.to || hubArgs.name)) detail = `send → ${hubArgs.to ?? hubArgs.name}`;
+		else if (op === "wait" && (hubArgs.from || hubArgs.name)) detail = `wait ${hubArgs.from ?? hubArgs.name}`;
+		else if ((op === "wait" || op === "cancel") && hubArgs.ids?.length) {
+			detail = `${op} ${hubArgs.ids.length} job${hubArgs.ids.length === 1 ? "" : "s"}`;
+		} else if (hubArgs.name) detail = `${op} ${hubArgs.name}`;
+		return { label: "Hub", detail };
+	},
 	// Only launch pending frames consume the spinner (broker RPC in flight);
 	// messaging/job pending frames are static, exactly as before the merge.
 	animatedPendingPreview: (args: unknown): boolean => isLaunchStyleArgs(args as HubRenderArgs | undefined),
