@@ -8,7 +8,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE } from "@oh-my-pi/pi-coding-agent/session/knowledge-base";
+import * as knowledgeModule from "@oh-my-pi/pi-coding-agent/session/knowledge-base";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -30,7 +30,10 @@ async function createHarness(threshold: number): Promise<Harness> {
 	const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 	const model = createMockModel({
 		provider: "mock",
-		responses: [{ content: ["Primary response"], usage: { totalTokens: 5 } }],
+		responses: [
+			{ content: ["Primary response"], usage: { totalTokens: 5 } },
+			{ content: ["Primary response"], usage: { totalTokens: 1 } },
+		],
 	});
 	const settings = Settings.isolated({
 		"knowledge.autoUpdateThresholdTokens": threshold,
@@ -78,7 +81,9 @@ async function disposeHarness(harness: Harness): Promise<void> {
 function autoUpdateMarkers(sessionManager: SessionManager) {
 	return sessionManager
 		.getBranch()
-		.filter(entry => entry.type === "custom" && entry.customType === KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE);
+		.filter(
+			entry => entry.type === "custom" && entry.customType === knowledgeModule.KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE,
+		);
 }
 
 describe("AgentSession automatic knowledge updates", () => {
@@ -106,6 +111,35 @@ describe("AgentSession automatic knowledge updates", () => {
 			expect(markers[0]).toMatchObject({ data: { throughEntryId } });
 		} finally {
 			patchPassSpy.mockRestore();
+			await disposeHarness(harness);
+		}
+	});
+
+	it("does not mark a failed distill and retries the accumulated range on the next terminal prompt", async () => {
+		const harness = await createHarness(5);
+		const knowledgeAgentSpy = vi
+			.spyOn(knowledgeModule, "runSessionKnowledgeAgent")
+			.mockResolvedValueOnce({ completed: false, committed: false })
+			.mockResolvedValueOnce({ completed: true, committed: false });
+		try {
+			await harness.session.prompt("Record the first session fact");
+			await harness.session.waitForIdle();
+
+			expect(harness.manager.getAllJobs()).toHaveLength(1);
+			await harness.manager.waitForAll();
+			expect(harness.manager.getAllJobs()[0]?.status).toBe("failed");
+			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(0);
+
+			await harness.session.prompt("Record the second session fact");
+			await harness.session.waitForIdle();
+
+			// The first pass's five tokens remain pending; the second response has
+			// only one token, so this job exists only if the failed range was kept.
+			expect(harness.manager.getAllJobs()).toHaveLength(2);
+			await harness.manager.waitForAll();
+			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(1);
+		} finally {
+			knowledgeAgentSpy.mockRestore();
 			await disposeHarness(harness);
 		}
 	});

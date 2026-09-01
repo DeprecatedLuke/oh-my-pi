@@ -7873,10 +7873,10 @@ export class AgentSession {
 		commit = true,
 	): Promise<sessionKnowledge.RunSessionKnowledgeAgentResult> {
 		const model = this.model;
-		if (!model) return { committed: false };
+		if (!model) return { committed: false, completed: false };
 		if (messages.length === 0) {
 			logger.debug("Session knowledge save skipped: empty context", { sourceTitle });
-			return { committed: false };
+			return { committed: false, completed: false };
 		}
 		return sessionKnowledge.runSessionKnowledgeAgent({
 			cwd: this.sessionManager.getCwd(),
@@ -7941,7 +7941,8 @@ export class AgentSession {
 			}
 			this.#autoKnowledgeDistillInFlight = true;
 			void this.#writeSessionKnowledge(sourceTitle, messages)
-				.then(() => {
+				.then(result => {
+					if (!result.completed) return;
 					// Resolved pass (no-change counts): advance the watermark, but
 					// only if the session still owns the captured transcript.
 					if (this.sessionManager.getSessionId() === sessionId && !this.#isDisposed) {
@@ -7982,7 +7983,8 @@ export class AgentSession {
 						runDistill: async () => {
 							// Writes the real `.omp/knowledge` but does NOT commit — the patch
 							// pass captures the edits, reverts the tree, and applies-or-pends.
-							await this.#writeSessionKnowledge(sourceTitle, messages, jobSignal, false);
+							const result = await this.#writeSessionKnowledge(sourceTitle, messages, jobSignal, false);
+							if (!result.completed) throw new Error("Session knowledge distill did not complete");
 						},
 					});
 					// Completion watermark: the distill resolved (no-change counts)

@@ -251,7 +251,7 @@ describe("runSessionKnowledgeAgent", () => {
 		expect(await Bun.file(written).text()).toContain("ci:test:smoke after worker changes");
 
 		// It committed, and ONLY the knowledge subtree landed in the commit.
-		expect(result.committed).toBe(true);
+		expect(result).toMatchObject({ completed: true, committed: true });
 		expect(result.sha).toBeDefined();
 		const headAfter = await runGit(repo, ["rev-parse", "HEAD"]);
 		expect(headAfter).not.toBe(headBefore);
@@ -304,7 +304,7 @@ describe("runSessionKnowledgeAgent", () => {
 		expect(content).toContain(secret);
 		expect(content).not.toContain(placeholder);
 		// No git in this temp dir: the file is written but nothing is committed.
-		expect(result.committed).toBe(false);
+		expect(result).toMatchObject({ completed: true, committed: false });
 	});
 
 	it("does nothing when the signal is already aborted", async () => {
@@ -324,8 +324,27 @@ describe("runSessionKnowledgeAgent", () => {
 			},
 		});
 
-		expect(result).toEqual({ committed: false });
+		expect(result).toEqual({ completed: false, committed: false });
 		expect(model.calls.length).toBe(0);
+	});
+
+	it("reports an incomplete pass when the provider stream fails", async () => {
+		const dir = await tempDir("pi-knowledge-provider-failure-");
+		const model = createMockModel({
+			responses: [{ throw: "provider unavailable" }],
+		});
+
+		const result = await runSessionKnowledgeAgent({
+			cwd: dir,
+			sourceTitle: "handoff session",
+			instruction: "Update the project knowledge base from this session.",
+			agent: {
+				initialState: { systemPrompt: ["Base prompt"], messages: [userMessage("hi")], model, tools: [] },
+				streamFn: model.stream,
+			},
+		});
+
+		expect(result).toEqual({ completed: false, committed: false });
 	});
 });
 

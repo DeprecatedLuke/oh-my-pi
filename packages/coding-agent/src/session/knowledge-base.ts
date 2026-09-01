@@ -1,5 +1,5 @@
 import { Agent, type AgentOptions } from "@oh-my-pi/pi-agent-core";
-import type { Message } from "@oh-my-pi/pi-ai";
+import type { AssistantMessage, Message } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import { commitKnowledgeFiles } from "./commit-knowledge";
 import type { SessionEntry, SessionMessageEntry } from "./session-entries";
@@ -111,6 +111,8 @@ export interface RunSessionKnowledgeAgentConfig {
 
 export interface RunSessionKnowledgeAgentResult {
 	committed: boolean;
+	/** True when the headless agent pass completed without abort or failure. */
+	completed: boolean;
 	/** Abbreviated SHA of the knowledge commit, when one was made. */
 	sha?: string;
 }
@@ -123,13 +125,13 @@ export interface RunSessionKnowledgeAgentResult {
  * The loop appends a developer instruction to the seeded session context and
  * runs to turn-end (the model stops calling tools). Designed for fire-and-forget
  * callers: it NEVER throws — any failure or abort surfaces as
- * `{ committed: false }`.
+ * `{ committed: false, completed: false }`.
  */
 export async function runSessionKnowledgeAgent(
 	config: RunSessionKnowledgeAgentConfig,
 ): Promise<RunSessionKnowledgeAgentResult> {
 	const { cwd, sourceTitle, signal } = config;
-	if (signal?.aborted) return { committed: false };
+	if (signal?.aborted) return { committed: false, completed: false };
 
 	const seededMessages = config.agent.initialState?.messages ?? [];
 
@@ -152,11 +154,26 @@ export async function runSessionKnowledgeAgent(
 		logger.debug("Session knowledge update started", { sourceTitle, messageCount: seededMessages.length });
 		await agent.prompt(instruction);
 		await agent.waitForIdle();
-		if (signal?.aborted) return { committed: false };
+		if (signal?.aborted) return { committed: false, completed: false };
+		// Provider/agent failures resolve `prompt` normally instead of throwing:
+		// a stream terminal error is absorbed into `agent.state.error` (and/or a
+		// terminal assistant message with `stopReason: "error"`). Treat either as
+		// an incomplete pass — never report `completed: true` for it.
+		let terminalAssistant: AssistantMessage | undefined;
+		const runMessages = agent.state.messages;
+		for (let index = runMessages.length - 1; index >= 0; index--) {
+			if (runMessages[index].role === "assistant") {
+				terminalAssistant = runMessages[index] as AssistantMessage;
+				break;
+			}
+		}
+		if (agent.state.error || terminalAssistant?.stopReason === "error") {
+			return { committed: false, completed: false };
+		}
 
 		// Patch-based callers capture the written edits themselves and own the
 		// commit; the agent only writes the subtree here.
-		if (config.commit === false) return { committed: false };
+		if (config.commit === false) return { committed: false, completed: true };
 
 		const result = await commitKnowledgeFiles(cwd, { sourceTitle, signal });
 		logger.debug("Session knowledge update complete", {
@@ -165,14 +182,14 @@ export async function runSessionKnowledgeAgent(
 			sha: result.sha,
 			reason: result.reason,
 		});
-		return { committed: result.committed, sha: result.sha };
+		return { committed: result.committed, completed: true, sha: result.sha };
 	} catch (error) {
-		if (signal?.aborted) return { committed: false };
+		if (signal?.aborted) return { committed: false, completed: false };
 		logger.debug("Failed to update session knowledge", {
 			sourceTitle,
 			error: error instanceof Error ? error.message : String(error),
 		});
-		return { committed: false };
+		return { committed: false, completed: false };
 	} finally {
 		signal?.removeEventListener("abort", onAbort);
 	}
