@@ -155,19 +155,23 @@ export async function runSessionKnowledgeAgent(
 		await agent.prompt(instruction);
 		await agent.waitForIdle();
 		if (signal?.aborted) return { committed: false, completed: false };
-		// Provider/agent failures resolve `prompt` normally instead of throwing:
-		// a stream terminal error is absorbed into `agent.state.error` (and/or a
-		// terminal assistant message with `stopReason: "error"`). Treat either as
-		// an incomplete pass — never report `completed: true` for it.
+		// Provider, agent, or tool failures can resolve `prompt` normally instead
+		// of throwing: stream failures surface through `agent.state.error` and/or
+		// a terminal assistant `stopReason: "error"`, while tool failures append
+		// a `toolResult` with `isError: true`. Treat any as an incomplete pass —
+		// never report `completed: true` for it.
 		let terminalAssistant: AssistantMessage | undefined;
+		let hasFailedToolResult = false;
 		const runMessages = agent.state.messages;
-		for (let index = runMessages.length - 1; index >= 0; index--) {
-			if (runMessages[index].role === "assistant") {
-				terminalAssistant = runMessages[index] as AssistantMessage;
-				break;
+		for (let index = seededMessages.length; index < runMessages.length; index++) {
+			const message = runMessages[index];
+			if (message.role === "assistant") {
+				terminalAssistant = message;
+			} else if (message.role === "toolResult" && message.isError === true) {
+				hasFailedToolResult = true;
 			}
 		}
-		if (agent.state.error || terminalAssistant?.stopReason === "error") {
+		if (agent.state.error || terminalAssistant?.stopReason === "error" || hasFailedToolResult) {
 			return { committed: false, completed: false };
 		}
 

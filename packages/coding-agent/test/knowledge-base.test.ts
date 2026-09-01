@@ -346,6 +346,52 @@ describe("runSessionKnowledgeAgent", () => {
 
 		expect(result).toEqual({ completed: false, committed: false });
 	});
+	it("reports an incomplete pass when a tool returns an error before a normal stop", async () => {
+		const dir = await tempDir("pi-knowledge-tool-failure-");
+		const model = createMockModel({
+			responses: [
+				{
+					content: [
+						{
+							type: "toolCall",
+							id: "failed-write",
+							name: "write",
+							arguments: {
+								path: "knowledge://workflows/failed.md",
+								content: "",
+							},
+						},
+					],
+				},
+				{ content: ["No knowledge changes needed."] },
+			],
+		});
+		const session = knowledgeToolSession(dir);
+
+		const result = await runSessionKnowledgeAgent({
+			cwd: dir,
+			sourceTitle: "handoff session",
+			instruction: "Update the project knowledge base from this session.",
+			agent: {
+				initialState: {
+					systemPrompt: ["Base prompt"],
+					messages: [userMessage("hi")],
+					model,
+					tools: [new WriteTool(session)],
+				},
+				streamFn: model.stream,
+				getApiKey: () => "test-key",
+				convertToLlm,
+			},
+		});
+
+		expect(result).toEqual({ completed: false, committed: false });
+		expect(model.calls).toHaveLength(2);
+		const failedResult = model.calls[1]?.context.messages.find(
+			message => message.role === "toolResult" && message.toolCallId === "failed-write",
+		);
+		expect(failedResult).toMatchObject({ role: "toolResult", isError: true });
+	});
 });
 
 describe("knowledge index description upgrades", () => {
