@@ -6,7 +6,12 @@ import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import type { Message } from "@oh-my-pi/pi-ai/types";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
-import { runSessionKnowledgeAgent } from "@oh-my-pi/pi-coding-agent/session/knowledge-base";
+import {
+	collectKnowledgeAutoUpdateSource,
+	KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE,
+	runSessionKnowledgeAgent,
+} from "@oh-my-pi/pi-coding-agent/session/knowledge-base";
+import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { loadKnowledgeSummaries } from "@oh-my-pi/pi-coding-agent/session/knowledge-index";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
@@ -50,6 +55,143 @@ async function initRepo(prefix: string): Promise<string> {
 	await runGit(repo, ["commit", "-m", "initial"]);
 	return repo;
 }
+
+function assistantMessage(text: string, totalTokens: number): Message {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text }],
+		api: "mock",
+		provider: "mock",
+		model: "mock",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: 0,
+	} as Message;
+}
+
+function toolResultMessage(text: string): Message {
+	return {
+		role: "toolResult",
+		toolCallId: "tool-call",
+		toolName: "read",
+		content: [{ type: "text", text }],
+		isError: false,
+		timestamp: 0,
+	};
+}
+
+function messageEntry(id: string, message: Message): SessionEntry {
+	return { type: "message", id, parentId: null, timestamp: "2026-01-01T00:00:00.000Z", message };
+}
+
+function customEntry(id: string, customType: string, data?: unknown): SessionEntry {
+	return {
+		type: "custom",
+		id,
+		parentId: null,
+		timestamp: "2026-01-01T00:00:00.000Z",
+		customType,
+		data,
+	};
+}
+
+function modelUsageEntry(id: string, totalTokens: number): SessionEntry {
+	return {
+		type: "model_usage",
+		id,
+		parentId: null,
+		timestamp: "2026-01-01T00:00:00.000Z",
+		purpose: "sidecar",
+		api: "mock",
+		provider: "mock",
+		model: "mock",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+	};
+}
+
+describe("automatic knowledge-update cadence", () => {
+	it("uses a 100_000-token default and treats zero as the disabled sentinel", () => {
+		const defaults = Settings.isolated();
+		const disabled = Settings.isolated({ "knowledge.autoUpdateThresholdTokens": 0 });
+
+		expect(defaults.get("knowledge.autoUpdateThresholdTokens")).toBe(100_000);
+		expect(disabled.get("knowledge.autoUpdateThresholdTokens")).toBe(0);
+	});
+
+	it("keeps post-marker session messages in order while counting only positive finite assistant usage", () => {
+		const entries: SessionEntry[] = [
+			messageEntry("before-marker", userMessage("old context")),
+			customEntry("marker", KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE),
+			messageEntry("user", userMessage("new context")),
+			modelUsageEntry("sidecar-usage", 500),
+			messageEntry("assistant-positive", assistantMessage("first answer", 7)),
+			customEntry("sidecar-custom", "other-extension"),
+			messageEntry("tool-result", toolResultMessage("tool output")),
+			messageEntry("assistant-nan", assistantMessage("invalid nan", Number.NaN)),
+			messageEntry("assistant-infinity", assistantMessage("invalid infinity", Number.POSITIVE_INFINITY)),
+			messageEntry("assistant-negative", assistantMessage("invalid negative", -3)),
+			messageEntry("assistant-positive-2", assistantMessage("second answer", 10)),
+		];
+
+		const source = collectKnowledgeAutoUpdateSource(entries);
+
+		expect(source.messages.map(entry => entry.id)).toEqual([
+			"user",
+			"assistant-positive",
+			"tool-result",
+			"assistant-nan",
+			"assistant-infinity",
+			"assistant-negative",
+			"assistant-positive-2",
+		]);
+		expect(source.totalTokens).toBe(17);
+	});
+
+	it("keeps messages and tokens appended before a completion marker whose boundary is older", () => {
+		const source = collectKnowledgeAutoUpdateSource([
+			messageEntry("old-user", userMessage("already processed")),
+			messageEntry("old-assistant", assistantMessage("old answer", 40)),
+			messageEntry("new-user", userMessage("arrived during distill")),
+			messageEntry("new-assistant", assistantMessage("new answer", 3)),
+			customEntry("completion-marker", KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE, {
+				throughEntryId: "old-assistant",
+			}),
+		]);
+
+		expect(source.messages.map(entry => entry.id)).toEqual(["new-user", "new-assistant"]);
+		expect(source.totalTokens).toBe(3);
+	});
+
+	it("resets both the source messages and token total at the latest persisted marker", () => {
+		const source = collectKnowledgeAutoUpdateSource([
+			customEntry("first-marker", KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE),
+			messageEntry("old-user", userMessage("already distilled")),
+			messageEntry("old-assistant", assistantMessage("old answer", 40)),
+			modelUsageEntry("old-sidecar", 1000),
+			customEntry("latest-marker", KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE),
+			messageEntry("new-user", userMessage("resume branch input")),
+			messageEntry("new-assistant", assistantMessage("new answer", 3)),
+		]);
+
+		expect(source.messages.map(entry => entry.id)).toEqual(["new-user", "new-assistant"]);
+		expect(source.totalTokens).toBe(3);
+	});
+});
 
 function userMessage(text: string): Message {
 	return { role: "user", content: [{ type: "text", text }], timestamp: Date.now() };

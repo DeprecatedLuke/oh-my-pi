@@ -616,6 +616,8 @@ compaction:
   thresholdTokens: -1 # fixed token limit when > 0
 memory:
   backend: off               # off, local, hindsight, mnemopi
+knowledge:
+  autoUpdateThresholdTokens: 100000   # primary-session provider tokens between automatic project-knowledge updates; 0 disables
 ```
 
 | Key                           | Type    | Default                                  | Notes                                                                                                                                                                                                                                     |
@@ -631,6 +633,7 @@ memory:
 | `compaction.keepRecentTokens` | number  | `20000`                                  | Recent tokens always preserved.                                                                                                                                                                                                           |
 | `compaction.autoContinue`     | boolean | `true`                                   | Continue automatically after compaction.                                                                                                                                                                                                  |
 | `memory.backend`              | enum    | `off`                                    | `off`, `local`, `hindsight`, `mnemopi`. Each backend has its own `hindsight.*` / `mnemopi.*` / `memories.*` tuning keys.                                                                                                                  |
+| `knowledge.autoUpdateThresholdTokens` | number | `100000` | Primary-session provider tokens between automatic project-knowledge updates; `0` disables.                                                                                                                                                |
 | `autolearn.enabled`           | boolean | `false`       | Experimental: after the agent stops, nudge it to capture lessons to memory and create/enhance isolated managed skills under `~/.omp/agent/managed-skills`. Enables the `manage_skill` tool (and `learn` when a memory backend is active). |
 | `autolearn.autoContinue`      | boolean | `false`       | When `autolearn.enabled`, auto-run one capture turn at stop (uses extra tokens). Off = a passive reminder rides your next turn.                                                                                                           |
 | `autolearn.minToolCalls`      | number  | `5`           | Only nudge after a turn that used at least this many tools.                                                                                                                                                                               |

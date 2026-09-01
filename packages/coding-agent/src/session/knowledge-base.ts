@@ -2,6 +2,75 @@ import { Agent, type AgentOptions } from "@oh-my-pi/pi-agent-core";
 import type { Message } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import { commitKnowledgeFiles } from "./commit-knowledge";
+import type { SessionEntry, SessionMessageEntry } from "./session-entries";
+
+export const KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE = "knowledge-auto-update";
+
+export interface SessionKnowledgeSource {
+	/** Primary session messages after the latest automatic-update marker. */
+	messages: SessionMessageEntry[];
+	/** Positive finite assistant provider tokens in {@link messages}. */
+	totalTokens: number;
+}
+
+/**
+ * Collect the unprocessed primary session messages and provider-token total.
+ *
+ * A completion marker may be appended after newer messages arrive while a
+ * distill runs; its `throughEntryId` therefore defines the real boundary.
+ * Plain markers retain the historical "everything after marker" behavior.
+ */
+export function collectKnowledgeAutoUpdateSource(entries: SessionEntry[]): SessionKnowledgeSource {
+	const messages: SessionMessageEntry[] = [];
+	let totalTokens = 0;
+	for (const entry of entries) {
+		if (entry.type === "custom" && entry.customType === KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE) {
+			const markerData = entry.data;
+			const throughEntryId =
+				markerData !== null &&
+				typeof markerData === "object" &&
+				"throughEntryId" in markerData &&
+				typeof markerData.throughEntryId === "string"
+					? markerData.throughEntryId
+					: undefined;
+			if (throughEntryId !== undefined) {
+				let boundaryIndex = -1;
+				for (let index = messages.length - 1; index >= 0; index--) {
+					if (messages[index].id === throughEntryId) {
+						boundaryIndex = index;
+						break;
+					}
+				}
+				if (boundaryIndex >= 0) {
+					let removedTokens = 0;
+					for (let index = 0; index <= boundaryIndex; index++) {
+						const message = messages[index].message;
+						if (message.role !== "assistant") continue;
+						const tokens = message.usage?.totalTokens;
+						if (Number.isFinite(tokens) && tokens > 0) removedTokens += tokens;
+					}
+					const retainedCount = messages.length - boundaryIndex - 1;
+					if (retainedCount > 0) messages.copyWithin(0, boundaryIndex + 1);
+					messages.length = retainedCount;
+					totalTokens -= removedTokens;
+				} else {
+					messages.length = 0;
+					totalTokens = 0;
+				}
+			} else {
+				messages.length = 0;
+				totalTokens = 0;
+			}
+			continue;
+		}
+		if (entry.type !== "message") continue;
+		messages.push(entry);
+		if (entry.message.role !== "assistant") continue;
+		const tokens = entry.message.usage?.totalTokens;
+		if (Number.isFinite(tokens) && tokens > 0) totalTokens += tokens;
+	}
+	return { messages, totalTokens };
+}
 
 /**
  * Everything required to drive one headless knowledge pass.

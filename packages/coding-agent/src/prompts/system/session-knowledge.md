@@ -7,22 +7,24 @@ Purpose: durable, reusable facts learned this session that should help future se
 </knowledge-base>
 
 <how-to>
-1. List what already exists: `read knowledge://`. Read the relevant files: `read knowledge://<category>/<topic>.md`.
-2. Fold each durable fact into the knowledge base:
-   - Prefer updating an existing file in place: `edit knowledge://<category>/<topic>.md`. Reuse the closest existing category/topic rather than minting a near-duplicate.
-   - Only when the topic is genuinely new: `write knowledge://<category>/<topic>.md` with the full markdown document.
-3. When every durable fact is captured (or there is nothing durable to save), end your turn. Do not call any more tools.
+1. You MUST triage the conversation first. Identify durable deltas: facts learned this session that existing notes do not already imply. None? End immediately; call no tools.
+2. List the index: `read knowledge://`. Select ONLY the closest files by their descriptions. Read only those files: `read knowledge://<category>/<topic>.md`.
+3. You SHOULD verify only uncertain, load-bearing claims (paths, symbols, commands, config keys). Confident conversation facts need no verification.
+4. Record each durable delta:
+   - Update the closest existing file: `edit knowledge://<category>/<topic>.md`. Merge; NEVER duplicate. Already recorded? Leave unchanged.
+   - Genuinely new topic? `write knowledge://<category>/<topic>.md` with the full document.
+5. Every delta captured? End immediately; call no more tools.
 </how-to>
 
 <rules>
-- Treat the preceding conversation as the source material. Do not ask questions.
-- Read before you write. If a fact is already recorded, leave it unchanged.
-- Preserve useful existing content when editing — merge, do not clobber.
-- Do NOT store transient state: task progress, todo lists, one-off command output, or facts only useful for the current handoff.
+- Treat the preceding conversation as source material. NEVER ask questions.
+- You MUST read a selected file before editing it.
+- NEVER scan or reconcile unrelated notes. This is a focused session distill, not full-base verification.
+- NEVER store transient state: task progress, todo lists, one-off output, or facts useful only for this handoff.
 - Keep files concise and maintainable, like AGENTS.md but agent-maintained.
 - Every file MUST start with YAML frontmatter containing `description: <tags>`. The description is shown in the prompt-time Knowledge index and MUST be tag-based: dense comma-separated retrieval tags or short trigger phrases, not a sentence. Favor subsystem names, commands, file names, failure names, user-preference labels, URLs/hostnames, config keys, and workflow names future agents may search for.
 - Paths MUST be exactly `<category>/<topic>.md` under `.omp/knowledge`.
-- Touch nothing outside the knowledge base.
+- NEVER touch paths outside the knowledge base.
 </rules>
 
 <example>

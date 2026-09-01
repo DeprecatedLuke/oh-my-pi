@@ -197,7 +197,7 @@ import {
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { releaseSharpshooterSession } from "../sharpshooter/backend";
 import { flushSharpshooterExtraction } from "../sharpshooter/extract";
-import { runIsolatedKnowledgePass } from "../task";
+import { runInProcessKnowledgePatchPass, runIsolatedKnowledgePass } from "../task";
 import { runSubprocess } from "../task/executor";
 import type { AgentDefinition } from "../task/types";
 import {
@@ -662,6 +662,8 @@ export class AgentSession {
 	 * across a `/new` is dropped regardless of job-id reuse.
 	 */
 	#asyncDeliveryEpoch = 0;
+	/** Per-session guard against stacking manager-less fire-and-forget knowledge distills. */
+	#autoKnowledgeDistillInFlight = false;
 
 	readonly #irc: IrcBridge;
 	#ircWakeTurnObserver:
@@ -3441,6 +3443,13 @@ export class AgentSession {
 				return;
 			}
 			const sessionStopWillContinue = await this.#emitSessionStopEvent(activeMessages, msg);
+			if (!sessionStopWillContinue) {
+				// Fully terminal settle: the session_stop pass declined continuation, and every
+				// retry/compaction/todo/issues/async-wake gate above already returned. Schedule the
+				// token-thresholded background knowledge distill (fire-and-forget) before the
+				// wire-level agent_end notification reaches subscribers.
+				this.#maybeScheduleKnowledgeAutoUpdate();
+			}
 			await emitAgentEndNotification(sessionStopWillContinue ? { willContinue: true } : undefined);
 		}
 	};
@@ -7888,6 +7897,112 @@ export class AgentSession {
 	#sessionKnowledgeMessages(): readonly Message[] {
 		const messages = this.agent.state.messages;
 		return convertToLlm(messages.length > 0 ? messages : this.buildDisplaySessionContext().messages);
+	}
+
+	/**
+	 * Background session-knowledge auto-distill, scheduled at the fully terminal
+	 * `agent_end` boundary (after `session_stop` declines continuation). Counts
+	 * primary assistant provider tokens persisted since the latest
+	 * `knowledge-auto-update` marker on the active branch; crossing the live
+	 * `knowledge.autoUpdateThresholdTokens` threshold registers one owned
+	 * `KnowledgeDistill` job (patch-based, `commit:false`) and advances the
+	 * durable watermark only once the pass completes — a no-change pass counts,
+	 * while failures, aborts, and session replacement leave it pending so the
+	 * range retries. Fire-and-forget: the distill never holds up the terminal
+	 * event. Skips when disabled, for non-main sessions, with no model/messages,
+	 * or while any `Knowledge*` job is running. Manager-less sessions fall back
+	 * to the direct fire-and-forget save under a per-session in-memory guard.
+	 */
+	#maybeScheduleKnowledgeAutoUpdate(): void {
+		if (this.#abortInProgress || this.#isDisposed) return;
+		const threshold = this.settings.get("knowledge.autoUpdateThresholdTokens");
+		if (!(threshold > 0)) return;
+		if (this.#agentKind !== "main") return;
+		const source = sessionKnowledge.collectKnowledgeAutoUpdateSource(this.sessionManager.getBranch());
+		if (source.messages.length === 0) return;
+		if (source.totalTokens < threshold) return;
+		const model = this.model;
+		if (!model) return;
+		// Snapshot + convert only the unprocessed primary messages: the distill
+		// runs in a background job while the session may keep streaming.
+		const messages = convertToLlm(source.messages.map(entry => entry.message));
+		// Completion watermark: advanced only after the pass resolves on the
+		// same session — failures/aborts/replacement keep the range retryable.
+		const sessionId = this.sessionManager.getSessionId();
+		const throughEntryId = source.messages[source.messages.length - 1].id;
+		const sourceTitle = "auto knowledge update";
+		const manager = this.#asyncJobManager;
+		if (!manager) {
+			// Manager-less session: direct fire-and-forget save, guarded so
+			// repeated terminal settles cannot stack duplicate passes.
+			if (this.#autoKnowledgeDistillInFlight) {
+				logger.debug("Session knowledge auto-update already in flight, skipping", { sourceTitle });
+				return;
+			}
+			this.#autoKnowledgeDistillInFlight = true;
+			void this.#writeSessionKnowledge(sourceTitle, messages)
+				.then(() => {
+					// Resolved pass (no-change counts): advance the watermark, but
+					// only if the session still owns the captured transcript.
+					if (this.sessionManager.getSessionId() === sessionId && !this.#isDisposed) {
+						this.sessionManager.appendCustomEntry(sessionKnowledge.KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE, {
+							throughEntryId,
+						});
+					}
+				})
+				.catch(error => {
+					logger.debug("Failed to run session knowledge update", {
+						sourceTitle,
+						error: error instanceof Error ? error.message : String(error),
+					});
+				})
+				.finally(() => {
+					this.#autoKnowledgeDistillInFlight = false;
+				});
+			return;
+		}
+		// Skip while any Knowledge* job is running — the auto-distill and a
+		// manual build/update/compact contend for the same `.omp/knowledge` tree.
+		if (manager.getRunningJobs().some(job => job.label.startsWith("Knowledge"))) {
+			logger.debug("Session knowledge distill already running, skipping", { sourceTitle });
+			return;
+		}
+		try {
+			const cwd = this.sessionManager.getCwd();
+			manager.register(
+				"task",
+				"KnowledgeDistill",
+				async ({ jobId: agentId, signal: jobSignal, markRunning }) => {
+					markRunning();
+					const pass = await runInProcessKnowledgePatchPass({
+						cwd,
+						taskId: agentId,
+						description: sourceTitle,
+						generateMessage: async () => `chore(knowledge): update .omp/knowledge\n\nSource: ${sourceTitle}`,
+						runDistill: async () => {
+							// Writes the real `.omp/knowledge` but does NOT commit — the patch
+							// pass captures the edits, reverts the tree, and applies-or-pends.
+							await this.#writeSessionKnowledge(sourceTitle, messages, jobSignal, false);
+						},
+					});
+					// Completion watermark: the distill resolved (no-change counts)
+					// without abort, and the session still owns the captured
+					// transcript — only then advance past the snapshot boundary.
+					if (!jobSignal.aborted && this.sessionManager.getSessionId() === sessionId && !this.#isDisposed) {
+						this.sessionManager.appendCustomEntry(sessionKnowledge.KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE, {
+							throughEntryId,
+						});
+					}
+					return `Session knowledge distill (${sourceTitle}) — ${pass.summary}`;
+				},
+				{ id: "KnowledgeDistill", ownerId: this.#agentId ?? undefined },
+			);
+		} catch (error) {
+			logger.debug("Failed to schedule session knowledge distill", {
+				sourceTitle,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
 
 	/**
