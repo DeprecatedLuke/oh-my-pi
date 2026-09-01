@@ -17,7 +17,7 @@ import {
 	basetenModelManagerOptions,
 	bedrockMantleModelManagerOptions,
 	cerebrasModelManagerOptions,
-	clinepassModelManagerOptions,
+	clinePassModelManagerOptions,
 	cloudflareAiGatewayModelManagerOptions,
 	coreWeaveModelManagerOptions,
 	deepinfraModelManagerOptions,
@@ -140,15 +140,6 @@ export const CATALOG_PROVIDERS = [
 		catalogDiscovery: { label: "Cerebras" },
 	},
 	{
-		// ClinePass has no `/v1/models` endpoint (discovery 404s), so it ships no
-		// `catalogDiscovery` — the bundled `models.json` entries are canonical, like
-		// `firepass`.
-		id: "clinepass",
-		defaultModel: "glm-5.2",
-		envVars: ["CLINE_API_KEY"],
-		createModelManagerOptions: (config: ModelManagerConfig) => clinepassModelManagerOptions(config),
-	},
-	{
 		id: "cloudflare-ai-gateway",
 		defaultModel: "anthropic/claude-opus-4-8",
 		envVars: ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
@@ -184,6 +175,14 @@ export const CATALOG_PROVIDERS = [
 		createModelManagerOptions: (config: ModelManagerConfig) => devinModelManagerOptions(config),
 		dynamicModelsAuthoritative: true,
 		catalogDiscovery: { label: "Devin", envVars: ["DEVIN_API_KEY"], oauthProvider: "devin" },
+	},
+	{
+		id: "cline-pass",
+		defaultModel: "kimi-k3",
+		envVars: ["CLINE_API_KEY"],
+		createModelManagerOptions: (config: ModelManagerConfig) => clinePassModelManagerOptions(config),
+		dynamicModelsAuthoritative: true,
+		catalogDiscovery: { label: "ClinePass", allowUnauthenticated: true },
 	},
 	{
 		id: "firepass",

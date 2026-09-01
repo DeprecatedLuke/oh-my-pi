@@ -89,15 +89,15 @@ interface CursorExecBridgeOptions {
 	 *
 	 * This is a grant, not a policy: it answers "did the session hand this
 	 * channel a file-writing tool", which callers derive from their own roster
-	 * before any bridge-specific rewriting. The primary Cursor session moves
-	 * `edit` out of {@link tools} and serves it through
-	 * {@link getEditReplaceTool}, so reading the map here would deny an
-	 * edit-only session. Defaults to allowed
-	 * to preserve the primary agent's behavior; callers with a restricted tool
-	 * set (advisors) opt out. The user's approval policy is resolved separately,
-	 * per call.
+	 * before any bridge-specific rewriting. A resolver keeps that answer current
+	 * when runtime tool selection upgrades a restricted transport. The primary
+	 * Cursor session moves `edit` out of {@link tools} and serves it through
+	 * {@link getEditReplaceTool}, so reading the map here would deny an edit-only
+	 * session. Defaults to allowed to preserve the primary agent's behavior;
+	 * callers with a restricted tool set (advisors) opt out. The user's approval
+	 * policy is resolved separately, per call.
 	 */
-	allowDirectFileMutation?: boolean;
+	allowDirectFileMutation?: boolean | (() => boolean);
 	/**
 	 * Mirror Cursor's server-owned todo list into local session state. Cursor
 	 * resolves `update_todos` / `read_todos` remotely, so without this bridge
@@ -295,6 +295,11 @@ async function executeTool(
 	return createToolResultMessage(toolCallId, toolName, result, isError);
 }
 
+function allowsDirectFileMutation(options: CursorExecBridgeOptions): boolean {
+	const grant = options.allowDirectFileMutation;
+	return typeof grant === "function" ? grant() : grant !== false;
+}
+
 /**
  * Resolve the user's policy for a frame that mutates the filesystem directly.
  *
@@ -323,7 +328,7 @@ function refuseByWritePolicy(options: CursorExecBridgeOptions, toolName: string,
 async function executeDelete(options: CursorExecBridgeOptions, pathArg: string, toolCallId: string) {
 	const toolName = "delete";
 
-	if (options.allowDirectFileMutation === false) {
+	if (!allowsDirectFileMutation(options)) {
 		const result = buildToolErrorResult(`Tool "${toolName}" not available`);
 		return createToolResultMessage(toolCallId, toolName, result, true);
 	}
@@ -789,7 +794,7 @@ export class CursorExecHandlers implements ICursorExecHandlers {
 		downloadPath?: string;
 	}): Promise<CursorMcpResourceContent | null> {
 		if (downloadPath) {
-			if (this.options.allowDirectFileMutation === false) {
+			if (!allowsDirectFileMutation(this.options)) {
 				throw new Error('Tool "write" not available: this session cannot download resources to disk.');
 			}
 			const refusal = refuseByWritePolicy(this.options, "write", downloadPath);

@@ -1,5 +1,4 @@
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
-import { supportsAllTurnsReasoningContext } from "@oh-my-pi/pi-catalog/identity";
 import { requireSupportedEffort } from "@oh-my-pi/pi-catalog/model-thinking";
 import { $env } from "@oh-my-pi/pi-utils";
 import type { Model } from "../../types";
@@ -147,17 +146,17 @@ function getReasoningConfig(
 	const config: ReasoningConfig = {
 		effort: effort === "none" ? "none" : mapCodexWireEffort(model, effort),
 	};
-	// `reasoning.summary` is accepted only from gpt-5.4 onward; earlier Codex ids
-	// (gpt-5.1-codex, gpt-5.3-codex, gpt-5.3-codex-spark) reject it with
-	// "Unsupported parameter: 'reasoning.summary' is not supported with this model".
-	// Mirrors the all_turns gate: an explicit summary is suppressed on unsupported
-	// ids, letting the server skip the human-readable summary stream.
-	if (options.reasoningSummary !== null && supportsAllTurnsReasoningContext(model.id)) {
-		config.summary = options.reasoningSummary ?? "detailed";
+	// The backend only emits reasoning summaries when `reasoning.summary` is
+	// present: omitting it yields zero `response.reasoning_summary_text.*`
+	// events (measured against gpt-5.5, gpt-5.6-sol and gpt-5.6-terra). So
+	// `undefined` means "default on" — matching `applyResponsesCompatPolicy`
+	// on the plain Responses path — and only an explicit `null` (the caller
+	// hiding thinking) opts out.
+	if (options.reasoningSummary !== null && model.compat.supportsReasoningSummary) {
+		config.summary = options.reasoningSummary ?? "auto";
 	}
 	return config;
 }
-
 function filterInput(input: InputItem[] | undefined): InputItem[] | undefined {
 	if (!Array.isArray(input)) return input;
 
@@ -404,24 +403,22 @@ export async function transformRequestBody(
 			...body.reasoning,
 			...reasoningConfig,
 		};
-		// Default reasoning replay to `all_turns`, mirroring codex-rs; an
-		// explicit `reasoningContext` overrides the default. The `all_turns`
-		// value is only accepted from gpt-5.4 onward — earlier Codex ids
-		// (gpt-5.1-codex, gpt-5.3-codex, gpt-5.3-codex-spark) reject it with
-		// "Unsupported value: 'all_turns' is not supported with this model".
-		// For those, drop `context` so the server applies its `current_turn`
-		// default. The version gate is authoritative: even an explicit
-		// `all_turns` override is suppressed on unsupported models, while
-		// `current_turn`/`auto` (universally supported) always pass through.
-		// Note: Responses Lite forces `all_turns` to satisfy the transport's server invariant.
-		const context = responsesLite ? "all_turns" : (options.reasoningContext ?? "all_turns");
-		if (context === "all_turns" && !supportsAllTurnsReasoningContext(model.id)) {
-			delete body.reasoning.context;
-		} else {
-			body.reasoning.context = context;
+		// Lite requires `all_turns` even for opaque/codenamed model ids. Only explicit
+		// full-transport overrides are gated by the known model wire generation.
+		if (responsesLite) {
+			body.reasoning.context = "all_turns";
+		} else if (options.reasoningContext !== undefined) {
+			if (options.reasoningContext === "all_turns" && !model.compat.supportsAllTurnsReasoningContext) {
+				delete body.reasoning.context;
+			} else {
+				body.reasoning.context = options.reasoningContext;
+			}
 		}
 	} else {
 		delete body.reasoning;
+	}
+	if (!model.compat.supportsReasoningSummary && body.reasoning) {
+		delete body.reasoning.summary;
 	}
 	// Catalog pro aliases (`gpt-5.6-*-pro`): applied after the effort branch so
 	// the mode is sent even when no effort is set (the branch above deletes

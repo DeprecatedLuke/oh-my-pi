@@ -121,7 +121,7 @@ async function readStateFile(statePath: string): Promise<KnowledgeExportState | 
 function mergeStates(current: KnowledgeExportState | undefined, legacy: KnowledgeExportState): KnowledgeExportState {
 	return {
 		version: STATE_VERSION,
-		sessions: { ...legacy.sessions, ...(current?.sessions ?? {}) },
+		sessions: { ...legacy.sessions, ...current?.sessions },
 		knowledgeFingerprint: current?.knowledgeFingerprint,
 	};
 }

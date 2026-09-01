@@ -399,7 +399,6 @@ describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () 
 
 	it("removes the earlier todo snapshot when an assistant message replays two todo calls", () => {
 		const chatContainer = new TranscriptContainer();
-		let helpers!: UiHelpers;
 		const ctx = {
 			chatContainer,
 			transcriptMessageComponents: new WeakMap(),
@@ -423,7 +422,7 @@ describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () 
 			lastAssistantUsage: undefined,
 			clearTransientSessionUi: () => {},
 		} as unknown as InteractiveModeContext;
-		helpers = new UiHelpers(ctx);
+		const helpers = new UiHelpers(ctx);
 
 		const usage = {
 			input: 1,
@@ -479,7 +478,6 @@ describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () 
 	it("hands the trailing todo snapshot to the controller during mid-turn rebuild", () => {
 		const chatContainer = new TranscriptContainer();
 		const inheritDisplaceableTodo = vi.fn();
-		let helpers!: UiHelpers;
 		const ctx = {
 			chatContainer,
 			transcriptMessageComponents: new WeakMap(),
@@ -499,13 +497,13 @@ describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () 
 			get viewSession() {
 				return (this as { session: unknown }).session;
 			},
-			eventController: { inheritDisplaceableTodo },
+			eventController: { inheritDisplaceableTodo, inheritTurnStart: vi.fn() },
 			toolOutputExpanded: false,
 			hideThinkingBlock: false,
 			lastAssistantUsage: undefined,
 			clearTransientSessionUi: () => {},
 		} as unknown as InteractiveModeContext;
-		helpers = new UiHelpers(ctx);
+		const helpers = new UiHelpers(ctx);
 
 		const usage = {
 			input: 1,

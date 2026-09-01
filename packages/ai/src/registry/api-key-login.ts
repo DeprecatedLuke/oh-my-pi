@@ -19,12 +19,13 @@ type ChatCompletionsValidation = {
 	provider: string;
 	baseUrl: string;
 	model: string;
+	/** Treat an authenticated 401 (`invalid_model`) as a valid key. */
+	tolerateModelDenied?: boolean;
 	/** Output-token cap field for the validation probe. Defaults to `max_tokens`. */
 	maxTokensField?: "max_tokens" | "max_completion_tokens";
 	/** Probe output-token budget. Defaults to 1. */
 	maxTokens?: number;
 };
-
 type AnthropicMessagesValidation = {
 	kind: "anthropic-messages";
 	provider: string;
@@ -105,6 +106,7 @@ export function createApiKeyLogin(config: ApiKeyLoginConfig): (options: OAuthCon
 					maxTokens: config.validation.maxTokens,
 					signal: options.signal,
 					fetch: options.fetch,
+					tolerateModelDenied: config.validation.tolerateModelDenied,
 				});
 			} else if (config.validation.kind === "anthropic-messages") {
 				await validateAnthropicCompatibleApiKey({

@@ -821,6 +821,7 @@ async function resolveInternalSearchInputs(opts: {
 	archiveDisplayMap: ReadonlyMap<string, string>;
 	localProtocolOptions?: LocalProtocolOptions;
 	skills?: ResolveContext["skills"];
+	sessionFile?: string;
 }): Promise<InternalSearchInputResolution> {
 	const internalRouter = InternalUrlRouter.instance();
 	const paths = opts.resolvedPaths.slice();
@@ -833,6 +834,7 @@ async function resolveInternalSearchInputs(opts: {
 		cwd: opts.cwd,
 		settings: opts.settings,
 		signal: opts.signal,
+		sessionFile: opts.sessionFile,
 		localProtocolOptions: opts.localProtocolOptions,
 		skills: opts.skills,
 		skipDirectoryListing: true,
@@ -1028,6 +1030,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					archiveDisplayMap,
 					localProtocolOptions: this.session.localProtocolOptions,
 					skills: this.session.skills,
+					sessionFile: this.session.getSessionFile() ?? undefined,
 				});
 				const searchablePaths = internalResolution.paths;
 				const { virtualResources, virtualPathSet, virtualInputIndexes } = internalResolution;
@@ -1079,6 +1082,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						signal,
 						localProtocolOptions: this.session.localProtocolOptions,
 						skills: this.session.skills,
+						sessionFile: this.session.getSessionFile() ?? undefined,
 						resolveExternalUrl: materializeExternalUrlForSearch,
 					});
 					searchPath = scope.searchPath;
@@ -1388,6 +1392,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				let totalMatchLimitReached = false;
 				if (windowFiles.length > 0) {
 					const lists = windowFiles.map(file => matchesByPath.get(file) ?? []);
+					// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 					const cursors = new Array<number>(lists.length).fill(0);
 					let anyAdded = true;
 					while (anyAdded) {
@@ -1598,11 +1603,11 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				const displayText = displayLines.join("\n");
 				const truncated = Boolean(
 					fileLimitReached ||
-						perFileLimitReached ||
-						totalMatchLimitReached ||
-						result.limitReached ||
-						truncation.truncated ||
-						linesTruncated,
+					perFileLimitReached ||
+					totalMatchLimitReached ||
+					result.limitReached ||
+					truncation.truncated ||
+					linesTruncated,
 				);
 				const details: GrepToolDetails = {
 					scopePath,

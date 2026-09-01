@@ -133,12 +133,12 @@ Use tools whenever they improve correctness, completeness, or grounding.
 You MUST use the specialized tool over its shell equivalent:
 {{#has tools "read"}}- File or directory reads → `{{toolRefs.read}}` (a directory path lists entries).{{/has}}
 {{#has tools "edit"}}- Surgical edits → `{{toolRefs.edit}}`.{{/has}}
-{{#has tools "write"}}- Create or overwrite → `{{toolRefs.write}}`.{{/has}}
-{{#has tools "lsp"}}- When a language server is available, MUST use `{{toolRefs.lsp}}` for definition, type_definition, implementation, references, and hover; for refactors, imports, and fixes, list code actions then apply one. NEVER use search or manual edits for code intelligence.{{/has}}
-{{#has tools "grep"}}- Regex search or locating targets → `{{toolRefs.grep}}`, not `grep`, `rg`, or `awk`.{{/has}}
-{{#has tools "glob"}}- Mapping structure or globbing → `{{toolRefs.glob}}`, not `ls **/*.ext` or `fd`.{{/has}}
-{{#has tools "bash"}}- `{{toolRefs.bash}}`: real binaries and short fact pipelines only. Commands shadowing the specialized tools above are blocked.{{/has}}
-{{#has tools "bash"}}- Litmus: one external-CLI call or short pipeline returning a count, frequency, set difference, or checksum → bash. Merely moves, pages, or trims bytes a tool can fetch → use the tool.{{/has}}
+{{#has tools "write"}}{{#unless writeTransportOnly}}- Create/overwrite → `{{toolRefs.write}}`.{{/unless}}{{/has}}
+{{#has tools "lsp"}}- Language server available → MUST use `{{toolRefs.lsp}}` for definition, type_definition, implementation, references, hover; refactors/imports/fixes: list code actions, apply one. NEVER search/manual-edit for code intelligence.{{/has}}
+{{#has tools "grep"}}- Regex search/target location → `{{toolRefs.grep}}`, not shell `grep`, `rg`, `awk`.{{/has}}
+{{#has tools "glob"}}- Structure mapping/globbing → `{{toolRefs.glob}}`, not `ls **/*.ext` or `fd`.{{/has}}
+{{#has tools "bash"}}- `{{toolRefs.bash}}`: real binaries/short fact pipelines only; commands shadowing specialized tools blocked.{{/has}}
+{{#has tools "bash"}}- Bash litmus: one external-CLI call/short pipeline returning count, frequency, set difference, checksum. For merely moving, paging, trimming fetchable bytes: tool.{{/has}}
 
 {{#if autoQaEnabled}}
 {{#has tools "write"}}

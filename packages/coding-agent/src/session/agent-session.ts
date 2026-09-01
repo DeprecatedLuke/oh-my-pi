@@ -99,9 +99,10 @@ import {
 	stringProperty,
 	withTimeout,
 } from "@oh-my-pi/pi-utils";
-import { type AdvisorConfig, type AdvisorRuntimeStatus, loadAdvisorTranscriptCosts } from "../advisor";
+import { type AdvisorConfig, loadAdvisorTranscriptCosts } from "../advisor";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
 import { reset as resetCapabilities } from "../capability";
+import type { EffectiveExtensionRoots } from "../capability/types";
 import { shouldEnableAppendOnlyContext } from "../config/append-only-context-mode";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelString, type ResolvedModelRoleValue } from "../config/model-resolver";
@@ -128,6 +129,7 @@ import type {
 	MessageEndEvent,
 	MessageStartEvent,
 	MessageUpdateEvent,
+	PreparedExtension,
 	SessionBeforeBranchResult,
 	SessionBeforeSwitchResult,
 	SessionBeforeTreeResult,
@@ -179,9 +181,7 @@ import knowledgeCompactTemplate from "../prompts/system/knowledge-compact.md" wi
 import knowledgeUpdateTemplate from "../prompts/system/knowledge-update.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
 import planModeReferencePrompt from "../prompts/system/plan-mode-reference.md" with { type: "text" };
-import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with {
-	type: "text",
-};
+import planModeToolDecisionReminderPrompt from "../prompts/system/plan-mode-tool-decision-reminder.md" with { type: "text" };
 import rewindReportTemplate from "../prompts/system/rewind-report.md" with { type: "text" };
 import sessionKnowledgeTemplate from "../prompts/system/session-knowledge.md" with { type: "text" };
 import sideChannelNoToolsReminder from "../prompts/system/side-channel-no-tools.md" with { type: "text" };
@@ -195,6 +195,8 @@ import {
 	obfuscateProviderContext,
 } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
+import { releaseSharpshooterSession } from "../sharpshooter/backend";
+import { flushSharpshooterExtraction } from "../sharpshooter/extract";
 import { runIsolatedKnowledgePass } from "../task";
 import { runSubprocess } from "../task/executor";
 import type { AgentDefinition } from "../task/types";
@@ -347,7 +349,12 @@ import {
 	toRestoredQueuedMessage,
 } from "./queued-messages";
 import type { ServingModel } from "./retry-fallback-chains";
-import { type AdvisorStats, SessionAdvisors, type SessionAdvisorsHost } from "./session-advisors";
+import {
+	type AdvisorStats,
+	type AdvisorStatusOverviewEntry,
+	SessionAdvisors,
+	type SessionAdvisorsHost,
+} from "./session-advisors";
 import type { BuildSessionContextOptions, SessionContext } from "./session-context";
 import { getRestorableSessionModels } from "./session-context";
 import { formatSessionDumpText } from "./session-dump-format";
@@ -375,7 +382,7 @@ import { YieldQueue } from "./yield-queue";
 
 export * from "./agent-session-events";
 export * from "./agent-session-types";
-export type { AdvisorStats, PerAdvisorStat } from "./session-advisors";
+export type { AdvisorStats, AdvisorStatusOverviewEntry, PerAdvisorStat } from "./session-advisors";
 export type { ShakeMode, ShakeResult };
 
 const SESSION_STOP_CONTINUATION_CAP = 8;
@@ -439,11 +446,29 @@ type AgentContinueSkipReason =
 	| "post-restore-unavailable";
 
 type ScheduledAgentContinueOptions = {
+	source: string;
 	delayMs?: number;
 	generation?: number;
 	shouldContinue?: () => boolean;
 	onSkip?: (reason: AgentContinueSkipReason) => void;
 	onError?: (error: unknown) => void;
+};
+
+type ScheduledAgentContinueRequest = {
+	schedulerToken: number;
+	options: ScheduledAgentContinueOptions;
+};
+
+type AgentContinueOutcome =
+	| { status: "completed" }
+	| { status: "skipped"; reason: AgentContinueSkipReason }
+	| { status: "failed"; error: unknown };
+
+type ActiveAgentContinue = {
+	schedulerToken: number;
+	source: string;
+	coalescedSources: Set<string>;
+	promise: Promise<AgentContinueOutcome>;
 };
 
 type SessionTitleSource = "auto" | "user";
@@ -487,6 +512,7 @@ function cloneMessageEndNotification(message: AgentMessage): AgentMessage {
 }
 
 const INTERRUPTED_THINKING_MIN_CHARS = 60;
+const SESSION_CWD_CHANGE_REJECTED = Symbol("sessionCwdChangeRejected");
 
 export class AgentSession {
 	readonly agent: Agent;
@@ -498,6 +524,38 @@ export class AgentSession {
 	fileSnapshotStore?: InMemorySnapshotStore;
 	/** Per-session `CUT`/`PASTE` clipboard register shared across edit calls. */
 	editClipboard?: Clipboard;
+
+	/** Materializes this session's live extension-root policy per discovery call. */
+	readonly #extensionRoots: () => EffectiveExtensionRoots;
+
+	/**
+	 * Session-local extension roots for post-startup rediscovery. Subagents may
+	 * inherit the owning session's provider so recursive task discovery preserves
+	 * explicit roots, mode, configured roots, and provenance.
+	 */
+	get effectiveExtensionRoots(): EffectiveExtensionRoots {
+		return this.#extensionRoots();
+	}
+
+	/** Parent-imported extension factories, forwarded to session forks (`/tan`) to rebind runtime providers. */
+	readonly #preparedExtensions: readonly PreparedExtension[] | undefined;
+
+	/**
+	 * Session-independent imported extension factories safe to rebind in child
+	 * sessions. A `/tan` fork forwards these as `preloadedPreparedExtensions`
+	 * so the child re-registers the parent's runtime providers.
+	 */
+	get preparedExtensions(): readonly PreparedExtension[] | undefined {
+		return this.#preparedExtensions;
+	}
+
+	/** Source paths of the parent's loaded extensions; forwarded to `/tan` forks as the prepared-extension fallback. */
+	readonly #extensionPaths: readonly string[] | undefined;
+
+	/** Source paths of loaded extensions, forwarded to child sessions when prepared factories are unavailable. */
+	get extensionPaths(): readonly string[] | undefined {
+		return this.#extensionPaths;
+	}
 
 	#powerAssertion: MacOSPowerAssertion | undefined;
 
@@ -524,6 +582,7 @@ export class AgentSession {
 	/** Last (enable, providerId) tuple resolved by `#syncAppendOnlyContext` — used to skip no-op invalidations. */
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
+	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
 	readonly #eventBus: EventBus | undefined;
@@ -541,7 +600,7 @@ export class AgentSession {
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
 	readonly #advisors: SessionAdvisors;
-	/** Resolves once the resume-time advisor spend backfill settles (issue #9553). */
+	/** Resolves once the resume-time advisor spend backfill settles. */
 	#advisorCostRestore: Promise<void> = Promise.resolve();
 	#goalTurnCounter = 0;
 	#planReferenceSent = false;
@@ -618,6 +677,7 @@ export class AgentSession {
 	#autolearnCaptureAbortController: AbortController | undefined;
 	#autolearnCaptureTask: Promise<void> | undefined;
 	#isDisposed = false;
+	#fallbackDiscoveryRevalidationAbortController = new AbortController();
 	/** Process-wide by default (double-spend safety across sessions); injectable for tests. */
 	#codexResetCoordinator: CodexAutoRedeemCoordinator;
 	// Extension system
@@ -682,6 +742,8 @@ export class AgentSession {
 	#postPromptTasksPromise: Promise<void> | undefined = undefined;
 	#postPromptTasksResolve: (() => void) | undefined = undefined;
 	#postPromptTasksAbortController = new AbortController();
+	#activeAgentContinue: ActiveAgentContinue | undefined;
+	#agentContinueSchedulerToken = 0;
 
 	readonly #streamingEditGuard: StreamingEditGuard;
 	readonly #loopGuards: LoopGuards;
@@ -995,7 +1057,25 @@ export class AgentSession {
 		const pending = this.#pendingAgentEndEmit;
 		if (!pending) return;
 		this.#pendingAgentEndEmit = undefined;
-		this.#emit(pending);
+		if (pending.type !== "agent_end" || pending.isTerminal === false) {
+			this.#emit(pending);
+			return;
+		}
+
+		// `agent_end` is deferred until the prompt count reaches zero, but it is
+		// emitted immediately before the settle drain schedules work that arrived
+		// after the loop's final queue/aside poll. Such a tail arrival is a real
+		// continuation, not a terminal stop: mark this end non-terminal so
+		// subscribers wait through the queued steer/follow-up or stranded IRC wake.
+		const canDrain =
+			!this.#abortInProgress && this.#unsubscribeAgent !== undefined && this.#modeExitDrainSuppressionDepth === 0;
+		const queuedContinuation =
+			canDrain &&
+			!this.#queuedMessageDrainBlocked &&
+			this.#canAutoContinueForFollowUp() &&
+			this.agent.hasQueuedMessages();
+		const ircContinuation = canDrain && !this.#isDisposed && !this.#planModeState?.enabled && this.#irc.hasPending();
+		this.#emit(queuedContinuation || ircContinuation ? { ...pending, isTerminal: false } : pending);
 	}
 
 	/**
@@ -1046,6 +1126,16 @@ export class AgentSession {
 		this.#modelRegistry = config.modelRegistry;
 		this.#eventBus = config.eventBus;
 		this.#secretPlaceholderKeyDir = config.secretPlaceholderKeyDir;
+		this.#extensionRoots =
+			config.extensionRoots ??
+			(() => ({
+				explicit: config.additionalExtensionPaths ?? [],
+				mode: config.disableExtensionDiscovery ? "explicit-only" : "merge",
+				configured: this.settings.get("extensions") ?? [],
+				configuredLevel: this.settings.extensionsSourceLevel(),
+			}));
+		this.#preparedExtensions = config.preparedExtensions;
+		this.#extensionPaths = config.extensionPaths;
 		this.#codexResetCoordinator = config.codexResetCoordinator ?? defaultCodexAutoRedeemCoordinator;
 		const bashHost: BashRunnerHost = {
 			agent: this.agent,
@@ -1363,6 +1453,7 @@ export class AgentSession {
 			agent: this.agent,
 			sessionManager: this.sessionManager,
 			settings: this.settings,
+			effectiveExtensionRoots: () => this.effectiveExtensionRoots,
 			modelRegistry: this.#modelRegistry,
 			extensionRunner: () => this.#extensionRunner,
 			clientBridge: () => this.#clientBridge,
@@ -1398,6 +1489,9 @@ export class AgentSession {
 			mcpManagerToolNames: config.mcpManagerToolNames,
 			presentationPinnedToolNames: config.presentationPinnedToolNames,
 			ensureWriteRegistered: config.ensureWriteRegistered,
+			isDeviceOnlyWrite: config.isDeviceOnlyWrite,
+			setDeviceOnlyWrite: config.setDeviceOnlyWrite,
+			setPendingFullWriteDescription: config.setPendingFullWriteDescription,
 			ensureGoalRegistered: config.ensureGoalRegistered,
 			rebuildSystemPrompt: config.rebuildSystemPrompt,
 			getMcpServerInstructions: config.getMcpServerInstructions,
@@ -1706,13 +1800,15 @@ export class AgentSession {
 			});
 		});
 
-		// An advisor enabled in config resolves its role against the model catalog
-		// as it stands at construction. Discovery-backed providers (e.g. GitHub
-		// Copilot) may not be populated yet — background discovery is started
-		// fire-and-forget before the session is built — so a valid configured model
-		// can land as `no_model`. Retry once the initial refresh settles so the
-		// advisor activates without a manual /advisor toggle. See #9010.
+		// Config-declared resolution done against the catalog as it stands at
+		// construction can be premature: background discovery is started
+		// fire-and-forget (before the session in the SDK path, right after it in
+		// the CLI path), so discovery-backed providers (e.g. GitHub Copilot, or a
+		// models.yml LiteLLM provider with a cold cache) may not be populated yet.
+		// Reactivate a `no_model` advisor (#9010) and retract stale
+		// retry.fallbackChains warnings (#10048) once discovery settles.
 		void this.#retryInactiveAdvisorAfterModelDiscovery();
+		void this.#revalidateFallbackChainsAfterModelDiscovery();
 	}
 
 	/** Model registry for API key resolution and model discovery */
@@ -1903,6 +1999,7 @@ export class AgentSession {
 			status: job.status,
 			label: job.label,
 			startTime: job.startTime,
+			agentId: job.agentId,
 		}));
 		const recent = manager.getRecentJobs(options?.recentLimit ?? 5, ownerFilter).map(job => ({
 			id: job.id,
@@ -1911,6 +2008,7 @@ export class AgentSession {
 			status: job.status,
 			label: job.label,
 			startTime: job.startTime,
+			agentId: job.agentId,
 		}));
 		const delivery = manager.getDeliveryState(ownerFilter);
 		return { running, recent, delivery };
@@ -2186,6 +2284,14 @@ export class AgentSession {
 	#subscriberEmitGate: Promise<void> = Promise.resolve();
 
 	async #emitSessionEvent(event: AgentSessionEvent, options: { detachExtensions?: boolean } = {}): Promise<void> {
+		if (event.type === "tool_execution_update") {
+			// Returned background calls have no later tool result to persist their
+			// terminal frame. Keep the latest update for future focus rebuilds;
+			// logical session transitions clear the cache.
+			this.#activeToolExecutionUpdates.set(event.toolCallId, event);
+		} else if (event.type === "tool_execution_end") {
+			this.#activeToolExecutionUpdates.delete(event.toolCallId);
+		}
 		if (event.type === "message_update") {
 			this.#emit(event);
 			void this.#queueExtensionEvent(event);
@@ -2262,6 +2368,18 @@ export class AgentSession {
 	};
 
 	/**
+	 * Await only message persistence already in flight at call time.
+	 *
+	 * Focus attach uses this after subscribing to the target so a tool result
+	 * emitted during the focus blackout is present in the transcript rebuild.
+	 * This intentionally excludes agent_end maintenance, which may perform
+	 * provider-backed compaction and must not block switching sessions.
+	 */
+	async settleInFlightMessagePersistence(): Promise<void> {
+		await Promise.allSettled(this.#pendingMessageEndPersistence.values());
+	}
+
+	/**
 	 * Await every in-flight event handler (and any it chains into) so a late
 	 * message/entry append cannot land after the caller clears session memory.
 	 * The agent must already be idle — otherwise new events keep arriving and
@@ -2269,7 +2387,7 @@ export class AgentSession {
 	 */
 	async #drainInFlightEventHandlers(): Promise<void> {
 		while (this.#inFlightEventHandlers.size > 0) {
-			await Promise.allSettled([...this.#inFlightEventHandlers]);
+			await Promise.allSettled(this.#inFlightEventHandlers);
 		}
 	}
 
@@ -2515,6 +2633,10 @@ export class AgentSession {
 					message.display,
 					message.details,
 					message.attribution ?? "agent",
+					// Preserve the initiating message's own timestamp: the entry
+					// otherwise records emission time, which on rebuild excludes
+					// provider preparation / hook time from the prompt→yield anchor.
+					message.timestamp,
 				);
 			}
 			if (message.role === "custom" && message.customType === "ttsr-injection") {
@@ -2715,6 +2837,13 @@ export class AgentSession {
 
 		const messageEndPersistence =
 			event.type === "message_end" ? this.#createMessageEndPersistenceSlot(event.message) : undefined;
+		// Local completion time for prompt→yield timing: stamped here, not by the
+		// provider, so the usage row's Δ is exact and provider-independent — some
+		// providers never report `duration` (gitlab-duo) or stamp `timestamp` at
+		// request start. Persisted with the message and read on rebuild.
+		if (event.type === "message_end" && event.message.role === "assistant") {
+			event.message.completedAt = Date.now();
+		}
 
 		// Deobfuscate assistant message content for display emission — the LLM echoes back
 		// obfuscated placeholders, but listeners (TUI, extensions, exporters) must see real
@@ -3393,7 +3522,7 @@ export class AgentSession {
 			attribution: "agent",
 			timestamp: Date.now(),
 		});
-		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
+		this.#scheduleAgentContinue({ source: "issue-reminder", generation: this.#promptGeneration });
 		return true;
 	}
 
@@ -3425,12 +3554,72 @@ export class AgentSession {
 		this.#trackPostPromptTask(scheduled);
 	}
 
-	#skipAgentContinue(reason: AgentContinueSkipReason, options: ScheduledAgentContinueOptions | undefined): void {
-		logger.debug("agent.continue skipped after scheduling", { reason });
-		options?.onSkip?.(reason);
+	#skipAgentContinue(reason: AgentContinueSkipReason, request: ScheduledAgentContinueRequest): void {
+		logger.debug("agent.continue skipped after scheduling", {
+			reason,
+			source: request.options.source,
+			schedulerToken: request.schedulerToken,
+		});
+		request.options.onSkip?.(reason);
 	}
 
-	#scheduleAgentContinue(options?: ScheduledAgentContinueOptions): void {
+	#handleAgentContinueOutcome(outcome: AgentContinueOutcome, request: ScheduledAgentContinueRequest): void {
+		if (outcome.status === "skipped") {
+			this.#skipAgentContinue(outcome.reason, request);
+		} else if (outcome.status === "failed") {
+			request.options.onError?.(outcome.error);
+		}
+	}
+
+	async #runAgentContinue(
+		signal: AbortSignal,
+		request: ScheduledAgentContinueRequest,
+		coalescedSources: Set<string>,
+	): Promise<AgentContinueOutcome> {
+		try {
+			const reverted = await this.#recovery.maybeRestoreRetryFallbackPrimary();
+			if (signal.aborted || this.#isDisposed) {
+				return { status: "skipped", reason: "post-restore-unavailable" };
+			}
+			// A cooldown-expiry revert can drop the active window below the
+			// accumulated context. The user-prompt path re-checks context after
+			// the revert via runPrePromptCompactionIfNeeded; the auto-continue
+			// path must do the same so agent.continue() never sends a
+			// predictably oversized request to the reverted (smaller) model.
+			if (reverted) {
+				await this.#maintenance.runPrePromptCompactionIfNeeded([]);
+				if (signal.aborted || this.#isDisposed) {
+					return { status: "skipped", reason: "post-restore-unavailable" };
+				}
+			}
+			if (this.settings.get("retry.usageAwareFallback")) {
+				if (!(await this.#runQueuedUsageAwarePreflight(signal))) {
+					return { status: "skipped", reason: "session-unavailable" };
+				}
+			}
+			await this.agent.continue(signal);
+			return { status: "completed" };
+		} catch (error) {
+			logger.warn("agent.continue failed after scheduling", {
+				source: request.options.source,
+				schedulerToken: request.schedulerToken,
+				coalescedSources: [...coalescedSources].filter(source => source !== request.options.source),
+				error: error instanceof Error ? error.message : String(error),
+				stack: error instanceof Error ? error.stack : undefined,
+			});
+			return { status: "failed", error };
+		}
+	}
+
+	#scheduleAgentContinue(options: ScheduledAgentContinueOptions): void {
+		const request: ScheduledAgentContinueRequest = {
+			schedulerToken: ++this.#agentContinueSchedulerToken,
+			options,
+		};
+		logger.debug("agent.continue scheduled", {
+			source: options.source,
+			schedulerToken: request.schedulerToken,
+		});
 		this.#schedulePostPromptTask(
 			async signal => {
 				// Defense in depth: if compaction/handoff slipped onto the post-prompt queue
@@ -3439,54 +3628,55 @@ export class AgentSession {
 				// reset. The first-class fix is in #checkCompaction/the agent_end handler,
 				// but this guard catches anything that bypasses that path.
 				if (signal.aborted || this.#isDisposed || this.isCompacting || this.isGeneratingHandoff) {
-					this.#skipAgentContinue("session-unavailable", options);
+					this.#skipAgentContinue("session-unavailable", request);
 					return;
 				}
-				if (options?.shouldContinue && !options.shouldContinue()) {
-					this.#skipAgentContinue("should-continue-false", options);
+				if (options.shouldContinue && !options.shouldContinue()) {
+					this.#skipAgentContinue("should-continue-false", request);
 					return;
 				}
-				this.#beginInFlight();
-				try {
-					const reverted = await this.#recovery.maybeRestoreRetryFallbackPrimary();
-					if (signal.aborted || this.#isDisposed) {
-						this.#skipAgentContinue("post-restore-unavailable", options);
-						return;
-					}
-					// A cooldown-expiry revert can drop the active window below the
-					// accumulated context. The user-prompt path re-checks context after
-					// the revert via runPrePromptCompactionIfNeeded; the auto-continue
-					// path must do the same so agent.continue() never sends a
-					// predictably oversized request to the reverted (smaller) model.
-					if (reverted) {
-						await this.#maintenance.runPrePromptCompactionIfNeeded([]);
-						if (signal.aborted || this.#isDisposed) {
-							this.#skipAgentContinue("post-restore-unavailable", options);
-							return;
-						}
-					}
-					if (this.settings.get("retry.usageAwareFallback")) {
-						if (!(await this.#runQueuedUsageAwarePreflight(signal))) {
-							this.#skipAgentContinue("session-unavailable", options);
-							return;
-						}
-					}
-					await this.agent.continue(signal);
-				} catch (error) {
-					logger.warn("agent.continue failed after scheduling", {
-						error: error instanceof Error ? error.message : String(error),
-						stack: error instanceof Error ? error.stack : undefined,
+
+				const active = this.#activeAgentContinue;
+				if (active) {
+					active.coalescedSources.add(options.source);
+					logger.debug("agent.continue coalesced after scheduling", {
+						source: options.source,
+						schedulerToken: request.schedulerToken,
+						activeSource: active.source,
+						activeSchedulerToken: active.schedulerToken,
 					});
-					options?.onError?.(error);
+					this.#handleAgentContinueOutcome(await active.promise, request);
+					return;
+				}
+
+				this.#beginInFlight();
+				const coalescedSources = new Set([options.source]);
+				const promise = this.#runAgentContinue(signal, request, coalescedSources);
+				const attempt: ActiveAgentContinue = {
+					schedulerToken: request.schedulerToken,
+					source: options.source,
+					coalescedSources,
+					promise,
+				};
+				this.#activeAgentContinue = attempt;
+				try {
+					this.#handleAgentContinueOutcome(await promise, request);
 				} finally {
+					// Clear the active attempt BEFORE #endInFlight(): the settle drain it
+					// triggers (#drainStrandedQueuedMessages -> queued-message-drain) runs
+					// synchronously and must start a fresh continue for messages queued
+					// after this attempt's final poll, not coalesce onto the finished one.
+					if (this.#activeAgentContinue === attempt) {
+						this.#activeAgentContinue = undefined;
+					}
 					this.#usagePreflightReadyForNextModelCall = false;
 					this.#endInFlight();
 				}
 			},
 			{
-				delayMs: options?.delayMs,
-				generation: options?.generation,
-				onSkip: reason => this.#skipAgentContinue(reason, options),
+				delayMs: options.delayMs,
+				generation: options.generation,
+				onSkip: reason => this.#skipAgentContinue(reason, request),
 			},
 		);
 	}
@@ -3500,6 +3690,7 @@ export class AgentSession {
 		if (options.suppressContinuation) return false;
 		if (this.agent.hasQueuedMessages()) {
 			this.#scheduleAgentContinue({
+				source: "compaction-queued-message",
 				delayMs: 100,
 				generation: options.generation,
 				shouldContinue: () => this.agent.hasQueuedMessages(),
@@ -3525,6 +3716,10 @@ export class AgentSession {
 					content: [{ type: "text", text: autoContinuePrompt }],
 					attribution: "agent",
 					timestamp: Date.now(),
+					// Distinguishes this run-initiating prompt from same-turn
+					// continuation reminders (todo/plan) that are also persisted as
+					// developer messages; replay uses it for the prompt→yield anchor.
+					synthetic: true,
 				},
 				autoContinuePrompt,
 				{
@@ -3539,6 +3734,7 @@ export class AgentSession {
 				if (signal.aborted) return;
 				if (this.agent.hasQueuedMessages()) {
 					this.#scheduleAgentContinue({
+						source: "auto-continue-queued-message",
 						generation,
 						shouldContinue: () => this.agent.hasQueuedMessages(),
 					});
@@ -3945,6 +4141,15 @@ export class AgentSession {
 	}
 
 	/**
+	 * Snapshot the latest unpersisted display result for each active tool or
+	 * returned background call. Focus rebuilds replay these after reconstructing
+	 * persisted transcript state.
+	 */
+	activeToolExecutionUpdates(): readonly Extract<AgentSessionEvent, { type: "tool_execution_update" }>[] {
+		return [...this.#activeToolExecutionUpdates.values()];
+	}
+
+	/**
 	 * Observe authoritative run-state transitions before public `agent_end`
 	 * deferral, for lifecycle owners that must not remain stale while prompts unwind.
 	 */
@@ -4063,7 +4268,7 @@ export class AgentSession {
 	}
 
 	#notifySessionChangeCallbacks(): void {
-		for (const callback of [...this.#sessionChangeCallbacks]) {
+		for (const callback of Array.from(this.#sessionChangeCallbacks)) {
 			try {
 				callback();
 			} catch (error) {
@@ -4131,6 +4336,7 @@ export class AgentSession {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
+		this.#fallbackDiscoveryRevalidationAbortController.abort();
 		this.#queuedMessageDrainBlocked = false;
 		this.#usagePreflightReadyForNextModelCall = false;
 		this.#detachUsageBeforeQueueDequeue?.();
@@ -4278,6 +4484,14 @@ export class AgentSession {
 
 		const hindsightState = this.getHindsightSessionState();
 		const mnemopiState = setMnemopiSessionState(this, undefined);
+		// Bound the wait for a just-fired sharpshooter extraction before dropping
+		// its subscriptions, so print-mode exits don't cut queued-delta writes.
+		const sharpshooterFlushed = flushSharpshooterExtraction(this, options.mnemopiConsolidateTimeoutMs);
+		try {
+			releaseSharpshooterSession(this);
+		} catch (error) {
+			logger.warn("Session dispose: Sharpshooter release failed", { error: String(error) });
+		}
 		const advisorRecorderClosed = this.#advisors.recorderClosed();
 		const results = await Promise.allSettled([
 			this.#disposeOwnedAsyncJobs(),
@@ -4289,6 +4503,7 @@ export class AgentSession {
 			advisorRecorderClosed,
 			hindsightState?.flushRetainQueue() ?? Promise.resolve(),
 			this.#disposeMnemopi(mnemopiState, options.mnemopiConsolidateTimeoutMs),
+			sharpshooterFlushed,
 		]);
 		for (const result of results) {
 			if (result.status === "rejected") {
@@ -4867,10 +5082,6 @@ export class AgentSession {
 		return this.#tools.resolveActiveEditMode();
 	}
 
-	#syncAfterModelChange(previousEditMode: EditMode): Promise<void> {
-		return this.#tools.syncAfterModelChange(previousEditMode);
-	}
-
 	/** Enabled MCP tools in their current presentation partition. */
 	getSelectedMCPToolNames(): string[] {
 		return this.#tools.getSelectedMCPToolNames();
@@ -5303,6 +5514,10 @@ export class AgentSession {
 		this.#toolChoiceQueue.clear();
 		this.#tools.clearAcpPermissionDecisions();
 		this.#tools.resetAnnouncedMounts();
+		// A `/new`, session switch, or tree navigation reuses tool-call ids, so a
+		// still-cached background-task snapshot from the old conversation must not
+		// survive to be replayed by a focus rebuild in the reset session (#10447).
+		this.#activeToolExecutionUpdates.clear();
 	}
 
 	/**
@@ -5713,6 +5928,10 @@ export class AgentSession {
 	 * the ACP agent) use this to know whether to expect an `agent_end` event.
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<boolean> {
+		// Stamp the operator's submission instant before ANY async preprocessing —
+		// command execution, image normalization, vision-model description — so the
+		// prompt→yield delta includes the whole wait, whatever path the prompt takes.
+		const submittedAt = Date.now();
 		// A manual `/compact` runs with the agent subscription disconnected until its
 		// cleanup finally re-drains the preserved queues. Starting a turn before then
 		// would neither persist nor forward its events and could race the in-flight
@@ -5788,9 +6007,9 @@ export class AgentSession {
 				await this.#queueCustomMessage(notice, streamingBehavior);
 			}
 			if (streamingBehavior === "followUp") {
-				await this.#queueUserMessage(expandedText, options?.images, "followUp");
+				await this.#queueUserMessage(expandedText, options?.images, "followUp", submittedAt);
 			} else {
-				await this.#queueUserMessage(expandedText, options?.images, "steer");
+				await this.#queueUserMessage(expandedText, options?.images, "steer", submittedAt);
 			}
 			return true;
 		}
@@ -5822,6 +6041,27 @@ export class AgentSession {
 			? await this.#buildImageDescriptionNotice(normalizedImages)
 			: undefined;
 
+		// A concurrent prompt() can start a turn during the awaits above: image
+		// normalization and the vision-description call suspend after the
+		// isStreaming check at the top, so two callers — the CLI initial message
+		// and a freshly typed submission — can both observe an idle session.
+		// Re-check before dispatch so the loser queues exactly like the early
+		// branch instead of racing #promptWithMessage into AgentBusyError. No
+		// await sits between this check and #beginInFlight, so the winner's
+		// in-flight increment is visible to every later re-check.
+		if (this.isStreaming) {
+			const streamingBehavior = options?.streamingBehavior;
+			if (!streamingBehavior) throw new AgentBusyError();
+			for (const notice of keywordNotices) {
+				await this.#queueCustomMessage(notice, streamingBehavior);
+			}
+			await this.#queueUserMessage(expandedText, options?.images, streamingBehavior, submittedAt, {
+				images: normalizedImages,
+				descriptionNotice: imageDescriptionNotice,
+			});
+			return true;
+		}
+
 		const promptAttribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
 		if (externalThinkingToolChoice) {
 			this.#toolChoiceQueue.pushOnce(externalThinkingToolChoice, {
@@ -5830,8 +6070,15 @@ export class AgentSession {
 			});
 		}
 		const message = options?.synthetic
-			? { role: "developer" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() }
-			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: Date.now() };
+			? {
+					role: "developer" as const,
+					content: userContent,
+					attribution: promptAttribution,
+					timestamp: submittedAt,
+					synthetic: true,
+					userInitiated: options?.userInitiated === true ? true : undefined,
+				}
+			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: submittedAt };
 
 		const preludeMessages: AgentMessage[] = [];
 		if (eagerTodoPrelude) {
@@ -6206,7 +6453,7 @@ export class AgentSession {
 		const ctx = this.#extensionRunner.createCommandContext();
 
 		try {
-			await command.handler(args, ctx);
+			await this.#extensionRunner.runScoped(() => command.handler(args, ctx));
 			return true;
 		} catch (err) {
 			// Emit error via extension runner
@@ -6352,7 +6599,10 @@ export class AgentSession {
 		}
 
 		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
-		await this.#queueUserMessage(expandedText, images, "steer");
+		// Stamp before image preprocessing so a queued image steer measures from
+		// the operator's submission, not after the vision-model description.
+		const submittedAt = Date.now();
+		await this.#queueUserMessage(expandedText, images, "steer", submittedAt);
 	}
 
 	/**
@@ -6369,8 +6619,11 @@ export class AgentSession {
 
 		const expandedText =
 			options?.expandPromptTemplates === false ? text : expandPromptTemplate(text, [...this.#promptTemplates]);
+		// Stamp before image preprocessing so a queued image follow-up measures
+		// from the operator's submission, not after the vision-model description.
+		const submittedAt = Date.now();
 		if (!options?.synthetic) {
-			await this.#queueUserMessage(expandedText, images, "followUp");
+			await this.#queueUserMessage(expandedText, images, "followUp", submittedAt);
 			return;
 		}
 		// Synthetic branch: agent-initiated hidden developer message. Bypass
@@ -6392,6 +6645,10 @@ export class AgentSession {
 			content,
 			attribution: options.attribution ?? "agent",
 			timestamp: Date.now(),
+			// Run-initiating synthetic prompt (e.g. approved-plan execution queued
+			// behind a busy turn): replay uses the marker to clear the preceding
+			// user's prompt anchor, matching the live agent_start clear.
+			synthetic: true,
 		});
 		this.#scheduleIdleQueueDrain();
 	}
@@ -6427,21 +6684,28 @@ export class AgentSession {
 		text: string,
 		images: ImageContent[] | undefined,
 		mode: "steer" | "followUp",
+		timestamp?: number,
+		preprocessed?: { images: ImageContent[] | undefined; descriptionNotice: CustomMessage | undefined },
 	): Promise<void> {
 		// A queued user message (RPC/SDK/collab steer or follow-up, or a typed message
 		// while streaming) is a deliberate resume; re-enable advisor auto-resume that
 		// a user interrupt suppressed.
 		this.#advisors.autoResumeSuppressed = false;
-		const normalizedImages = await this.#normalizeImagesForModel(images);
+		// The pre-dispatch re-check in prompt() arrives with normalization and the
+		// vision description already done — reuse them instead of paying a second
+		// vision-model request for the same attachment.
+		const normalizedImages = preprocessed ? preprocessed.images : await this.#normalizeImagesForModel(images);
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
 		if (normalizedImages?.length) {
 			content.push(...normalizedImages);
 		}
 		// Text-only model + image attachment: describe via a vision model and enqueue the
 		// description as a hidden companion immediately before the user message.
-		const imageDescriptionNotice = normalizedImages?.length
-			? await this.#buildImageDescriptionNotice(normalizedImages)
-			: undefined;
+		const imageDescriptionNotice = preprocessed
+			? preprocessed.descriptionNotice
+			: normalizedImages?.length
+				? await this.#buildImageDescriptionNotice(normalizedImages)
+				: undefined;
 		this.#allowQueuedMessageDrainRetry();
 		if (mode === "followUp") {
 			if (imageDescriptionNotice) this.agent.followUp(imageDescriptionNotice);
@@ -6449,7 +6713,7 @@ export class AgentSession {
 				role: "user",
 				content,
 				attribution: "user",
-				timestamp: Date.now(),
+				timestamp: timestamp ?? Date.now(),
 			});
 		} else {
 			if (imageDescriptionNotice) this.agent.steer(imageDescriptionNotice);
@@ -6458,7 +6722,7 @@ export class AgentSession {
 				content,
 				steering: true,
 				attribution: "user",
-				timestamp: Date.now(),
+				timestamp: timestamp ?? Date.now(),
 			});
 		}
 		this.#scheduleIdleQueueDrain();
@@ -6480,6 +6744,7 @@ export class AgentSession {
 		}
 		this.#queuedMessageDrainScheduled = true;
 		this.#scheduleAgentContinue({
+			source: "queued-message-drain",
 			shouldContinue: () => {
 				this.#queuedMessageDrainScheduled = false;
 				return (
@@ -7287,40 +7552,6 @@ export class AgentSession {
 				else this.#advisors.reattachRecorderFeeds();
 			}
 		}
-
-		this.#clearSessionScopedToolState();
-		this.#clearCheckpointRuntimeState();
-		this.setTodoPhases([]);
-		this.#freshProviderSessionId = undefined;
-		this.#clearInheritedProviderPromptCacheKey();
-		this.#syncAgentSessionId();
-		this.#memory.rekeyForCurrentSessionId();
-		await this.#memory.resetContextForNewTranscript();
-		this.#pendingNextTurnMessages = [];
-		this.#scheduledHiddenNextTurnGeneration = undefined;
-
-		this.sessionManager.appendThinkingLevelChange(this.thinkingLevel, this.configuredThinkingLevel());
-		this.sessionManager.appendServiceTierChange(this.#models.serviceTierEntry());
-
-		this.#todo.resetCycle();
-		this.#planModeReminderCount = 0;
-		this.#planModeReminderAwaitingProgress = false;
-		this.#planReferenceSent = false;
-		this.#planReferencePath = "local://PLAN.md";
-		this.#advisors.resetSessionState();
-		this.#reconnectToAgent();
-		// The workspace-roots block must reflect the new session's directory set,
-		// not the previous session's — refresh before the next turn goes out.
-		await this.refreshBaseSystemPrompt();
-
-		// Emit session_switch event with reason "new" to hooks
-		await this.#extensionRunner?.emit({
-			type: "session_switch",
-			reason: "new",
-			previousSessionFile,
-		});
-
-		return true;
 	}
 
 	/**
@@ -7920,7 +8151,10 @@ export class AgentSession {
 			attribution: "agent",
 			timestamp: Date.now(),
 		});
-		this.#scheduleAgentContinue({ generation: this.#promptGeneration });
+		this.#scheduleAgentContinue({
+			source: "checkpoint-rewind-reminder",
+			generation: this.#promptGeneration,
+		});
 		return true;
 	}
 
@@ -8052,6 +8286,7 @@ export class AgentSession {
 		this.agent.appendMessage(reminderMessage);
 		this.sessionManager.appendMessage(reminderMessage);
 		this.#scheduleAgentContinue({
+			source: "plan-mode-reminder",
 			generation: this.#promptGeneration,
 			// If the continuation never runs (new prompt, dispose, compaction,
 			// handoff), the forced choice must not leak onto an unrelated turn.
@@ -8271,6 +8506,11 @@ export class AgentSession {
 		this.#recovery.setAutoRetryEnabled(enabled);
 	}
 
+	/** Whether the last turn ended aborted/failed on a tool call, so {@link retry} would re-attempt it. */
+	get hasAbortedToolCallTail(): boolean {
+		return this.#recovery.hasAbortedToolCallTail;
+	}
+
 	/** Retry the last failed assistant turn when the session is idle. */
 	retry(): Promise<boolean> {
 		return this.#recovery.retry();
@@ -8385,6 +8625,11 @@ export class AgentSession {
 	/** Delivers an IRC message into this recipient session. */
 	deliverIrcMessage(msg: IrcMessage, opts?: { expectsReply?: boolean }): Promise<"injected" | "woken"> {
 		return this.#irc.deliver(msg, opts);
+	}
+
+	/** Waits for side-channel IRC auto-replies currently owned by this session. */
+	waitForIrcAutoReplies(): Promise<void> {
+		return this.#irc.waitForAutoReplies();
 	}
 
 	/** Installs task-executor monitoring around autonomous IRC wake turns. */
@@ -8566,16 +8811,23 @@ export class AgentSession {
 	async reload(): Promise<void> {
 		const sessionFile = this.sessionFile;
 		if (!sessionFile) return;
-		await this.switchSession(sessionFile);
+		const switched = await this.switchSession(sessionFile);
+		if (!switched) throw new Error("Session reload cancelled");
 	}
-
 	/**
 	 * Switch to a different session file.
 	 * Aborts current operation, loads messages, restores model/thinking.
 	 * Listeners are preserved and will continue receiving events.
-	 * @returns true if switch completed, false if cancelled by hook
+	 * @returns true if switch completed, false if cancelled by hook or cwd change
 	 */
-	async switchSession(sessionPath: string): Promise<boolean> {
+	async switchSession(
+		sessionPath: string,
+		options?: {
+			onCwdChange?: (newCwd: string, previousCwd: string) => Promise<boolean>;
+			/** Collab snapshot adoption keeps the guest's process cwd and marks the replica runtime-only. */
+			preserveLocalCwd?: boolean;
+		},
+	): Promise<boolean> {
 		const previousSessionFile = this.sessionManager.getSessionFile();
 		const switchingToDifferentSession = previousSessionFile
 			? path.resolve(previousSessionFile) !== path.resolve(sessionPath)
@@ -8650,6 +8902,7 @@ export class AgentSession {
 		this.#usagePreflightReadyForNextModelCall = false;
 		this.#usagePreflightReadyModel = undefined;
 
+		let cwdChangeTarget: string | undefined;
 		try {
 			if (switchingToDifferentSession) {
 				// Stop and settle in-flight advisors while the old-session feeds can
@@ -8658,6 +8911,25 @@ export class AgentSession {
 			}
 			await this.sessionManager.setSessionFile(sessionPath);
 			this.#bash.markSessionTransition(bashTransition);
+			const newCwd = this.sessionManager.getCwd();
+			const recordedCwd = this.sessionManager.getRecordedCwd() ?? previousSessionState.cwd;
+			if (options?.preserveLocalCwd) {
+				this.sessionManager.setCwdWithoutRelocation(previousSessionState.cwd);
+			} else {
+				if (!options?.onCwdChange && path.resolve(recordedCwd) !== path.resolve(previousSessionState.cwd)) {
+					throw SESSION_CWD_CHANGE_REJECTED;
+				}
+				if (options?.onCwdChange) {
+					if (path.resolve(newCwd) !== path.resolve(previousSessionState.cwd)) {
+						cwdChangeTarget = newCwd;
+						if (!(await options.onCwdChange(newCwd, previousSessionState.cwd))) {
+							throw SESSION_CWD_CHANGE_REJECTED;
+						}
+					} else if (path.resolve(recordedCwd) !== path.resolve(previousSessionState.cwd)) {
+						throw SESSION_CWD_CHANGE_REJECTED;
+					}
+				}
+			}
 			if (switchingToDifferentSession) {
 				this.#freshProviderSessionId = undefined;
 				this.#clearInheritedProviderPromptCacheKey();
@@ -8798,7 +9070,9 @@ export class AgentSession {
 			// it already spent, so a session with history resumes with its total instead
 			// of restarting at zero.
 			if (switchingToDifferentSession) {
-				this.#advisors.restoreCost(await loadAdvisorTranscriptCosts(this.sessionFile));
+				const providersBySlug = new Map<string, Set<string>>();
+				const costs = await loadAdvisorTranscriptCosts(this.sessionFile, { providersBySlug });
+				this.#advisors.restoreCost(costs, providersBySlug);
 			}
 			this.#bash.finishSessionTransition(bashTransition, true);
 			if (previousSessionState.sessionId !== this.sessionManager.getSessionId()) {
@@ -8863,7 +9137,25 @@ export class AgentSession {
 					error: String(reconcileError),
 				});
 			}
+			if (cwdChangeTarget && error !== SESSION_CWD_CHANGE_REJECTED && options?.onCwdChange) {
+				let rollbackFailure: string | undefined;
+				try {
+					if (!(await options.onCwdChange(previousSessionState.cwd, cwdChangeTarget))) {
+						rollbackFailure = "cwd rollback was rejected";
+					}
+				} catch (rollbackError) {
+					rollbackFailure = `cwd rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`;
+				}
+				if (rollbackFailure) {
+					this.beginDispose();
+					this.#bash.finishSessionTransition(bashTransition, false);
+					logger.warn("Failed to restore cwd after session switch", { cwd: previousSessionState.cwd });
+					const original = error instanceof Error ? error.message : String(error);
+					throw new Error(`${original} (${rollbackFailure}; the process may remain in ${cwdChangeTarget})`);
+				}
+			}
 			this.#bash.finishSessionTransition(bashTransition, false);
+			if (error === SESSION_CWD_CHANGE_REJECTED) return false;
 			throw error;
 		}
 	}
@@ -8953,6 +9245,7 @@ export class AgentSession {
 
 			// Reload messages from entries (works for both file and in-memory mode)
 			const sessionContext = this.buildDisplaySessionContext();
+			await this.#restoreMCPSelectionsForSessionContext(sessionContext);
 
 			// Emit session_branch event to hooks (after branch completes)
 			if (this.#extensionRunner) {
@@ -8977,31 +9270,6 @@ export class AgentSession {
 				else this.#advisors.reattachRecorderFeeds();
 			}
 		}
-		this.#clearSessionScopedToolState();
-		this.#rehydrateCheckpointRewindState();
-		this.#todo.syncFromBranch();
-		this.#freshProviderSessionId = undefined;
-		this.#clearInheritedProviderPromptCacheKey();
-		this.#syncAgentSessionId();
-		this.#memory.rekeyForCurrentSessionId();
-		await this.#memory.resetContextForNewTranscript();
-
-		// Reload messages from entries (works for both file and in-memory mode)
-		const sessionContext = this.buildDisplaySessionContext();
-		await this.#restoreMCPSelectionsForSessionContext(sessionContext);
-
-		// Emit session_branch event to hooks (after branch completes)
-		await this.#extensionRunner?.emit({
-			type: "session_branch",
-			previousSessionFile,
-		});
-		if (!skipConversationRestore) {
-			this.agent.replaceMessages(sessionContext.messages);
-			this.#advisors.resetSessionState();
-			this.#closeCodexProviderSessionsForHistoryRewrite();
-		}
-
-		return { selectedText, selectedImages, cancelled: false };
 	}
 
 	/** Promotes a completed /btw answer from the explicitly authorized session and leaf. */
@@ -9483,7 +9751,7 @@ export class AgentSession {
 	 * guards as every other post-prompt continuation.
 	 */
 	resumeAfterAskReanswer(): void {
-		this.#scheduleAgentContinue();
+		this.#scheduleAgentContinue({ source: "ask-reanswer" });
 	}
 
 	/**
@@ -10189,6 +10457,26 @@ export class AgentSession {
 	}
 
 	/**
+	 * Re-run retry.fallbackChains validation once the initial background discovery
+	 * settles. Startup validation suppresses "unknown model" warnings for
+	 * config-declared discovery providers whose cold cache left the registry empty
+	 * (#10048); this retracts the ones discovery resolved and surfaces any that
+	 * stayed unknown. Uses {@link ModelRegistry.awaitInitialBackgroundRefresh}
+	 * because the CLI starts that refresh right after the session is built, so an
+	 * in-flight snapshot taken in the constructor would always miss it.
+	 */
+	async #revalidateFallbackChainsAfterModelDiscovery(): Promise<void> {
+		if (this.#isDisposed || !this.#recovery.hasPendingDiscoveryDeferredFallbackValidation()) return;
+		await this.#modelRegistry.awaitInitialBackgroundRefresh(
+			this.#fallbackDiscoveryRevalidationAbortController.signal,
+		);
+		if (this.#isDisposed) return;
+		if (this.#recovery.revalidateRetryFallbackChainsAfterDiscovery()) {
+			this.#emit({ type: "config_warnings_changed" });
+		}
+	}
+
+	/**
 	 * Toggle the advisor setting and start/stop the runtime accordingly.
 	 *
 	 * @returns true when the advisor is actively running after the call.
@@ -10262,7 +10550,7 @@ export class AgentSession {
 	 * flag and per-advisor name/status without computing token/cost breakdowns.
 	 * Avoids re-tokenizing the advisor transcript on every render frame.
 	 */
-	getAdvisorStatusOverview(): { configured: boolean; advisors: { name: string; status: AdvisorRuntimeStatus }[] } {
+	getAdvisorStatusOverview(): { configured: boolean; advisors: AdvisorStatusOverviewEntry[] } {
 		return this.#advisors.getAdvisorStatusOverview();
 	}
 
@@ -10273,11 +10561,9 @@ export class AgentSession {
 
 	/**
 	 * Begin backfilling advisor spend recorded before this resume, off the
-	 * critical path (issue #9553). A large advisor transcript would otherwise
-	 * block session startup for tens of seconds while the whole file is streamed
-	 * and parsed; instead the status-line total hydrates once the scan settles.
-	 * The resulting promise is exposed via {@link advisorCostRestore} for tests
-	 * and headless callers that must observe the hydrated total.
+	 * critical path. A large transcript would otherwise block startup while
+	 * the file is streamed; the status-line total hydrates once the scan
+	 * settles.
 	 */
 	beginInitialAdvisorCostRestore(): void {
 		let stale = false;
@@ -10285,14 +10571,16 @@ export class AgentSession {
 			stale = true;
 		});
 		const snapshot = this.#advisors.beginCostRestoreSnapshot();
+		const providersBySlug = new Map<string, Set<string>>();
 		this.#advisorCostRestore = loadAdvisorTranscriptCosts(this.sessionFile, {
 			beforeSnapshot: snapshot.ready,
 			onSnapshot: snapshot.release,
 			shouldContinue: () => !stale && !this.isDisposed,
+			providersBySlug,
 		})
 			.then(costs => {
 				if (stale || this.isDisposed) return;
-				this.restoreInitialAdvisorCosts(costs, snapshot.costsAtSnapshot);
+				this.restoreInitialAdvisorCosts(costs, snapshot.costsAtSnapshot, providersBySlug);
 				this.#emit({ type: "advisor_cost_changed" });
 			})
 			.catch(err => logger.debug("advisor cost restore failed", { err: String(err) }))
@@ -10316,8 +10604,9 @@ export class AgentSession {
 	restoreInitialAdvisorCosts(
 		costs: ReadonlyMap<string, number>,
 		costsAtSnapshot: ReadonlyMap<string, number> = new Map(),
+		providersBySlug?: ReadonlyMap<string, ReadonlySet<string>>,
 	): void {
-		this.#advisors.restoreInitialCost(costs, costsAtSnapshot);
+		this.#advisors.restoreInitialCost(costs, costsAtSnapshot, providersBySlug);
 	}
 	/** Return whether any active or configured advisor is running on an OAuth/subscription model. */
 	isAdvisorUsingSubscription(): boolean {

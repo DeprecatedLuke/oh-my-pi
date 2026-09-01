@@ -289,6 +289,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				internalUrlAction: "rewrite",
 				settings: this.session.settings,
 				signal,
+				sessionFile: this.session.getSessionFile() ?? undefined,
 				localProtocolOptions: this.session.localProtocolOptions,
 				skills: this.session.skills,
 			});

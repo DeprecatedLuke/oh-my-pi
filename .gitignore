@@ -89,3 +89,5 @@ packages/coding-agent/bench/boot-baseline.json
 # Bazel
 /bazel-*
 /.bazelrc.user
+
+.parity/

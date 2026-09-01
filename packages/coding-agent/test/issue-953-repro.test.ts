@@ -46,6 +46,7 @@ function createCtx(usage: Partial<SegmentContext["usageStats"]>): SegmentContext
 		speculationBlinkOn: true,
 		subagentCount: 0,
 		activeMs: 0,
+		turnElapsedMs: 0,
 		activeRepo: null,
 		worktree: null,
 		git: {

@@ -83,12 +83,11 @@ function createHarness(initialStreaming: boolean) {
 			scheduledFlushes.push(run);
 		},
 	});
-	let manager!: AsyncJobManager;
 	queue.register<AsyncEntry>("async-result", {
 		isStale: entry => manager.isDeliverySuppressed(entry.jobId),
 		build: buildAsyncMessage,
 	});
-	manager = new AsyncJobManager({
+	const manager = new AsyncJobManager({
 		onJobComplete: completions => {
 			for (const { jobId, text, job } of completions) {
 				if (manager.isDeliverySuppressed(jobId)) continue;
