@@ -6,18 +6,16 @@
 import { Effort } from "@oh-my-pi/pi-ai";
 import { parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
 import { parseAgentFields } from "../discovery/helpers";
-import designerMd from "../prompts/agents/designer.md" with { type: "text" };
 // Embed agent markdown files at build time
 import agentFrontmatterTemplate from "../prompts/agents/frontmatter.md" with { type: "text" };
-import knowledgeMd from "../prompts/agents/knowledge.md" with { type: "text" };
-import librarianMd from "../prompts/agents/librarian.md" with { type: "text" };
-import researchMd from "../prompts/agents/research.md" with { type: "text" };
 import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
+import knowledgeMd from "../prompts/agents/knowledge.md" with { type: "text" };
+import researchMd from "../prompts/agents/research.md" with { type: "text" };
+import solverMd from "../prompts/agents/solver.md" with { type: "text" };
+import testerMd from "../prompts/agents/tester.md" with { type: "text" };
 import scoutMd from "../prompts/agents/scout.md" with { type: "text" };
 import securityReviewerMd from "../prompts/agents/security-reviewer.md" with { type: "text" };
-import solverMd from "../prompts/agents/solver.md" with { type: "text" };
 import taskMd from "../prompts/agents/task.md" with { type: "text" };
-import testerMd from "../prompts/agents/tester.md" with { type: "text" };
 import { AUTO_THINKING } from "../thinking";
 
 import type { AgentDefinition, AgentSource } from "./types";
@@ -48,10 +46,8 @@ function buildAgentContent(def: EmbeddedAgentDef): string {
 
 const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{ fileName: "scout.md", template: scoutMd },
-	{ fileName: "designer.md", template: designerMd },
 	{ fileName: "reviewer.md", template: reviewerMd },
 	{ fileName: "security-reviewer.md", template: securityReviewerMd },
-	{ fileName: "librarian.md", template: librarianMd },
 	{ fileName: "solver.md", template: solverMd },
 	{ fileName: "research.md", template: researchMd },
 	{ fileName: "knowledge.md", template: knowledgeMd },

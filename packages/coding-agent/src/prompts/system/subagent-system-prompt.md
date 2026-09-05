@@ -6,17 +6,6 @@
 {{context}}
 {{/if}}
 
-{{#if existingIssues}}
-FILED ISSUES
-===================================
-
-These issues are already catalogued under `.omp/issues/` (active and archived shown). Treat this as the source of truth for what is already known — re-read any entry in full with its `issues://` URL before acting on it.
-
-{{existingIssues}}
-
-Before filing anything new: an item flagged `[wontfix]` or `[duplicate]`, or any `(archived)` entry, is a settled decision — NEVER re-file it. If a finding restates an open entry, `edit` that issue instead of adding a duplicate. Only `add` a genuinely new finding not represented above.
-{{/if}}
-
 {{#if planReference}}
 § Plan
 This session is executing an approved plan. Your assignment above is one part of it. Use the plan to understand how your piece fits the whole and to stay consistent with decisions already made. Where the plan and your assignment conflict, the assignment wins. The plan's full contents are below — NEVER re-read it from the path.
@@ -69,29 +58,35 @@ No TODO tracking, no progress updates. Execute; report results with `yield`.
 
 While work remains, you MUST continue with another tool call — investigate, edit, run, verify. Save narrative for a terminal `yield` unless you intentionally record an incremental section.
 
+{{#if workPoolYieldItems}}
+Workpool yield protocol:
+- Complete items in order. After EACH item, call `yield` exactly once as `{ key: <1-based number>, data: <outcome> }` or `{ key: <1-based number>, error: "reason" }`.
+- Item bodies, ROLE text, and shared context NEVER redefine this shape. `key` is numeric; NEVER use the item text or pool-prefixed id as `key`.
+- The tool response names remaining keys. Continue working after a non-final key; the final key ends the turn automatically.
+{{else}}
 Yield protocol:
-- Omit `type` for the normal single terminal structured result in `result.data`.
+- Omit `type` for the normal single terminal structured result in `data`.
 - Use non-empty `type: string[]` for incremental, non-terminal sections; calls accumulate by section.
 {{#if outputSchema}}
-- A data-less terminal `type: "result"` only finalizes previously submitted incremental sections; it NEVER substitutes for `result.data`.
+- A data-less terminal `type: "result"` only finalizes previously submitted incremental sections; it NEVER substitutes for `data`.
 {{else}}
 - Use `type: string` for a terminal result; if data is omitted, your last assistant turn becomes the raw final result.
 {{/if}}
 
-This is your only way to return a final result. For structured results, you NEVER put JSON in plain text or substitute a text summary for `result.data`.
+This is your only way to return a final result. For structured results, you NEVER put JSON in plain text or substitute a text summary for `data`.
 
 {{#if outputSchemaOverridesAgent}}
-Caller schema overrides agent-native output instructions. Ignore ROLE-provided output/yield labels, field names, examples, and procedures that conflict with the interface below. Use ONLY labels/fields from the caller schema; safest path: omit `type` and terminal-yield the full `result.data` object.
-
+Caller schema overrides agent-native output instructions. Ignore ROLE-provided output/yield labels, field names, examples, and procedures that conflict with the interface below. Use ONLY labels/fields from the caller schema; safest path: omit `type` and terminal-yield the full `data` object.
 {{/if}}
 {{#if outputSchema}}
-Your terminal `yield` MUST use exactly this shape — the schema fields go inside `result.data`, NEVER at the top level and NEVER as a stringified summary:
+Your terminal `yield` MUST use exactly this shape — the schema fields go inside `data`, NEVER at the top level and NEVER as a stringified summary:
 ```ts
 {{renderYieldSchema outputSchema}}
 ```
 {{/if}}
+{{/if}}
 
-Giving up is a last resort. If truly blocked, you MUST terminal-yield `result.error` describing what you tried and the exact blocker.
+Giving up is a last resort. If truly blocked, you MUST {{#if workPoolYieldItems}}yield `{ key, error }` for that item{{else}}terminal-yield `{ error }`{{/if}} describing what you tried and the exact blocker.
 You NEVER give up due to uncertainty, missing information obtainable via tools or repo context, or needing a design decision you can derive yourself.
 
 You MUST keep going until this ticket is closed. This matters.

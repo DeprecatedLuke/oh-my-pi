@@ -69,7 +69,7 @@ describe("runIsolatedKnowledgePass", () => {
 			cwd: repo,
 			taskId: "KnowledgeBuild",
 			description: "Build the knowledge base.",
-			isolationMode: "rcopy",
+			isolationBackend: "rcopy",
 			generateMessage: async () => "chore(knowledge): update .omp/knowledge",
 			runInWorktree: async worktree => {
 				await writeKnowledge(worktree, "repo/layout.md", "# layout\n");
@@ -91,7 +91,7 @@ describe("runIsolatedKnowledgePass", () => {
 			cwd: repo,
 			taskId: "KnowledgeBuild",
 			description: "Build the knowledge base.",
-			isolationMode: "rcopy",
+			isolationBackend: "rcopy",
 			generateMessage: async () => "chore(knowledge): update .omp/knowledge",
 			runInWorktree: async worktree => {
 				await writeKnowledge(worktree, "repo/layout.md", "# layout\n");
@@ -117,7 +117,7 @@ describe("runIsolatedKnowledgePass", () => {
 			cwd: repo,
 			taskId: "KnowledgeUpdate",
 			description: "Update the knowledge base.",
-			isolationMode: "rcopy",
+			isolationBackend: "rcopy",
 			generateMessage: async () => "chore(knowledge): update .omp/knowledge",
 			runInWorktree: async worktree => {
 				await writeKnowledge(worktree, "repo/layout.md", "# layout\n");
@@ -138,7 +138,7 @@ describe("runIsolatedKnowledgePass", () => {
 			cwd: repo,
 			taskId: "KnowledgeBuild",
 			description: "Build the knowledge base.",
-			isolationMode: "rcopy",
+			isolationBackend: "rcopy",
 			generateMessage: async () => "chore(knowledge): update .omp/knowledge",
 			runInWorktree: async worktree => {
 				await writeKnowledge(worktree, "repo/layout.md", "# layout\n");

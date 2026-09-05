@@ -25,8 +25,6 @@ export type ModelRole =
 	| "slow"
 	| "vision"
 	| "plan"
-	| "designer"
-	| "review"
 	| "commit"
 	| "tiny"
 	| "task"
@@ -49,8 +47,7 @@ export const MODEL_ROLES: Record<ModelRole, ModelRoleInfo> = {
 	slow: { tag: "SLOW", name: "Thinking", color: "accent" },
 	vision: { tag: "VISION", name: "Vision", color: "error" },
 	plan: { tag: "PLAN", name: "Architect", color: "muted" },
-	designer: { tag: "DESIGNER", name: "Designer", color: "muted" },
-	review: { tag: "REVIEW", name: "Reviewer", color: "muted" },
+
 	commit: { tag: "COMMIT", name: "Commit", color: "dim" },
 	tiny: { tag: "TINY", name: "Tiny", color: "dim" },
 	task: { tag: "TASK", name: "Subtask", color: "muted" },
@@ -66,8 +63,7 @@ export const MODEL_ROLE_IDS: ModelRole[] = [
 	"slow",
 	"vision",
 	"plan",
-	"designer",
-	"review",
+
 	"commit",
 	"tiny",
 	"task",
