@@ -7945,6 +7945,8 @@ export class AgentSession {
 				return false;
 			}
 		}
+		this.#abortKnowledgeAutoUpdate();
+		await this.#drainKnowledgeAutoUpdate();
 
 		await this.#bash.flushPending();
 		// Flush current session to ensure all entries are written
@@ -8004,6 +8006,8 @@ export class AgentSession {
 	/** Move the active session and artifacts after enforcing mode transition invariants. */
 	async moveSession(newCwd: string, targetSessionDir?: string): Promise<void> {
 		this.#assertVibeSessionTransitionAllowed("move the session");
+		this.#abortKnowledgeAutoUpdate();
+		await this.#drainKnowledgeAutoUpdate();
 		await this.sessionManager.moveTo(newCwd, targetSessionDir);
 	}
 
@@ -8291,9 +8295,15 @@ export class AgentSession {
 		const messages = this.agent.state.messages;
 		return convertToLlm(messages.length > 0 ? messages : this.buildDisplaySessionContext().messages);
 	}
-	/** True when a captured auto-update boundary remains on the active session branch. */
-	#knowledgeAutoUpdateBoundaryIsCurrent(sessionId: string, throughEntryId: string): boolean {
-		if (this.sessionManager.getSessionId() !== sessionId || this.#isDisposed) return false;
+	/** True when a captured auto-update boundary remains on the active session branch and working directory. */
+	#knowledgeAutoUpdateBoundaryIsCurrent(sessionId: string, cwd: string, throughEntryId: string): boolean {
+		if (
+			this.sessionManager.getSessionId() !== sessionId ||
+			this.sessionManager.getCwd() !== cwd ||
+			this.#isDisposed
+		) {
+			return false;
+		}
 		const branch = this.sessionManager.getBranch();
 		for (let index = branch.length - 1; index >= 0; index--) {
 			if (branch[index].id === throughEntryId) return true;
@@ -8356,6 +8366,7 @@ export class AgentSession {
 					description: sourceTitle,
 					generateMessage: async () => `chore(knowledge): update .omp/knowledge\n\nSource: ${sourceTitle}`,
 					runDistill: async () => {
+						if (controller.signal.aborted) return;
 						// Writes the real `.omp/knowledge` but does NOT commit — the
 						// patch pass captures the edits, reverts the tree, and
 						// applies-or-pends.
@@ -8368,7 +8379,7 @@ export class AgentSession {
 				if (
 					!controller.signal.aborted &&
 					!pass.aborted &&
-					this.#knowledgeAutoUpdateBoundaryIsCurrent(sessionId, throughEntryId)
+					this.#knowledgeAutoUpdateBoundaryIsCurrent(sessionId, cwd, throughEntryId)
 				) {
 					this.sessionManager.appendCustomEntry(sessionKnowledge.KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE, {
 						throughEntryId,

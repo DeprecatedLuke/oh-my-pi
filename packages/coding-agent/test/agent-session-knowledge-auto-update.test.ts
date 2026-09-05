@@ -26,6 +26,7 @@ type UsageOverrides = Partial<{
 interface HarnessOptions {
 	agentId?: string;
 	followUpUsage?: UsageOverrides;
+	persist?: boolean;
 }
 
 interface Harness {
@@ -58,7 +59,9 @@ async function createHarness(threshold: number, options: HarnessOptions = {}): P
 		"todo.enabled": false,
 		"todo.reminders": false,
 	});
-	const sessionManager = SessionManager.inMemory(tempDir.path());
+	const sessionManager = options.persist
+		? SessionManager.create(tempDir.path(), path.join(tempDir.path(), "sessions"))
+		: SessionManager.inMemory(tempDir.path());
 	const manager = new AsyncJobManager({ retentionMs: 60_000 });
 	const agent = new Agent({
 		getApiKey: () => "test-key",
@@ -162,6 +165,40 @@ describe("AgentSession automatic knowledge updates", () => {
 		}
 	});
 
+	it("does not start a second automatic pass while the first pass is in flight", async () => {
+		const harness = await createHarness(5);
+		const passStarted = Promise.withResolvers<void>();
+		const passRelease = Promise.withResolvers<typeof NOOP_PASS>();
+		const patchPassSpy = vi.spyOn(taskModule, "runInProcessKnowledgePatchPass").mockImplementation(async () => {
+			passStarted.resolve();
+			return passRelease.promise;
+		});
+		try {
+			await harness.session.prompt("Record the first session fact");
+			await harness.session.waitForIdle();
+			await passStarted.promise;
+
+			expect(patchPassSpy).toHaveBeenCalledTimes(1);
+			await harness.session.prompt("Record the second session fact");
+			await harness.session.waitForIdle();
+
+			// The second response brings the accumulated range above the
+			// threshold, but the in-flight first pass still owns the slot.
+			expect(patchPassSpy).toHaveBeenCalledTimes(1);
+			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(0);
+
+			passRelease.resolve(NOOP_PASS);
+			await harness.session.settleAsyncWork();
+
+			expect(patchPassSpy).toHaveBeenCalledTimes(1);
+			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(1);
+		} finally {
+			passRelease.resolve(NOOP_PASS);
+			patchPassSpy.mockRestore();
+			await disposeHarness(harness);
+		}
+	});
+
 	it("does not mark a completed pass after the active branch moves before its captured message", async () => {
 		const harness = await createHarness(1);
 		const passStarted = Promise.withResolvers<void>();
@@ -194,6 +231,60 @@ describe("AgentSession automatic knowledge updates", () => {
 			passRelease.resolve(NOOP_PASS);
 			await harness.session.settleAsyncWork();
 
+			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(0);
+		} finally {
+			passRelease.resolve(NOOP_PASS);
+			patchPassSpy.mockRestore();
+			await disposeHarness(harness);
+		}
+	});
+
+	it("does not mark a completed pass in the forked session after the transition starts", async () => {
+		const harness = await createHarness(1, { persist: true });
+		const passStarted = Promise.withResolvers<void>();
+		const passRelease = Promise.withResolvers<typeof NOOP_PASS>();
+		const patchPassSpy = vi.spyOn(taskModule, "runInProcessKnowledgePatchPass").mockImplementation(async () => {
+			passStarted.resolve();
+			return passRelease.promise;
+		});
+		try {
+			await harness.session.prompt("Record this session fact");
+			await harness.session.waitForIdle();
+			await passStarted.promise;
+
+			const previousSessionId = harness.sessionManager.getSessionId();
+			const forkPromise = harness.session.fork();
+			passRelease.resolve(NOOP_PASS);
+
+			expect(await forkPromise).toBe(true);
+			expect(harness.sessionManager.getSessionId()).not.toBe(previousSessionId);
+			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(0);
+		} finally {
+			passRelease.resolve(NOOP_PASS);
+			patchPassSpy.mockRestore();
+			await disposeHarness(harness);
+		}
+	});
+
+	it("does not mark a completed pass after the active session moves to a new cwd", async () => {
+		const harness = await createHarness(1);
+		const passStarted = Promise.withResolvers<void>();
+		const passRelease = Promise.withResolvers<typeof NOOP_PASS>();
+		const patchPassSpy = vi.spyOn(taskModule, "runInProcessKnowledgePatchPass").mockImplementation(async () => {
+			passStarted.resolve();
+			return passRelease.promise;
+		});
+		try {
+			await harness.session.prompt("Record this session fact");
+			await harness.session.waitForIdle();
+			await passStarted.promise;
+
+			const movedCwd = path.join(harness.tempDir.path(), "moved-project");
+			const movePromise = harness.session.moveSession(movedCwd);
+			passRelease.resolve(NOOP_PASS);
+
+			await movePromise;
+			expect(harness.sessionManager.getCwd()).toBe(path.resolve(movedCwd));
 			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(0);
 		} finally {
 			passRelease.resolve(NOOP_PASS);
