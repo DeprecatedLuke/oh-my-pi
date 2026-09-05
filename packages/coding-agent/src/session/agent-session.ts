@@ -685,6 +685,8 @@ export class AgentSession {
 	#asyncDeliveryEpoch = 0;
 	/** Per-session guard against stacking manager-less fire-and-forget knowledge distills. */
 	#autoKnowledgeDistillInFlight = false;
+	/** True when this run was triggered by a KnowledgeDistill async-result. */
+	#knowledgeDistillAsyncResultOrigin = false;
 
 	readonly #irc: IrcBridge;
 	#ircWakeTurnObserver:
@@ -2851,8 +2853,20 @@ export class AgentSession {
 		// A fresh run supersedes the previously settled (and pruned) refusal
 		// turn: state-based lookups take over again.
 		if (event.type === "agent_start") {
+			this.#knowledgeDistillAsyncResultOrigin = false;
 			this.#prunedTerminalRefusal = undefined;
 			this.#emitRunState("running");
+		}
+		if (
+			event.type === "message_start" &&
+			event.message.role === "custom" &&
+			event.message.customType === ASYNC_RESULT_MESSAGE_TYPE
+		) {
+			const details = isRecord(event.message.details) ? event.message.details : undefined;
+			const jobs = details?.jobs;
+			if (Array.isArray(jobs) && jobs.some(job => isRecord(job) && job.label === "KnowledgeDistill")) {
+				this.#knowledgeDistillAsyncResultOrigin = true;
+			}
 		}
 		// This must happen before event fan-out awaits: streamed tool-call deltas
 		// can otherwise queue validation that a delayed turn-start reset erases.
@@ -3575,7 +3589,9 @@ export class AgentSession {
 				// retry/compaction/todo/issues/async-wake gate above already returned. Schedule the
 				// token-thresholded background knowledge distill (fire-and-forget) before the
 				// wire-level agent_end notification reaches subscribers.
-				this.#maybeScheduleKnowledgeAutoUpdate();
+				if (!this.#knowledgeDistillAsyncResultOrigin) {
+					this.#maybeScheduleKnowledgeAutoUpdate();
+				}
 			}
 			await emitAgentEndNotification(sessionStopWillContinue ? { willContinue: true } : undefined);
 		}

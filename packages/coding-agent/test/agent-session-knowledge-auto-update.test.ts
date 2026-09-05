@@ -9,11 +9,25 @@ import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import * as knowledgeModule from "@oh-my-pi/pi-coding-agent/session/knowledge-base";
+import { MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 const NOOP_PASS = { exitCode: 0, aborted: false, patches: [], summary: "No changes to apply." };
+
+type UsageOverrides = Partial<{
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	totalTokens: number;
+}>;
+
+interface HarnessOptions {
+	agentId?: string;
+	followUpUsage?: UsageOverrides;
+}
 
 interface Harness {
 	session: AgentSession;
@@ -23,7 +37,7 @@ interface Harness {
 	tempDir: TempDir;
 }
 
-async function createHarness(threshold: number): Promise<Harness> {
+async function createHarness(threshold: number, options: HarnessOptions = {}): Promise<Harness> {
 	const tempDir = TempDir.createSync("@pi-knowledge-auto-update-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 	authStorage.setRuntimeApiKey("mock", "test-key");
@@ -31,8 +45,11 @@ async function createHarness(threshold: number): Promise<Harness> {
 	const model = createMockModel({
 		provider: "mock",
 		responses: [
-			{ content: ["Primary response"], usage: { totalTokens: 5 } },
-			{ content: ["Primary response"], usage: { totalTokens: 1 } },
+			{ content: ["Primary response"], usage: { output: 5, totalTokens: 5 } },
+			{
+				content: ["Primary response"],
+				usage: options.followUpUsage ?? { output: 1, totalTokens: 1 },
+			},
 		],
 	});
 	const settings = Settings.isolated({
@@ -61,6 +78,7 @@ async function createHarness(threshold: number): Promise<Harness> {
 		settings,
 		modelRegistry,
 		asyncJobManager: manager,
+		agentId: options.agentId,
 	});
 	return { session, sessionManager, manager, authStorage, tempDir };
 }
@@ -109,6 +127,35 @@ describe("AgentSession automatic knowledge updates", () => {
 			const markers = autoUpdateMarkers(harness.sessionManager);
 			expect(markers).toHaveLength(1);
 			expect(markers[0]).toMatchObject({ data: { throughEntryId } });
+		} finally {
+			patchPassSpy.mockRestore();
+			await disposeHarness(harness);
+		}
+	});
+
+	it("does not schedule a second distill from its KnowledgeDistill completion follow-up", async () => {
+		const harness = await createHarness(5, {
+			agentId: MAIN_AGENT_ID,
+			followUpUsage: { input: 6, cacheRead: 133_000 },
+		});
+		const patchPassSpy = vi.spyOn(taskModule, "runInProcessKnowledgePatchPass").mockResolvedValue(NOOP_PASS);
+		try {
+			await harness.session.prompt("Record this session fact");
+			await harness.session.waitForIdle();
+
+			expect(harness.manager.getAllJobs()).toHaveLength(1);
+
+			// The owned completion is delivered as an async-result follow-up. Its
+			// response has above-threshold noncached work, but this turn must not
+			// recursively schedule another automatic distill.
+			await harness.session.settleAsyncWork();
+
+			const assistants = harness.sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "message" && entry.message.role === "assistant");
+			expect(assistants).toHaveLength(2);
+			expect(harness.manager.getAllJobs()).toHaveLength(1);
+			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(1);
 		} finally {
 			patchPassSpy.mockRestore();
 			await disposeHarness(harness);

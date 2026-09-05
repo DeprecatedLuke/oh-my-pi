@@ -56,7 +56,17 @@ async function initRepo(prefix: string): Promise<string> {
 	return repo;
 }
 
-function assistantMessage(text: string, totalTokens: number): Message {
+type AssistantUsage = {
+	input?: number;
+	output?: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+	totalTokens?: number;
+};
+
+function assistantMessage(text: string, usageOrOutput: number | AssistantUsage): Message {
+	const usage =
+		typeof usageOrOutput === "number" ? { output: usageOrOutput, totalTokens: usageOrOutput } : usageOrOutput;
 	return {
 		role: "assistant",
 		content: [{ type: "text", text }],
@@ -68,7 +78,8 @@ function assistantMessage(text: string, totalTokens: number): Message {
 			output: 0,
 			cacheRead: 0,
 			cacheWrite: 0,
-			totalTokens,
+			totalTokens: 0,
+			...usage,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		},
 		stopReason: "stop",
@@ -160,6 +171,23 @@ describe("automatic knowledge-update cadence", () => {
 			"assistant-positive-2",
 		]);
 		expect(source.totalTokens).toBe(17);
+	});
+
+	it("excludes cache-read and aggregate totals while counting positive input, output, and cache-write usage", () => {
+		const source = collectKnowledgeAutoUpdateSource([
+			messageEntry(
+				"cache-heavy",
+				assistantMessage("cached context", {
+					input: 2,
+					output: 3,
+					cacheRead: 133_000,
+					cacheWrite: 5,
+					totalTokens: 133_010,
+				}),
+			),
+		]);
+
+		expect(source.totalTokens).toBe(10);
 	});
 
 	it("keeps messages and tokens appended before a completion marker whose boundary is older", () => {

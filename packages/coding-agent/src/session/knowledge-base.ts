@@ -1,4 +1,4 @@
-import { Agent, type AgentOptions } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage, type AgentOptions } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Message } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import { commitKnowledgeFiles } from "./commit-knowledge";
@@ -9,12 +9,20 @@ export const KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE = "knowledge-auto-update";
 export interface SessionKnowledgeSource {
 	/** Primary session messages after the latest automatic-update marker. */
 	messages: SessionMessageEntry[];
-	/** Positive finite assistant provider tokens in {@link messages}. */
+	/** Positive finite non-cached assistant work tokens (`input + output + cacheWrite`) in {@link messages}; cache reads and `totalTokens` are excluded. */
 	totalTokens: number;
 }
 
+/** Return positive finite provider work that was not replayed from the prompt cache. */
+function getNonCachedAssistantWorkTokens(message: AgentMessage): number {
+	if (message.role !== "assistant") return 0;
+	const usage = message.usage;
+	const tokens = (usage?.input ?? 0) + (usage?.output ?? 0) + (usage?.cacheWrite ?? 0);
+	return Number.isFinite(tokens) && tokens > 0 ? tokens : 0;
+}
+
 /**
- * Collect the unprocessed primary session messages and provider-token total.
+ * Collect the unprocessed primary session messages and their non-cached provider-work total.
  *
  * A completion marker may be appended after newer messages arrive while a
  * distill runs; its `throughEntryId` therefore defines the real boundary.
@@ -47,10 +55,7 @@ export function collectKnowledgeAutoUpdateSource(entries: SessionEntry[]): Sessi
 				if (boundaryIndex >= 0) {
 					let removedTokens = 0;
 					for (let index = 0; index <= boundaryIndex; index++) {
-						const message = messages[index].message;
-						if (message.role !== "assistant") continue;
-						const tokens = message.usage?.totalTokens;
-						if (Number.isFinite(tokens) && tokens > 0) removedTokens += tokens;
+						removedTokens += getNonCachedAssistantWorkTokens(messages[index].message);
 					}
 					const retainedCount = messages.length - boundaryIndex - 1;
 					if (retainedCount > 0) messages.copyWithin(0, boundaryIndex + 1);
@@ -69,9 +74,7 @@ export function collectKnowledgeAutoUpdateSource(entries: SessionEntry[]): Sessi
 		}
 		if (entry.type !== "message") continue;
 		messages.push(entry);
-		if (entry.message.role !== "assistant") continue;
-		const tokens = entry.message.usage?.totalTokens;
-		if (Number.isFinite(tokens) && tokens > 0) totalTokens += tokens;
+		totalTokens += getNonCachedAssistantWorkTokens(entry.message);
 	}
 	return { messages, totalTokens };
 }
