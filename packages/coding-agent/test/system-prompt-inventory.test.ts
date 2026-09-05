@@ -708,6 +708,33 @@ describe("system prompt tool inventory", () => {
 		expect(withScout).toContain("one read-only scout while working is allowed");
 		expect(withoutScout).not.toContain("read-only scout");
 	});
+	it("renders delegation guidance only when the task tool is active", async () => {
+		const opts = {
+			cwd: tempDir,
+			contextFiles: [],
+			skills: [],
+			rules: [],
+			workspaceTree: { ...EMPTY_TREE, rootPath: tempDir },
+			tools: TOOLS,
+			eagerTasks: true,
+			taskBatch: true,
+		};
+		const withTask = (
+			await buildSystemPrompt({
+				...opts,
+				toolNames: ["read", "bash", "task"],
+			})
+		).systemPrompt.join("\n\n");
+		const withoutTask = (
+			await buildSystemPrompt({
+				...opts,
+				toolNames: ["read", "bash"],
+			})
+		).systemPrompt.join("\n\n");
+
+		expect(withTask).toContain("Delegation is preferred here.");
+		expect(withoutTask).not.toContain("Delegation is preferred here.");
+	});
 
 	it("omits todo workflow guidance when the todo tool is absent", async () => {
 		const opts = {
