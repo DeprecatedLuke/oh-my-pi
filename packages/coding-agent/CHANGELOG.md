@@ -13,6 +13,7 @@
 - Fixed the task tool's model-visible concurrency limit rendering as an empty value.
 - Fixed preserved advisor cards racing the primary `agent_end` extension event, which could deadlock prompt completion while a message hook was waiting on card persistence.
 - Restored automatic project-knowledge updates, configurable via `knowledge.autoUpdateThresholdTokens` (default 100K primary-session provider tokens; `0` disables).
+- Fixed automatic project-knowledge maintenance appearing as a background job or feeding its completion back into the primary conversation.
 - Fixed `knowledge://` line-selected reads and edits, including containment checks for symlinked note paths.
 ### Changed
 
