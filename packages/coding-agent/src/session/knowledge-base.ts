@@ -18,7 +18,10 @@ export interface SessionKnowledgeSource {
  *
  * A completion marker may be appended after newer messages arrive while a
  * distill runs; its `throughEntryId` therefore defines the real boundary.
- * Plain markers retain the historical "everything after marker" behavior.
+ * A referenced marker whose boundary is absent from the scanned branch — a
+ * stale or malformed cross-branch watermark — is ignored rather than treated
+ * as a reset, so pending source is never erased. Plain markers retain the
+ * historical "everything after marker" behavior.
  */
 export function collectKnowledgeAutoUpdateSource(entries: SessionEntry[]): SessionKnowledgeSource {
 	const messages: SessionMessageEntry[] = [];
@@ -53,11 +56,12 @@ export function collectKnowledgeAutoUpdateSource(entries: SessionEntry[]): Sessi
 					if (retainedCount > 0) messages.copyWithin(0, boundaryIndex + 1);
 					messages.length = retainedCount;
 					totalTokens -= removedTokens;
-				} else {
-					messages.length = 0;
-					totalTokens = 0;
 				}
+				// A referenced marker whose boundary is absent from the scanned
+				// branch is stale or malformed (e.g. a cross-branch watermark):
+				// ignore it instead of clearing pending source.
 			} else {
+				// Plain legacy marker: reset at its physical position.
 				messages.length = 0;
 				totalTokens = 0;
 			}

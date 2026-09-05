@@ -7898,6 +7898,15 @@ export class AgentSession {
 		const messages = this.agent.state.messages;
 		return convertToLlm(messages.length > 0 ? messages : this.buildDisplaySessionContext().messages);
 	}
+	/** True when a captured auto-update boundary remains on the active session branch. */
+	#knowledgeAutoUpdateBoundaryIsCurrent(sessionId: string, throughEntryId: string): boolean {
+		if (this.sessionManager.getSessionId() !== sessionId || this.#isDisposed) return false;
+		const branch = this.sessionManager.getBranch();
+		for (let index = branch.length - 1; index >= 0; index--) {
+			if (branch[index].id === throughEntryId) return true;
+		}
+		return false;
+	}
 
 	/**
 	 * Background session-knowledge auto-distill, scheduled at the fully terminal
@@ -7907,11 +7916,12 @@ export class AgentSession {
 	 * `knowledge.autoUpdateThresholdTokens` threshold registers one owned
 	 * `KnowledgeDistill` job (patch-based, `commit:false`) and advances the
 	 * durable watermark only once the pass completes — a no-change pass counts,
-	 * while failures, aborts, and session replacement leave it pending so the
-	 * range retries. Fire-and-forget: the distill never holds up the terminal
-	 * event. Skips when disabled, for non-main sessions, with no model/messages,
-	 * or while any `Knowledge*` job is running. Manager-less sessions fall back
-	 * to the direct fire-and-forget save under a per-session in-memory guard.
+	 * while failures, aborts, and session replacement or branching away from
+	 * the captured boundary leave it pending so the range retries. Fire-and-forget:
+	 * the distill never holds up the terminal event. Skips when disabled, for
+	 * non-main sessions, with no model/messages, or while any `Knowledge*` job
+	 * is running. Manager-less sessions fall back to the direct fire-and-forget
+	 * save under a per-session in-memory guard.
 	 */
 	#maybeScheduleKnowledgeAutoUpdate(): void {
 		if (this.#abortInProgress || this.#isDisposed) return;
@@ -7944,8 +7954,10 @@ export class AgentSession {
 				.then(result => {
 					if (!result.completed) return;
 					// Resolved pass (no-change counts): advance the watermark, but
-					// only if the session still owns the captured transcript.
-					if (this.sessionManager.getSessionId() === sessionId && !this.#isDisposed) {
+					// only if the session still owns the captured transcript and the
+					// captured boundary is still on the active branch — a branch away
+					// from it appends nothing so the new branch stays retryable.
+					if (this.#knowledgeAutoUpdateBoundaryIsCurrent(sessionId, throughEntryId)) {
 						this.sessionManager.appendCustomEntry(sessionKnowledge.KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE, {
 							throughEntryId,
 						});
@@ -7988,9 +8000,11 @@ export class AgentSession {
 						},
 					});
 					// Completion watermark: the distill resolved (no-change counts)
-					// without abort, and the session still owns the captured
-					// transcript — only then advance past the snapshot boundary.
-					if (!jobSignal.aborted && this.sessionManager.getSessionId() === sessionId && !this.#isDisposed) {
+					// without abort, the session still owns the captured transcript,
+					// and the captured boundary is still on the active branch — a
+					// branch away from it appends nothing so the new branch stays
+					// retryable. Only then advance past the snapshot boundary.
+					if (!jobSignal.aborted && this.#knowledgeAutoUpdateBoundaryIsCurrent(sessionId, throughEntryId)) {
 						this.sessionManager.appendCustomEntry(sessionKnowledge.KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE, {
 							throughEntryId,
 						});

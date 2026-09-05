@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	InternalUrlRouter,
 	IssuesProtocolHandler,
@@ -10,6 +11,8 @@ import {
 	parseInternalUrl,
 } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { getKnowledgeRoot } from "@oh-my-pi/pi-coding-agent/session/knowledge-index";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -19,6 +22,29 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 	} finally {
 		await fs.rm(dir, { recursive: true, force: true });
 	}
+}
+
+function createReadSession(cwd: string): ToolSession {
+	const settings = Settings.isolated();
+	settings.set("read.summarize.enabled", false);
+	return {
+		cwd,
+		hasUI: false,
+		getSessionFile: () => path.join(cwd, "session.jsonl"),
+		getSessionSpawns: () => "*",
+		getArtifactsDir: () => path.join(cwd, "artifacts"),
+		allocateOutputArtifact: async () => ({ id: "artifact-1", path: path.join(cwd, "artifact-1.log") }),
+		settings,
+	} as unknown as ToolSession;
+}
+
+function textOutput(result: { content: { type: string; text?: string }[] }): string {
+	return result.content
+		.filter(
+			(block): block is { type: "text"; text: string } => block.type === "text" && typeof block.text === "string",
+		)
+		.map(block => block.text)
+		.join("\n");
 }
 
 describe("InternalUrlRouter native protocol registrations", () => {
@@ -72,6 +98,30 @@ describe("KnowledgeProtocolHandler", () => {
 			expect(resource.contentType).toBe("text/markdown");
 			expect(resource.sourcePath).toBe(knowledgePath);
 			expect(resource.immutable).toBe(false);
+		});
+	});
+
+	it("reads only the requested knowledge line range through ReadTool", async () => {
+		await withTempDir(async dir => {
+			const knowledgePath = path.join(getKnowledgeRoot(dir), "runtime", "selector.md");
+			const content = [
+				...Array.from({ length: 16 }, (_, index) => `outside-${index + 1}`),
+				"",
+				"selected-18",
+				"selected-19",
+				"selected-20",
+			].join("\n");
+			await Bun.write(knowledgePath, content);
+
+			const result = await new ReadTool(createReadSession(dir)).execute("read-knowledge-selector", {
+				path: "knowledge://runtime/selector.md:18-20",
+			});
+			const text = textOutput(result);
+
+			expect(text).toMatch(/^18:selected-18$/m);
+			expect(text).toMatch(/^19:selected-19$/m);
+			expect(text).toMatch(/^20:selected-20$/m);
+			expect(text).not.toMatch(/^16:outside-16$/m);
 		});
 	});
 

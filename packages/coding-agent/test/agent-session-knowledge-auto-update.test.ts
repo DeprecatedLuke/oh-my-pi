@@ -115,6 +115,46 @@ describe("AgentSession automatic knowledge updates", () => {
 		}
 	});
 
+	it("does not mark a completed distill after the active branch moves before its captured message", async () => {
+		const harness = await createHarness(1);
+		const passStarted = Promise.withResolvers<void>();
+		const passRelease = Promise.withResolvers<typeof NOOP_PASS>();
+		const patchPassSpy = vi.spyOn(taskModule, "runInProcessKnowledgePatchPass").mockImplementation(async () => {
+			passStarted.resolve();
+			return passRelease.promise;
+		});
+		try {
+			await harness.session.prompt("Record this session fact");
+			await harness.session.waitForIdle();
+
+			const capturedBranch = harness.sessionManager.getBranch();
+			const userEntry = capturedBranch.find(entry => entry.type === "message" && entry.message.role === "user");
+			const throughEntryId = capturedBranch
+				.filter(entry => entry.type === "message" && entry.message.role === "assistant")
+				.at(-1)?.id;
+			if (!userEntry || userEntry.type !== "message" || !throughEntryId) {
+				throw new Error("expected persisted user and assistant messages");
+			}
+			const sessionId = harness.sessionManager.getSessionId();
+
+			expect(harness.manager.getAllJobs()).toHaveLength(1);
+			await passStarted.promise;
+
+			harness.sessionManager.branch(userEntry.id);
+			expect(harness.sessionManager.getSessionId()).toBe(sessionId);
+			expect(harness.sessionManager.getBranch().some(entry => entry.id === throughEntryId)).toBe(false);
+
+			passRelease.resolve(NOOP_PASS);
+			await harness.manager.waitForAll();
+
+			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(0);
+		} finally {
+			passRelease.resolve(NOOP_PASS);
+			patchPassSpy.mockRestore();
+			await disposeHarness(harness);
+		}
+	});
+
 	it("does not mark a failed distill and retries the accumulated range on the next terminal prompt", async () => {
 		const harness = await createHarness(5);
 		const knowledgeAgentSpy = vi

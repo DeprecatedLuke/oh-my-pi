@@ -51,6 +51,13 @@ describe("splitInternalUrlSel", () => {
 		});
 	});
 
+	it("peels compound selectors from knowledge URLs", () => {
+		expect(splitInternalUrlSel("knowledge://runtime/selector.md:raw:18-20")).toEqual({
+			path: "knowledge://runtime/selector.md",
+			sel: "raw:18-20",
+		});
+	});
+
 	it("does not peel chunks that are not selector-shaped", () => {
 		// `name` is part of the host, not a selector.
 		expect(splitInternalUrlSel("skill://plugin:name")).toEqual({ path: "skill://plugin:name" });

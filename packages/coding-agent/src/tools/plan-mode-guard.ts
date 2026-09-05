@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { HL_FILE_HASH_LENGTH, HL_FILE_HASH_SEP, HL_FILE_PREFIX, HL_FILE_SUFFIX } from "@oh-my-pi/hashline";
 import {
 	type LocalProtocolOptions,
+	resolveKnowledgeUrlToPath,
 	resolveLocalRoot,
 	resolveLocalUrlToPath,
 	resolveVaultUrlToPath,
@@ -12,6 +13,7 @@ import { normalizeLocalScheme, resolveToCwd } from "./path-utils";
 import { ToolError } from "./tool-errors";
 
 const VAULT_SCHEME_PREFIX = "vault:";
+const KNOWLEDGE_SCHEME_PREFIX = "knowledge:";
 const LOCAL_SCHEME_PREFIX = "local:";
 const HL_TRAILING_TAG_RE = new RegExp(`${HL_FILE_HASH_SEP}[0-9A-Fa-f]{${HL_FILE_HASH_LENGTH}}$`);
 
@@ -103,10 +105,9 @@ export function targetsLocalSandbox(session: ToolSession, targetPath: string): b
 		return false;
 	}
 }
-
 /**
  * Resolve a write/edit target to its absolute filesystem path, honoring the
- * `local://` and `vault://` schemes. Plain paths resolve against the session cwd.
+ * `local://`, `knowledge://`, and `vault://` schemes. Plain paths resolve against the session cwd.
  * Bracketed hashline headers (`[path#TAG]`) are unwrapped first so the inner
  * filesystem path drives resolution — keeping the plan-mode guard and the
  * eventual write in lockstep.
@@ -116,6 +117,10 @@ export function resolvePlanPath(session: ToolSession, targetPath: string): strin
 	const normalized = normalizeLocalScheme(unwrapped);
 	if (normalized.startsWith(LOCAL_SCHEME_PREFIX)) {
 		return resolveLocalUrlToPath(normalized, planLocalProtocolOptions(session));
+	}
+
+	if (normalized.startsWith(KNOWLEDGE_SCHEME_PREFIX)) {
+		return resolveKnowledgeUrlToPath(normalized, session.cwd);
 	}
 
 	if (normalized.startsWith(VAULT_SCHEME_PREFIX)) {

@@ -89,6 +89,23 @@ describe("edit tool knowledge:// support", () => {
 		expect(onDisk).not.toContain("- Original durable fact.");
 	});
 
+	it("rejects knowledge edits through a category symlink that escapes the knowledge root", async () => {
+		const knowledgeRoot = getKnowledgeRoot(tmpDir);
+		const outsidePath = path.join(tmpDir, "outside-topic.md");
+		const escapedCategory = path.join(knowledgeRoot, "escaped");
+		await fs.mkdir(knowledgeRoot, { recursive: true });
+		await fs.writeFile(outsidePath, BASE_CONTENT);
+		await fs.symlink(path.dirname(outsidePath), escapedCategory, "dir");
+		const before = await fs.readFile(outsidePath, "utf8");
+		const tag = computeFileHash(before);
+		const input = `[knowledge://escaped/${path.basename(outsidePath)}#${tag}]\nSWAP 7.=7:\n+- Must not edit outside knowledge root.`;
+
+		await expect(new EditTool(createSession(tmpDir)).execute("call-escape", { input })).rejects.toThrow(
+			/knowledge:\/\/ URL escapes knowledge root/,
+		);
+		expect(await fs.readFile(outsidePath, "utf8")).toBe(before);
+	});
+
 	it("leaves normal filesystem hashline edits on the filesystem path", async () => {
 		const filePath = path.join(tmpDir, "plain.md");
 		await Bun.write(filePath, "# Plain\n\n- keep me\n");

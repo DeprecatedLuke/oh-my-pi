@@ -1,4 +1,4 @@
-import * as fs from "node:fs/promises";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { AgentRegistry } from "../registry/agent-registry";
@@ -98,17 +98,46 @@ function parseKnowledgeUrlPath(url: InternalUrl): ParsedKnowledgeUrlPath {
 	return { category: normalizedCategory, relativePath: normalized };
 }
 
+/**
+ * Resolve an existing knowledge URL for direct filesystem editing while
+ * preserving the protocol handler's symlink-containment boundary.
+ */
 export function resolveKnowledgeUrlToPath(input: string | InternalUrl, cwd: string): string {
 	const url = typeof input === "string" ? parseInternalUrl(input) : input;
 	const root = path.resolve(getKnowledgeRoot(cwd));
 	const parsed = parseKnowledgeUrlPath(url);
-	if (parsed.relativePath) {
-		return path.resolve(root, ...parsed.relativePath.split("/"));
+	let realRoot: string;
+	try {
+		realRoot = fs.realpathSync.native(root);
+	} catch (error) {
+		if (isEnoent(error)) throw new Error(`Knowledge file not found: ${url.href}`);
+		throw error;
 	}
-	if (parsed.category) {
-		return path.resolve(root, parsed.category);
+
+	const targetPath = parsed.relativePath
+		? path.resolve(realRoot, ...parsed.relativePath.split("/"))
+		: parsed.category
+			? path.resolve(realRoot, parsed.category)
+			: realRoot;
+	ensureWithinRoot(targetPath, realRoot);
+	if (targetPath === realRoot) return realRoot;
+
+	try {
+		const realParent = fs.realpathSync.native(path.dirname(targetPath));
+		ensureWithinRoot(realParent, realRoot);
+	} catch (error) {
+		if (isEnoent(error)) throw new Error(`Knowledge file not found: ${url.href}`);
+		throw error;
 	}
-	return root;
+
+	try {
+		const realTarget = fs.realpathSync.native(targetPath);
+		ensureWithinRoot(realTarget, realRoot);
+		return realTarget;
+	} catch (error) {
+		if (isEnoent(error)) throw new Error(`Knowledge file not found: ${url.href}`);
+		throw error;
+	}
 }
 
 async function buildListing(url: InternalUrl, cwd: string, category?: string): Promise<InternalResource> {
@@ -143,7 +172,7 @@ async function readKnowledgeFile(url: InternalUrl, cwd: string, relativePath: st
 	const root = path.resolve(getKnowledgeRoot(cwd));
 	let realRoot: string;
 	try {
-		realRoot = await fs.realpath(root);
+		realRoot = await fs.promises.realpath(root);
 	} catch (error) {
 		if (isEnoent(error)) {
 			throw new Error(`Knowledge file not found: ${url.href}`);
@@ -156,7 +185,7 @@ async function readKnowledgeFile(url: InternalUrl, cwd: string, relativePath: st
 
 	const parentDir = path.dirname(targetPath);
 	try {
-		const realParent = await fs.realpath(parentDir);
+		const realParent = await fs.promises.realpath(parentDir);
 		ensureWithinRoot(realParent, realRoot);
 	} catch (error) {
 		if (!isEnoent(error)) throw error;
@@ -164,7 +193,7 @@ async function readKnowledgeFile(url: InternalUrl, cwd: string, relativePath: st
 
 	let realTargetPath: string;
 	try {
-		realTargetPath = await fs.realpath(targetPath);
+		realTargetPath = await fs.promises.realpath(targetPath);
 	} catch (error) {
 		if (isEnoent(error)) {
 			throw new Error(`Knowledge file not found: ${url.href}`);
@@ -173,7 +202,7 @@ async function readKnowledgeFile(url: InternalUrl, cwd: string, relativePath: st
 	}
 
 	ensureWithinRoot(realTargetPath, realRoot);
-	const stat = await fs.stat(realTargetPath);
+	const stat = await fs.promises.stat(realTargetPath);
 	if (!stat.isFile()) {
 		throw new Error(`knowledge:// URL must resolve to a file: ${url.href}`);
 	}
@@ -195,18 +224,18 @@ async function writeKnowledgeFile(cwd: string, relativePath: string, content: st
 	}
 
 	const root = path.resolve(getKnowledgeRoot(cwd));
-	await fs.mkdir(root, { recursive: true });
-	const realRoot = await fs.realpath(root);
+	await fs.promises.mkdir(root, { recursive: true });
+	const realRoot = await fs.promises.realpath(root);
 	const targetPath = path.resolve(realRoot, ...relativePath.split("/"));
 	ensureWithinRoot(targetPath, realRoot);
 
 	const parentDir = path.dirname(targetPath);
-	await fs.mkdir(parentDir, { recursive: true });
-	const realParent = await fs.realpath(parentDir);
+	await fs.promises.mkdir(parentDir, { recursive: true });
+	const realParent = await fs.promises.realpath(parentDir);
 	ensureWithinRoot(realParent, realRoot);
 
 	try {
-		const realTarget = await fs.realpath(targetPath);
+		const realTarget = await fs.promises.realpath(targetPath);
 		ensureWithinRoot(realTarget, realRoot);
 	} catch (error) {
 		if (!isEnoent(error)) throw error;

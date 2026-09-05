@@ -177,6 +177,31 @@ describe("automatic knowledge-update cadence", () => {
 		expect(source.totalTokens).toBe(3);
 	});
 
+	it("ignores a completion marker whose boundary is absent from the scanned branch", () => {
+		const source = collectKnowledgeAutoUpdateSource([
+			customEntry("initial-marker", KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE),
+			messageEntry("old-user", userMessage("already processed")),
+			messageEntry("old-assistant", assistantMessage("old answer", 40)),
+			messageEntry("pending-user", userMessage("arrived during distill")),
+			messageEntry("pending-assistant", assistantMessage("pending answer", 3)),
+			customEntry("stale-marker", KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE, {
+				throughEntryId: "missing-from-branch",
+			}),
+			messageEntry("later-user", userMessage("arrived after stale marker")),
+			messageEntry("later-assistant", assistantMessage("later answer", 7)),
+		]);
+
+		expect(source.messages.map(entry => entry.id)).toEqual([
+			"old-user",
+			"old-assistant",
+			"pending-user",
+			"pending-assistant",
+			"later-user",
+			"later-assistant",
+		]);
+		expect(source.totalTokens).toBe(50);
+	});
+
 	it("resets both the source messages and token total at the latest persisted marker", () => {
 		const source = collectKnowledgeAutoUpdateSource([
 			customEntry("first-marker", KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE),
