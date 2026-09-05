@@ -9,7 +9,6 @@ import * as taskModule from "@oh-my-pi/pi-coding-agent/task";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import * as knowledgeModule from "@oh-my-pi/pi-coding-agent/session/knowledge-base";
-import { MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -105,24 +104,29 @@ function autoUpdateMarkers(sessionManager: SessionManager) {
 }
 
 describe("AgentSession automatic knowledge updates", () => {
-	it("schedules one terminal KnowledgeDistill job and records one durable marker", async () => {
+	it("runs one internal patch pass and records one durable marker without a visible job or async-result follow-up", async () => {
 		const harness = await createHarness(1);
 		const patchPassSpy = vi.spyOn(taskModule, "runInProcessKnowledgePatchPass").mockResolvedValue(NOOP_PASS);
 		try {
 			await harness.session.prompt("Record this session fact");
 			await harness.session.waitForIdle();
+			await harness.session.settleAsyncWork();
 
-			const throughEntryId = harness.sessionManager
-				.getBranch()
-				.filter(entry => entry.type === "message")
+			const branch = harness.sessionManager.getBranch();
+			const throughEntryId = branch
+				.filter(entry => entry.type === "message" && entry.message.role === "assistant")
 				.at(-1)?.id;
-			if (!throughEntryId) throw new Error("expected the terminal assistant message to be persisted");
 
-			const jobs = harness.manager.getAllJobs();
-			expect(jobs).toHaveLength(1);
-			expect(jobs[0]).toMatchObject({ type: "task", label: "KnowledgeDistill" });
-
-			await harness.manager.waitForAll();
+			expect(patchPassSpy).toHaveBeenCalledTimes(1);
+			expect(harness.manager.getAllJobs()).toHaveLength(0);
+			expect(
+				branch.some(
+					entry =>
+						entry.type === "message" &&
+						entry.message.role === "custom" &&
+						entry.message.customType === "async-result",
+				),
+			).toBe(false);
 
 			const markers = autoUpdateMarkers(harness.sessionManager);
 			expect(markers).toHaveLength(1);
@@ -133,36 +137,32 @@ describe("AgentSession automatic knowledge updates", () => {
 		}
 	});
 
-	it("does not schedule a second distill from its KnowledgeDistill completion follow-up", async () => {
-		const harness = await createHarness(5, {
-			agentId: MAIN_AGENT_ID,
-			followUpUsage: { input: 6, cacheRead: 133_000 },
+	it("excludes cache reads from automatic threshold accounting", async () => {
+		const harness = await createHarness(6, {
+			followUpUsage: { output: 0, cacheRead: 133_000, totalTokens: 133_000 },
 		});
 		const patchPassSpy = vi.spyOn(taskModule, "runInProcessKnowledgePatchPass").mockResolvedValue(NOOP_PASS);
 		try {
-			await harness.session.prompt("Record this session fact");
+			await harness.session.prompt("Record the first session fact");
 			await harness.session.waitForIdle();
-
-			expect(harness.manager.getAllJobs()).toHaveLength(1);
-
-			// The owned completion is delivered as an async-result follow-up. Its
-			// response has above-threshold noncached work, but this turn must not
-			// recursively schedule another automatic distill.
 			await harness.session.settleAsyncWork();
 
-			const assistants = harness.sessionManager
-				.getBranch()
-				.filter(entry => entry.type === "message" && entry.message.role === "assistant");
-			expect(assistants).toHaveLength(2);
-			expect(harness.manager.getAllJobs()).toHaveLength(1);
-			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(1);
+			await harness.session.prompt("Record the cache-heavy session fact");
+			await harness.session.waitForIdle();
+			await harness.session.settleAsyncWork();
+
+			// The two assistant turns contain five non-cached work tokens in
+			// total. The second turn's large cache read must not cross six.
+			expect(patchPassSpy).not.toHaveBeenCalled();
+			expect(harness.manager.getAllJobs()).toHaveLength(0);
+			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(0);
 		} finally {
 			patchPassSpy.mockRestore();
 			await disposeHarness(harness);
 		}
 	});
 
-	it("does not mark a completed distill after the active branch moves before its captured message", async () => {
+	it("does not mark a completed pass after the active branch moves before its captured message", async () => {
 		const harness = await createHarness(1);
 		const passStarted = Promise.withResolvers<void>();
 		const passRelease = Promise.withResolvers<typeof NOOP_PASS>();
@@ -184,7 +184,7 @@ describe("AgentSession automatic knowledge updates", () => {
 			}
 			const sessionId = harness.sessionManager.getSessionId();
 
-			expect(harness.manager.getAllJobs()).toHaveLength(1);
+			expect(harness.manager.getAllJobs()).toHaveLength(0);
 			await passStarted.promise;
 
 			harness.sessionManager.branch(userEntry.id);
@@ -192,7 +192,7 @@ describe("AgentSession automatic knowledge updates", () => {
 			expect(harness.sessionManager.getBranch().some(entry => entry.id === throughEntryId)).toBe(false);
 
 			passRelease.resolve(NOOP_PASS);
-			await harness.manager.waitForAll();
+			await harness.session.settleAsyncWork();
 
 			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(0);
 		} finally {
@@ -202,31 +202,32 @@ describe("AgentSession automatic knowledge updates", () => {
 		}
 	});
 
-	it("does not mark a failed distill and retries the accumulated range on the next terminal prompt", async () => {
+	it("does not mark a failed pass and retries the accumulated range on the next terminal prompt", async () => {
 		const harness = await createHarness(5);
-		const knowledgeAgentSpy = vi
-			.spyOn(knowledgeModule, "runSessionKnowledgeAgent")
-			.mockResolvedValueOnce({ completed: false, committed: false })
-			.mockResolvedValueOnce({ completed: true, committed: false });
+		const patchPassSpy = vi
+			.spyOn(taskModule, "runInProcessKnowledgePatchPass")
+			.mockRejectedValueOnce(new Error("test knowledge pass failure"))
+			.mockResolvedValueOnce(NOOP_PASS);
 		try {
 			await harness.session.prompt("Record the first session fact");
 			await harness.session.waitForIdle();
+			await harness.session.settleAsyncWork();
 
-			expect(harness.manager.getAllJobs()).toHaveLength(1);
-			await harness.manager.waitForAll();
-			expect(harness.manager.getAllJobs()[0]?.status).toBe("failed");
+			expect(patchPassSpy).toHaveBeenCalledTimes(1);
+			expect(harness.manager.getAllJobs()).toHaveLength(0);
 			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(0);
 
 			await harness.session.prompt("Record the second session fact");
 			await harness.session.waitForIdle();
+			await harness.session.settleAsyncWork();
 
-			// The first pass's five tokens remain pending; the second response has
-			// only one token, so this job exists only if the failed range was kept.
-			expect(harness.manager.getAllJobs()).toHaveLength(2);
-			await harness.manager.waitForAll();
+			// The first pass's five tokens remain pending; the second response
+			// adds one token, so the accumulated range crosses the threshold.
+			expect(patchPassSpy).toHaveBeenCalledTimes(2);
+			expect(harness.manager.getAllJobs()).toHaveLength(0);
 			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(1);
 		} finally {
-			knowledgeAgentSpy.mockRestore();
+			patchPassSpy.mockRestore();
 			await disposeHarness(harness);
 		}
 	});
@@ -236,6 +237,7 @@ describe("AgentSession automatic knowledge updates", () => {
 		try {
 			await harness.session.prompt("Record this session fact");
 			await harness.session.waitForIdle();
+			await harness.session.settleAsyncWork();
 
 			expect(harness.manager.getAllJobs()).toHaveLength(0);
 			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(0);

@@ -683,10 +683,10 @@ export class AgentSession {
 	 * across a `/new` is dropped regardless of job-id reuse.
 	 */
 	#asyncDeliveryEpoch = 0;
-	/** Per-session guard against stacking manager-less fire-and-forget knowledge distills. */
-	#autoKnowledgeDistillInFlight = false;
-	/** True when this run was triggered by a KnowledgeDistill async-result. */
-	#knowledgeDistillAsyncResultOrigin = false;
+	/** Abort controller for the session-owned automatic knowledge update. */
+	#knowledgeAutoUpdateAbortController: AbortController | undefined;
+	/** Tracked automatic knowledge update, when one is currently running. */
+	#knowledgeAutoUpdateTask: Promise<void> | undefined;
 
 	readonly #irc: IrcBridge;
 	#ircWakeTurnObserver:
@@ -2205,17 +2205,20 @@ export class AgentSession {
 	/**
 	 * Settle one generation of owner-scoped async work: wait for running owner
 	 * jobs to finish, deliver their queued results (which enqueue async-result
-	 * follow-ups on this session's yield queue), and wait for the injected
-	 * follow-up turn(s) to go idle. Callers loop while
-	 * {@link hasPendingAsyncWork} still holds — a follow-up turn may start new
-	 * jobs.
+	 * follow-ups on this session's yield queue), wait for the follow-up turn(s)
+	 * to go idle, and await the session-owned knowledge auto-update pass.
+	 * Callers loop while {@link hasPendingAsyncWork} still holds — a follow-up
+	 * turn may start new jobs.
 	 */
 	async settleAsyncWork(): Promise<void> {
 		const manager = this.#asyncJobManager;
-		if (!manager || !this.#agentId) return;
-		await manager.waitForOwnerJobs(this.#agentId, { excludeSuppressed: true });
-		await manager.drainDeliveries({ filter: { ownerId: this.#agentId } });
-		await this.waitForIdle();
+		if (manager && this.#agentId) {
+			await manager.waitForOwnerJobs(this.#agentId, { excludeSuppressed: true });
+			await manager.drainDeliveries({ filter: { ownerId: this.#agentId } });
+			await this.waitForIdle();
+		}
+		const knowledgeAutoUpdateTask = this.#knowledgeAutoUpdateTask;
+		if (knowledgeAutoUpdateTask) await knowledgeAutoUpdateTask;
 	}
 
 	/**
@@ -2853,20 +2856,8 @@ export class AgentSession {
 		// A fresh run supersedes the previously settled (and pruned) refusal
 		// turn: state-based lookups take over again.
 		if (event.type === "agent_start") {
-			this.#knowledgeDistillAsyncResultOrigin = false;
 			this.#prunedTerminalRefusal = undefined;
 			this.#emitRunState("running");
-		}
-		if (
-			event.type === "message_start" &&
-			event.message.role === "custom" &&
-			event.message.customType === ASYNC_RESULT_MESSAGE_TYPE
-		) {
-			const details = isRecord(event.message.details) ? event.message.details : undefined;
-			const jobs = details?.jobs;
-			if (Array.isArray(jobs) && jobs.some(job => isRecord(job) && job.label === "KnowledgeDistill")) {
-				this.#knowledgeDistillAsyncResultOrigin = true;
-			}
 		}
 		// This must happen before event fan-out awaits: streamed tool-call deltas
 		// can otherwise queue validation that a delayed turn-start reset erases.
@@ -3587,11 +3578,9 @@ export class AgentSession {
 			if (!sessionStopWillContinue) {
 				// Fully terminal settle: the session_stop pass declined continuation, and every
 				// retry/compaction/todo/issues/async-wake gate above already returned. Schedule the
-				// token-thresholded background knowledge distill (fire-and-forget) before the
+				// token-thresholded session-owned knowledge auto-update before the
 				// wire-level agent_end notification reaches subscribers.
-				if (!this.#knowledgeDistillAsyncResultOrigin) {
-					this.#maybeScheduleKnowledgeAutoUpdate();
-				}
+				this.#maybeScheduleKnowledgeAutoUpdate();
 			}
 			await emitAgentEndNotification(sessionStopWillContinue ? { willContinue: true } : undefined);
 		}
@@ -4492,6 +4481,22 @@ export class AgentSession {
 		}
 	}
 
+	#abortKnowledgeAutoUpdate(): void {
+		this.#knowledgeAutoUpdateAbortController?.abort();
+	}
+
+	async #drainKnowledgeAutoUpdate(): Promise<void> {
+		const task = this.#knowledgeAutoUpdateTask;
+		if (!task) return;
+		try {
+			await withTimeout(task, 3_000, "Timed out draining session knowledge auto-update");
+		} catch (error) {
+			logger.debug("Session knowledge auto-update did not settle during lifecycle transition", {
+				error: String(error),
+			});
+		}
+	}
+
 	/** True once dispose() has begun; deferred background work (e.g. the deferred
 	 *  MCP discovery task in sdk.ts) must not touch the session past this point. */
 	get isDisposed(): boolean {
@@ -4523,6 +4528,7 @@ export class AgentSession {
 		this.#memory.cancelLocalMemoryStartup();
 		this.#titleGenerationAbortController.abort();
 		this.#abortAutolearnCapture();
+		this.#abortKnowledgeAutoUpdate();
 		this.#irc.flushPending();
 		this.yieldQueue.clear();
 		this.agent.setAsideMessageProvider(undefined);
@@ -4670,8 +4676,15 @@ export class AgentSession {
 			logger.warn("Session dispose: Sharpshooter release failed", { error: String(error) });
 		}
 		const advisorRecorderClosed = this.#advisors.recorderClosed();
+		const ownedAsyncJobsAndKnowledge = (async () => {
+			try {
+				await this.#disposeOwnedAsyncJobs();
+			} finally {
+				await this.#drainKnowledgeAutoUpdate();
+			}
+		})();
 		const results = await Promise.allSettled([
-			this.#disposeOwnedAsyncJobs(),
+			ownedAsyncJobsAndKnowledge,
 			this.#eval.disposeKernels(),
 			this.#releaseOwnedBrowserTabs(this.sessionManager.getSessionId()),
 			this.#releaseOwnedComputerSessions(this.#eval.getKernelOwnerId()),
@@ -4868,6 +4881,8 @@ export class AgentSession {
 		this.#promptGeneration++;
 		await this.#cancelPostPromptTasks();
 		this.#cancelOwnAsyncJobs();
+		this.#abortKnowledgeAutoUpdate();
+		await this.#drainKnowledgeAutoUpdate();
 
 		// Drop the conversation: messages, queued steers/follow-ups, pending tool
 		// calls, and error state. agent.reset() keeps the model and system prompt.
@@ -7799,11 +7814,12 @@ export class AgentSession {
 				return false;
 			}
 		}
-
 		this.#disconnectFromAgent();
 		let advisorRecordersDetached = false;
 		await this.abort();
 		this.#cancelOwnAsyncJobs();
+		this.#abortKnowledgeAutoUpdate();
+		await this.#drainKnowledgeAutoUpdate();
 		this.#closeAllProviderSessions("new session");
 		await this.#bash.flushPending();
 		const bashTransition = this.#bash.beginSessionTransition({ persistDetached: options?.drop !== true });
@@ -8286,116 +8302,93 @@ export class AgentSession {
 	}
 
 	/**
-	 * Background session-knowledge auto-distill, scheduled at the fully terminal
+	 * Session-owned session-knowledge auto-update, scheduled at the fully terminal
 	 * `agent_end` boundary (after `session_stop` declines continuation). Counts
 	 * primary assistant provider tokens persisted since the latest
 	 * `knowledge-auto-update` marker on the active branch; crossing the live
-	 * `knowledge.autoUpdateThresholdTokens` threshold registers one owned
-	 * `KnowledgeDistill` job (patch-based, `commit:false`) and advances the
-	 * durable watermark only once the pass completes — a no-change pass counts,
-	 * while failures, aborts, and session replacement or branching away from
-	 * the captured boundary leave it pending so the range retries. Fire-and-forget:
-	 * the distill never holds up the terminal event. Skips when disabled, for
-	 * non-main sessions, with no model/messages, or while any `Knowledge*` job
-	 * is running. Manager-less sessions fall back to the direct fire-and-forget
-	 * save under a per-session in-memory guard.
+	 * `knowledge.autoUpdateThresholdTokens` threshold starts one abortable,
+	 * patch-based internal pass and advances the durable watermark only once the
+	 * pass completes — a no-change pass counts, while failures, aborts, and
+	 * session replacement or branching away from the captured boundary leave it
+	 * pending so the range retries. Fire-and-forget: the pass never holds up the
+	 * terminal event. Skips when disabled, for non-main sessions, with no
+	 * model/messages, or while any `Knowledge*` maintenance job is running.
 	 */
 	#maybeScheduleKnowledgeAutoUpdate(): void {
 		if (this.#abortInProgress || this.#isDisposed) return;
 		const threshold = this.settings.get("knowledge.autoUpdateThresholdTokens");
 		if (!(threshold > 0)) return;
 		if (this.#agentKind !== "main") return;
+		const manager = this.#asyncJobManager;
+		// Manual build/update/compact jobs contend for the same
+		// `.omp/knowledge` tree, so do not start beside one.
+		if (manager?.getRunningJobs().some(job => job.label.startsWith("Knowledge"))) {
+			logger.debug("Session knowledge auto-update already running, skipping");
+			return;
+		}
+		if (this.#knowledgeAutoUpdateTask) {
+			logger.debug("Session knowledge auto-update already in flight, skipping");
+			return;
+		}
 		const source = sessionKnowledge.collectKnowledgeAutoUpdateSource(this.sessionManager.getBranch());
 		if (source.messages.length === 0) return;
 		if (source.totalTokens < threshold) return;
 		const model = this.model;
 		if (!model) return;
-		// Snapshot + convert only the unprocessed primary messages: the distill
-		// runs in a background job while the session may keep streaming.
+		// Snapshot + convert only the unprocessed primary messages: the pass runs
+		// in a headless side agent while the session may keep streaming.
 		const messages = convertToLlm(source.messages.map(entry => entry.message));
-		// Completion watermark: advanced only after the pass resolves on the
-		// same session — failures/aborts/replacement keep the range retryable.
+		// Completion watermark: advanced only after the pass resolves on the same
+		// session — failures/aborts/replacement keep the range retryable.
 		const sessionId = this.sessionManager.getSessionId();
 		const throughEntryId = source.messages[source.messages.length - 1].id;
 		const sourceTitle = "auto knowledge update";
-		const manager = this.#asyncJobManager;
-		if (!manager) {
-			// Manager-less session: direct fire-and-forget save, guarded so
-			// repeated terminal settles cannot stack duplicate passes.
-			if (this.#autoKnowledgeDistillInFlight) {
-				logger.debug("Session knowledge auto-update already in flight, skipping", { sourceTitle });
-				return;
-			}
-			this.#autoKnowledgeDistillInFlight = true;
-			void this.#writeSessionKnowledge(sourceTitle, messages)
-				.then(result => {
-					if (!result.completed) return;
-					// Resolved pass (no-change counts): advance the watermark, but
-					// only if the session still owns the captured transcript and the
-					// captured boundary is still on the active branch — a branch away
-					// from it appends nothing so the new branch stays retryable.
-					if (this.#knowledgeAutoUpdateBoundaryIsCurrent(sessionId, throughEntryId)) {
-						this.sessionManager.appendCustomEntry(sessionKnowledge.KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE, {
-							throughEntryId,
-						});
-					}
-				})
-				.catch(error => {
-					logger.debug("Failed to run session knowledge update", {
-						sourceTitle,
+		const cwd = this.sessionManager.getCwd();
+		const controller = new AbortController();
+		this.#knowledgeAutoUpdateAbortController = controller;
+		const taskId = `knowledge-auto-update:${Snowflake.next()}`;
+		const task = (async () => {
+			try {
+				if (controller.signal.aborted) return;
+				const pass = await runInProcessKnowledgePatchPass({
+					cwd,
+					taskId,
+					description: sourceTitle,
+					generateMessage: async () => `chore(knowledge): update .omp/knowledge\n\nSource: ${sourceTitle}`,
+					runDistill: async () => {
+						// Writes the real `.omp/knowledge` but does NOT commit — the
+						// patch pass captures the edits, reverts the tree, and
+						// applies-or-pends.
+						const result = await this.#writeSessionKnowledge(sourceTitle, messages, controller.signal, false);
+						if (!result.completed) throw new Error("Session knowledge auto-update did not complete");
+					},
+				});
+				// A no-change pass counts as complete, but only advance past the
+				// captured boundary while this session still owns that branch.
+				if (
+					!controller.signal.aborted &&
+					!pass.aborted &&
+					this.#knowledgeAutoUpdateBoundaryIsCurrent(sessionId, throughEntryId)
+				) {
+					this.sessionManager.appendCustomEntry(sessionKnowledge.KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE, {
+						throughEntryId,
+					});
+				}
+			} catch (error) {
+				if (!controller.signal.aborted) {
+					logger.debug("Failed to run session knowledge auto-update", {
 						error: error instanceof Error ? error.message : String(error),
 					});
-				})
-				.finally(() => {
-					this.#autoKnowledgeDistillInFlight = false;
-				});
-			return;
-		}
-		// Skip while any Knowledge* job is running — the auto-distill and a
-		// manual build/update/compact contend for the same `.omp/knowledge` tree.
-		if (manager.getRunningJobs().some(job => job.label.startsWith("Knowledge"))) {
-			logger.debug("Session knowledge distill already running, skipping", { sourceTitle });
-			return;
-		}
-		try {
-			const cwd = this.sessionManager.getCwd();
-			manager.register(
-				"task",
-				"KnowledgeDistill",
-				async ({ jobId: agentId, signal: jobSignal, markRunning }) => {
-					markRunning();
-					const pass = await runInProcessKnowledgePatchPass({
-						cwd,
-						taskId: agentId,
-						description: sourceTitle,
-						generateMessage: async () => `chore(knowledge): update .omp/knowledge\n\nSource: ${sourceTitle}`,
-						runDistill: async () => {
-							// Writes the real `.omp/knowledge` but does NOT commit — the patch
-							// pass captures the edits, reverts the tree, and applies-or-pends.
-							const result = await this.#writeSessionKnowledge(sourceTitle, messages, jobSignal, false);
-							if (!result.completed) throw new Error("Session knowledge distill did not complete");
-						},
-					});
-					// Completion watermark: the distill resolved (no-change counts)
-					// without abort, the session still owns the captured transcript,
-					// and the captured boundary is still on the active branch — a
-					// branch away from it appends nothing so the new branch stays
-					// retryable. Only then advance past the snapshot boundary.
-					if (!jobSignal.aborted && this.#knowledgeAutoUpdateBoundaryIsCurrent(sessionId, throughEntryId)) {
-						this.sessionManager.appendCustomEntry(sessionKnowledge.KNOWLEDGE_AUTO_UPDATE_CUSTOM_TYPE, {
-							throughEntryId,
-						});
-					}
-					return `Session knowledge distill (${sourceTitle}) — ${pass.summary}`;
-				},
-				{ id: "KnowledgeDistill", ownerId: this.#agentId ?? undefined },
-			);
-		} catch (error) {
-			logger.debug("Failed to schedule session knowledge distill", {
-				sourceTitle,
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
+				}
+			}
+		})();
+		this.#knowledgeAutoUpdateTask = task;
+		void task.finally(() => {
+			if (this.#knowledgeAutoUpdateTask === task) this.#knowledgeAutoUpdateTask = undefined;
+			if (this.#knowledgeAutoUpdateAbortController === controller) {
+				this.#knowledgeAutoUpdateAbortController = undefined;
+			}
+		});
 	}
 
 	/**
@@ -9353,7 +9346,9 @@ export class AgentSession {
 		}
 
 		this.#disconnectFromAgent();
+		this.#abortKnowledgeAutoUpdate();
 		await this.abort({ goalReason: "internal" });
+		await this.#drainKnowledgeAutoUpdate();
 		await this.#sessionBeforeSwitchReconciler?.();
 
 		await this.#bash.flushPending();
@@ -9723,6 +9718,9 @@ export class AgentSession {
 			}
 			skipConversationRestore = result?.skipConversationRestore ?? false;
 		}
+		this.#cancelOwnAsyncJobs();
+		this.#abortKnowledgeAutoUpdate();
+		await this.#drainKnowledgeAutoUpdate();
 
 		// Clear pending messages (bound to old session state)
 		this.#pendingNextTurnMessages = [];
@@ -9734,7 +9732,6 @@ export class AgentSession {
 		// Flush pending writes before branching
 		await this.sessionManager.flush();
 		const bashTransition = this.#bash.beginSessionTransition();
-		this.#cancelOwnAsyncJobs();
 		this.#abortAutolearnCapture();
 		await this.#drainAutolearnCapture();
 
@@ -9864,6 +9861,8 @@ export class AgentSession {
 		await this.sessionManager.flush();
 		const bashTransition = this.#bash.beginSessionTransition();
 		this.#cancelOwnAsyncJobs();
+		this.#abortKnowledgeAutoUpdate();
+		await this.#drainKnowledgeAutoUpdate();
 		this.#abortAutolearnCapture();
 		await this.#drainAutolearnCapture();
 
