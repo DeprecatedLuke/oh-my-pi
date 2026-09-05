@@ -214,7 +214,10 @@ interface AsyncJobDelivery {
 	 * retrying) — without it, a recovered delivery would silently drop
 	 * `structured` even though `text` survives on the delivery itself.
 	 */
-	jobSnapshot?: Pick<AsyncJob, "type" | "status" | "startTime" | "label" | "structured" | "agentId" | "latestDetails">;
+	jobSnapshot?: Pick<
+		AsyncJob,
+		"type" | "status" | "startTime" | "label" | "structured" | "agentId" | "latestDetails" | "lastActivityAt"
+	>;
 }
 
 export interface AsyncJobDeliveryState {
@@ -1146,6 +1149,7 @@ export class AsyncJobManager {
 						structured: job.structured,
 						agentId: job.agentId,
 						latestDetails: job.latestDetails,
+						lastActivityAt: job.lastActivityAt,
 					}
 				: undefined,
 		});
@@ -1282,8 +1286,8 @@ export class AsyncJobManager {
 						attempt: failedDeliveries[0]?.delivery.attempt,
 						error:
 							failedDeliveries[0]?.error instanceof Error
-									? failedDeliveries[0].error.message
-									: String(failedDeliveries[0]?.error),
+								? failedDeliveries[0].error.message
+								: String(failedDeliveries[0]?.error),
 					});
 				}
 			} catch (error) {
@@ -1340,6 +1344,7 @@ export class AsyncJobManager {
 			structured: snapshot.structured,
 			agentId: snapshot.agentId,
 			latestDetails: snapshot.latestDetails,
+			lastActivityAt: snapshot.lastActivityAt,
 		};
 	}
 

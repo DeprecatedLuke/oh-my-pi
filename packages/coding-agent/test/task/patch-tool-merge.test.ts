@@ -59,7 +59,7 @@ function createSession(cwd: string): ToolSession {
 		cwd,
 		hasUI: false,
 		settings: Settings.isolated({
-			"task.isolation.mode": "rcopy",
+			"isolation.backend": "rcopy",
 			"task.isolation.merge": "patch-tool",
 		}),
 		getSessionFile: () => null,

@@ -1607,7 +1607,7 @@ export class AgentSession {
 			agent: this.agent,
 			settings: this.settings,
 			sessionManager: this.sessionManager,
-			getObfuscator: () => this.#obfuscator,
+			obfuscator: this.#obfuscator,
 			model: () => this.model,
 			isDisposed: () => this.#isDisposed,
 			promptGeneration: () => this.#promptGeneration,

@@ -116,8 +116,8 @@ describe("AsyncJobManager", () => {
 	test("retains structured output from a job body result", async () => {
 		const completions: Array<{ jobId: string; text: string }> = [];
 		const manager = new AsyncJobManager({
-			onJobComplete: async (jobId, text) => {
-				completions.push({ jobId, text });
+			onJobComplete: async batch => {
+				for (const { jobId, text } of batch) completions.push({ jobId, text });
 			},
 		});
 
@@ -143,10 +143,12 @@ describe("AsyncJobManager", () => {
 		const delivered: Array<{ jobId: string; structured: unknown; images: ImageContent[] | undefined }> = [];
 		const manager = new AsyncJobManager({
 			retentionMs: 25,
-			onJobComplete: async (jobId, _text, job) => {
+			onJobComplete: async batch => {
 				sinkCalls += 1;
 				if (sinkCalls === 1) throw new Error("simulated delivery failure");
-				delivered.push({ jobId, structured: job?.structured, images: job?.latestDetails?.images });
+				for (const { jobId, job } of batch) {
+					delivered.push({ jobId, structured: job?.structured, images: job?.latestDetails?.images });
+				}
 			},
 		});
 
@@ -187,10 +189,10 @@ describe("AsyncJobManager", () => {
 		const delivered: Array<{ jobId: string; agentId: string | undefined }> = [];
 		const manager = new AsyncJobManager({
 			retentionMs: 25,
-			onJobComplete: async (jobId, _text, job) => {
+			onJobComplete: async batch => {
 				sinkCalls += 1;
 				if (sinkCalls === 1) throw new Error("simulated delivery failure");
-				delivered.push({ jobId, agentId: job?.agentId });
+				for (const { jobId, job } of batch) delivered.push({ jobId, agentId: job?.agentId });
 			},
 		});
 

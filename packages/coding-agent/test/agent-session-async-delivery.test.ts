@@ -121,11 +121,13 @@ describe("AgentSession owner-routed async delivery", () => {
 	});
 
 	it("carries a schema-valid background task's structured output as a pointer only", () => {
+		const startTime = Date.now();
 		const job: AsyncJob = {
 			id: "SchemaProbe",
 			type: "task",
 			status: "completed",
-			startTime: Date.now(),
+			startTime,
+			lastActivityAt: startTime,
 			label: "SchemaProbe",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
@@ -157,12 +159,14 @@ describe("AgentSession owner-routed async delivery", () => {
 		// job id), but the task's artifacts are still written under its own
 		// unsuffixed agent id. Advertising the suffixed job id points at a
 		// handle with no backing `<id>.md`/`.json` on disk (PR #10625 review).
+		const startTime = Date.now();
 		const job: AsyncJob = {
 			id: "Foo-t1-2",
 			agentId: "Foo-t1",
 			type: "task",
 			status: "completed",
-			startTime: Date.now(),
+			startTime,
+			lastActivityAt: startTime,
 			label: "Foo-t1",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
@@ -187,11 +191,13 @@ describe("AgentSession owner-routed async delivery", () => {
 		// advertise the same `agent://` recovery pointer as a valid result,
 		// not just the size-capped inline preview (which alone would be the
 		// only model-visible copy for oversized payloads).
+		const startTime = Date.now();
 		const job: AsyncJob = {
 			id: "SchemaProbe",
 			type: "task",
 			status: "completed",
-			startTime: Date.now(),
+			startTime,
+			lastActivityAt: startTime,
 			label: "SchemaProbe",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
@@ -225,11 +231,13 @@ describe("AgentSession owner-routed async delivery", () => {
 	});
 
 	it("omits the agent:// pointer for an invalid result with no data to recover", () => {
+		const startTime = Date.now();
 		const job: AsyncJob = {
 			id: "SchemaProbe",
 			type: "task",
 			status: "completed",
-			startTime: Date.now(),
+			startTime,
+			lastActivityAt: startTime,
 			label: "SchemaProbe",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),

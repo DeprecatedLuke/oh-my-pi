@@ -108,7 +108,6 @@ describe("streaming edit abort", () => {
 		);
 		expect(aborts.count).toBe(1);
 		expect(guard.abortTriggered).toBe(true);
-
 	});
 
 	test("does not abort for transient streaming errors", () => {

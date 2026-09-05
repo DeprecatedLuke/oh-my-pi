@@ -15,7 +15,6 @@ import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/componen
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { STREAMING_REVEAL_FRAME_MS } from "@oh-my-pi/pi-coding-agent/modes/controllers/streaming-reveal";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
@@ -67,7 +66,7 @@ function createFixture(streamingMessage: AssistantMessage, dependency?: SecretOb
 		session: { getToolByName: () => tool, hasBuiltInTool: () => true, extensionRunner },
 		viewSession: { getToolByName: () => tool, hasBuiltInTool: () => true, obfuscator },
 		sessionManager: { getCwd: () => process.cwd() },
-	} as unknown as InteractiveModeContext;
+	});
 
 	return {
 		controller: new EventController(ctx),
