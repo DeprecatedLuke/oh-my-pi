@@ -247,13 +247,19 @@ describe("AgentSession automatic knowledge updates", () => {
 			passStarted.resolve();
 			return passRelease.promise;
 		});
+		const abortSpy = vi.spyOn(AbortController.prototype, "abort");
 		try {
 			await harness.session.prompt("Record this session fact");
 			await harness.session.waitForIdle();
 			await passStarted.promise;
+			abortSpy.mockClear();
 
 			const previousSessionId = harness.sessionManager.getSessionId();
 			const forkPromise = harness.session.fork();
+			await Bun.sleep(0);
+			expect(abortSpy).toHaveBeenCalled();
+			expect(harness.sessionManager.getSessionId()).toBe(previousSessionId);
+
 			passRelease.resolve(NOOP_PASS);
 
 			expect(await forkPromise).toBe(true);
@@ -261,6 +267,7 @@ describe("AgentSession automatic knowledge updates", () => {
 			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(0);
 		} finally {
 			passRelease.resolve(NOOP_PASS);
+			abortSpy.mockRestore();
 			patchPassSpy.mockRestore();
 			await disposeHarness(harness);
 		}
@@ -274,13 +281,19 @@ describe("AgentSession automatic knowledge updates", () => {
 			passStarted.resolve();
 			return passRelease.promise;
 		});
+		const abortSpy = vi.spyOn(AbortController.prototype, "abort");
 		try {
 			await harness.session.prompt("Record this session fact");
 			await harness.session.waitForIdle();
 			await passStarted.promise;
+			abortSpy.mockClear();
 
+			const previousCwd = harness.sessionManager.getCwd();
 			const movedCwd = path.join(harness.tempDir.path(), "moved-project");
 			const movePromise = harness.session.moveSession(movedCwd);
+			await Bun.sleep(0);
+			expect(abortSpy).toHaveBeenCalled();
+			expect(harness.sessionManager.getCwd()).toBe(previousCwd);
 			passRelease.resolve(NOOP_PASS);
 
 			await movePromise;
@@ -288,6 +301,7 @@ describe("AgentSession automatic knowledge updates", () => {
 			expect(autoUpdateMarkers(harness.sessionManager)).toHaveLength(0);
 		} finally {
 			passRelease.resolve(NOOP_PASS);
+			abortSpy.mockRestore();
 			patchPassSpy.mockRestore();
 			await disposeHarness(harness);
 		}
