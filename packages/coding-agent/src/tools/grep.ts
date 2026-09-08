@@ -828,6 +828,8 @@ async function resolveInternalSearchInputs(opts: {
 	skills?: ResolveContext["skills"];
 	rules?: ResolveContext["rules"];
 	sessionFile?: string;
+	sessionId?: string;
+	agentRegistry?: ResolveContext["agentRegistry"];
 }): Promise<InternalSearchInputResolution> {
 	const internalRouter = InternalUrlRouter.instance();
 	const paths = opts.resolvedPaths.slice();
@@ -841,6 +843,8 @@ async function resolveInternalSearchInputs(opts: {
 		settings: opts.settings,
 		signal: opts.signal,
 		sessionFile: opts.sessionFile,
+		sessionId: opts.sessionId,
+		agentRegistry: opts.agentRegistry,
 		localProtocolOptions: opts.localProtocolOptions,
 		skills: opts.skills,
 		rules: opts.rules,
@@ -1040,6 +1044,8 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 					skills: this.session.skills,
 					rules: this.session.activeRules,
 					sessionFile: this.session.getSessionFile() ?? undefined,
+					sessionId: this.session.sessionManager?.getSessionId?.() ?? this.session.getSessionId?.() ?? undefined,
+					agentRegistry: this.session.agentRegistry,
 				});
 				const searchablePaths = internalResolution.paths;
 				const { virtualResources, virtualPathSet, virtualInputIndexes } = internalResolution;
@@ -1092,6 +1098,9 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 						skills: this.session.skills,
 						rules: this.session.activeRules,
 						sessionFile: this.session.getSessionFile() ?? undefined,
+						sessionId:
+							this.session.sessionManager?.getSessionId?.() ?? this.session.getSessionId?.() ?? undefined,
+						agentRegistry: this.session.agentRegistry,
 						resolveExternalUrl: materializeExternalUrlForSearch,
 					});
 					searchPath = scope.searchPath;
