@@ -227,7 +227,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("current-history-search", {
 			pattern: "pre-compaction needle",
-			path: "history://current/full",
+			paths: "history://current/full",
 		});
 
 		expect(getResultText(result)).toContain("searchable pre-compaction needle");
