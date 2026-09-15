@@ -192,7 +192,7 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 
 		{
 			caption: "Block until a specific peer answers",
-			call: { op: "wait", from: "AuthLoader", timeoutMs: 60000 },
+			call: { op: "wait", from: "AuthLoader" },
 		},
 		{
 			caption: "Kill a hung background job",

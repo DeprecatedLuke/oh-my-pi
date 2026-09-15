@@ -27,7 +27,12 @@ import { InternalUrlRouter } from "../internal-urls/router";
 import type { InternalResource, ResolveContext } from "../internal-urls/types";
 import type { Theme } from "../modes/theme/theme";
 import grepDescription from "../prompts/tools/grep.md" with { type: "text" };
-import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead, truncateLine } from "../session/streaming-output";
+import {
+	DEFAULT_MAX_COLUMN,
+	type TruncationResult,
+	truncateHead,
+	truncateLineBytes,
+} from "../session/streaming-output";
 import { sessionDelegationBias } from "../task/prompt-policy";
 import { isScoutSpawnable } from "../task/spawn-policy";
 import {
@@ -233,7 +238,7 @@ async function parsePathSpecs(
 					`paths entry "${entry}" — only line-range selectors like ":50-100" are supported (no ":raw"/":conflicts")`,
 				);
 			}
-			if (hasGlobPathChars(split.path)) {
+			if (hasGlobPathChars(split.path) && (await probeLiteralPathExists(split.path, cwd)) === "missing") {
 				throw new ToolError(`Line-range selector requires a single file, not a glob: ${entry}`);
 			}
 			clean = split.path;
@@ -596,7 +601,7 @@ async function nativeChunkedLineIndexes(
 }
 
 function makeContextLine(lines: readonly string[], lineIndex: number): { lineNumber: number; line: string } {
-	const { text } = truncateLine(lines[lineIndex] ?? "", DEFAULT_MAX_COLUMN);
+	const { text } = truncateLineBytes(lines[lineIndex] ?? "", DEFAULT_MAX_COLUMN);
 	return { lineNumber: lineIndex + 1, line: text };
 }
 
@@ -610,7 +615,7 @@ function makeVirtualMatch(
 	nextMatchLine: number,
 ): GrepMatch {
 	const lineNumber = lineIndex + 1;
-	const { text, wasTruncated } = truncateLine(lines[lineIndex] ?? "", DEFAULT_MAX_COLUMN);
+	const { text, wasTruncated } = truncateLineBytes(lines[lineIndex] ?? "", DEFAULT_MAX_COLUMN);
 	const match: GrepMatch = {
 		path: resource.path,
 		lineNumber,
@@ -1664,7 +1669,7 @@ export class GrepTool implements AgentTool<typeof searchSchema, GrepToolDetails>
 				if (linesTruncated) details.linesTruncated = true;
 				const resultBuilder = toolResult(details)
 					.text(output)
-					.limits({ columnMax: linesTruncated ? DEFAULT_MAX_COLUMN : undefined });
+					.limits({ columnMax: linesTruncated ? DEFAULT_MAX_COLUMN : undefined, columnUnit: "bytes" });
 				if (truncation.truncated) {
 					resultBuilder.truncation(truncation, { direction: "head" });
 				}

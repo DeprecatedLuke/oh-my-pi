@@ -1,6 +1,3 @@
-import { emergencyTerminalRestore } from "@oh-my-pi/pi-tui";
-import { postmortem } from "@oh-my-pi/pi-utils";
-
 /**
  * Interactive mode and embeddable RPC client exports for the coding agent.
  *
@@ -13,6 +10,6 @@ export * from "./interactive-mode";
 export * from "./rpc/rpc-client";
 export * from "./rpc/rpc-types";
 
-postmortem.register("terminal-restore", () => {
-	emergencyTerminalRestore();
-});
+// planSaveFileName moved to plan-mode/plan-autosave; preserved here so its
+// pre-existing barrel reachability survives the move.
+export { planSaveFileName } from "../plan-mode/plan-autosave";

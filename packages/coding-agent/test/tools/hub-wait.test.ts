@@ -2,7 +2,7 @@
  * `hub wait` routes peer-message waits while rejecting removed background-job
  * blocking. Job snapshots and automatic delivery are covered by the job suites.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -39,6 +39,7 @@ describe("hub peer-message wait routing", () => {
 		IrcBus.resetGlobalForTests();
 	});
 	afterEach(() => {
+		vi.useRealTimers();
 		AgentRegistry.resetGlobalForTests();
 		IrcBus.resetGlobalForTests();
 	});
@@ -165,9 +166,8 @@ describe("hub peer-message wait routing", () => {
 		});
 
 		const manager = new AsyncJobManager({ onJobComplete: () => {} });
-		// `timeoutMs: 0` would block forever if the stale ref still opened the
-		// message-wait gate; the test times out instead of asserting.
-		const result = await new HubTool(makeSession(manager)).execute("call_4", { op: "wait", timeoutMs: 0 });
+		// Opening the message-wait gate would exceed the test deadline.
+		const result = await new HubTool(makeSession(manager)).execute("call_4", { op: "wait" });
 		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
 		expect(text).toContain("No running background jobs to wait for.");
