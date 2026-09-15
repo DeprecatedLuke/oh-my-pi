@@ -132,6 +132,8 @@ import {
 	resolveRefusalModelPattern,
 } from "../slash-commands/helpers/fix-refusal";
 import { formatDuration } from "../slash-commands/helpers/format";
+import { labelEchoesHandle } from "../task/label";
+import { agentTypeBadge, formatTaskId } from "../task/render";
 import { STTController, type SttState } from "../stt";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import { discoverTitleSystemPromptFile, resolvePromptInput } from "../system-prompt";
@@ -246,7 +248,11 @@ import {
 } from "./loop-limit";
 import { OAuthManualInputManager } from "./oauth-manual-input";
 import { getRunningSubagentBadgeAgentIds, getRunningSubagentBadgeRegistry } from "./running-subagent-badge";
-import { type SessionObserverChangeKind, SessionObserverRegistry } from "./session-observer-registry";
+import {
+	type ObservableSession,
+	type SessionObserverChangeKind,
+	SessionObserverRegistry,
+} from "./session-observer-registry";
 import { createSessionTeardown, type SessionTeardown } from "./session-teardown";
 import { runProviderSetupWizard } from "./setup-wizard/lazy";
 import { sanitizeStatusText } from "./shared";

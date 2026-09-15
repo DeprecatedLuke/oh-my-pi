@@ -42,6 +42,7 @@ import {
 	launchRenderResult,
 } from "./launch";
 import {
+	DEFAULT_IRC_TIMEOUT_MS,
 	drainPendingInbox,
 	executeInbox,
 	executeList,
@@ -376,7 +377,7 @@ export class HubTool implements AgentTool<typeof hubSchema, HubDetails> {
 			return hubErrorResult("Peer messaging is unavailable in this session.", { op: "wait" });
 		}
 
-		return executeMessageWait(messaging, { from, timeoutMs: params.timeoutMs }, signal);
+		return executeMessageWait(messaging, { from, timeoutMs: params.timeoutMs ?? DEFAULT_IRC_TIMEOUT_MS }, signal);
 	}
 }
 

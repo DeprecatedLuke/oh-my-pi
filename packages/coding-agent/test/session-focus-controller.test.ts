@@ -101,7 +101,7 @@ function makeHarness(options: { renderInitialMessages?: () => void | Promise<voi
 			resetTranscriptAnchors: () => {
 				resetTranscriptAnchors++;
 			},
-restorePendingToolResults() {},
+			restorePendingToolResults() {},
 			// #attach refreshes the main-session Background Jobs panel on focus change.
 			refreshBackgroundJobs: () => {},
 		},

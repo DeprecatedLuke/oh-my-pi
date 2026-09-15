@@ -6,7 +6,7 @@
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { Agent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -27,11 +27,24 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	type AgentProgress,
+	type SubagentLifecyclePayload,
 	type SubagentProgressPayload,
+	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "@oh-my-pi/pi-coding-agent/task";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
+
+function makeSession(overrides: Partial<ObservableSession> & { id: string }): ObservableSession {
+	return {
+		kind: "subagent",
+		label: overrides.id,
+		status: "active",
+		detached: true,
+		lastUpdate: Date.now(),
+		...overrides,
+	};
+}
 
 function makeProgress(overrides: Partial<AgentProgress> & { id: string }): AgentProgress {
 	return {
@@ -48,6 +61,19 @@ function makeProgress(overrides: Partial<AgentProgress> & { id: string }): Agent
 		cost: 0,
 		durationMs: 0,
 		...overrides,
+	};
+}
+
+function makeLifecycle(id: string, index: number, description: string, detached?: boolean): SubagentLifecyclePayload {
+	return {
+		id,
+		index,
+		agent: "task",
+		agentSource: "bundled",
+		description,
+		status: "started",
+		parentToolCallId: "tool-call",
+		detached,
 	};
 }
 
@@ -595,9 +621,8 @@ describe("InteractiveMode subagent observer UI sync", () => {
 		await mode.init({ suppressWelcomeIntro: true });
 
 		vi.useFakeTimers();
-		const refreshBackgroundJobs = vi.spyOn(mode.eventController, "refreshBackgroundJobs");
-		vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {});
-		const addPanel = vi.spyOn(mode.subagentContainer, "addChild");
+		const requestRender = vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {});
+		const rebuildHud = vi.spyOn(mode.subagentContainer, "clear");
 
 		for (let index = 0; index < 6; index++) {
 			eventBus.emit(

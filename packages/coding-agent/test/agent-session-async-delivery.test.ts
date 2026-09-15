@@ -295,6 +295,7 @@ describe("AgentSession owner-routed async delivery", () => {
 					label: jobId,
 					status: "completed",
 					startTime: Date.now(),
+					lastActivityAt: Date.now(),
 					abortController: new AbortController(),
 					promise: Promise.resolve(),
 					resultText: result,

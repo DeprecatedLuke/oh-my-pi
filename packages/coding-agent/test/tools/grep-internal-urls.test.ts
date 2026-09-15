@@ -332,7 +332,7 @@ describe("GrepTool internal URL resolution", () => {
 		registerVirtualDocs(new Map([["mb.md", `${line}\n`]]));
 		const result = await new GrepTool(createSession()).execute("mb-virtual", {
 			pattern: "needle",
-			path: "virtual://mb.md",
+			paths: ["virtual://mb.md"],
 		});
 		const text = getResultText(result);
 		expect(text).toContain("…");

@@ -4,9 +4,10 @@
  * `hub`'s running-agents snapshot, not silently left in the running roster.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { noMatchingJobsResult } from "@oh-my-pi/pi-coding-agent/tools/hub/jobs";
+import { HubTool } from "@oh-my-pi/pi-coding-agent/tools/hub";
 
 const SELF_ID = "Main";
 
@@ -22,12 +23,12 @@ describe("hub accepted-agent watchdog", () => {
 		AgentRegistry.resetGlobalForTests();
 	});
 
-	function makeSession(): ToolSession {
+	function makeSession(manager: AsyncJobManager): ToolSession {
 		// Structurally-partial test session: the running-agents snapshot only
-		// touches the registry and the caller id.
+		// touches the registry, manager, and caller id.
 		return {
 			agentRegistry: registry,
-			asyncJobManager: undefined,
+			asyncJobManager: manager,
 			getAgentId: () => SELF_ID,
 		} as unknown as ToolSession;
 	}
@@ -54,15 +55,22 @@ describe("hub accepted-agent watchdog", () => {
 		streaming = false;
 	}
 
-	it("surfaces an accepted-but-running agent with its acceptance age and a cancel hint", () => {
-		registerLeakedAcceptedRun();
+	it("surfaces an accepted-but-running agent with its acceptance age and a cancel hint", async () => {
+		const manager = new AsyncJobManager({});
+		try {
+			registerLeakedAcceptedRun();
 
-		const result = noMatchingJobsResult(makeSession(), ["PolicyCommand"]);
-		const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+			const result = await new HubTool(makeSession(manager)).execute("accepted_agent", { op: "jobs" });
+			const details = result.details;
+			if (!details || details.op !== "jobs") throw new Error("Expected jobs snapshot");
+			const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
-		expect(text).toContain("final result accepted");
-		expect(text).toContain("hub` cancel");
-		expect(result.details?.agents?.map(agent => agent.id)).toEqual(["PolicyCommand"]);
-		expect(result.details?.agents?.[0]?.acceptedAt).toBeNumber();
+			expect(text).toContain("final result accepted");
+			expect(text).toContain("hub` cancel");
+			expect(details.agents?.map(agent => agent.id)).toEqual(["PolicyCommand"]);
+			expect(details.agents?.[0]?.acceptedAt).toBeNumber();
+		} finally {
+			await manager.dispose();
+		}
 	});
 });

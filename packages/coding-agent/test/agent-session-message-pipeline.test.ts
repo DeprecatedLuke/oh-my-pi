@@ -1632,8 +1632,13 @@ describe("AgentSession message pipeline", () => {
 			async enqueue() {},
 			async beforeAgentStartPrompt() {
 				if (remembered || !recallAvailable) return undefined;
-				remembered = true;
-				return memoryNotice;
+				return {
+					context: memoryNotice,
+					commit: () => {
+						remembered = true;
+						return true;
+					},
+				};
 			},
 		};
 		vi.spyOn(memoryBackend, "resolveMemoryBackend").mockResolvedValue(fakeBackend);

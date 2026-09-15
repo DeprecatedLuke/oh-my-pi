@@ -345,7 +345,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const tool = new GrepTool(createSession());
 			const result = await tool.execute("grep-ranged-brace-literal", {
 				pattern: "offer",
-				path: `${literal}:1-2`,
+				paths: [`${literal}:1-2`],
 			});
 			const output = getText(result);
 
@@ -360,7 +360,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const tool = new GrepTool(createSession());
 			const result = await tool.execute("grep-ranged-delimiter-literal", {
 				pattern: "needle",
-				path: `${literal}:1-2`,
+				paths: [`${literal}:1-2`],
 			});
 			const output = getText(result);
 
@@ -392,7 +392,7 @@ describe("grep directory line selectors", () => {
 	let testDir: string;
 
 	beforeEach(async () => {
-		testDir = await fs.mkdtemp(path.join(os.tmpdir(), "grep-directory-selector-"));
+		testDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "grep-directory-selector-"));
 	});
 
 	afterEach(async () => {
@@ -411,7 +411,7 @@ describe("grep directory line selectors", () => {
 
 	it("filters matches by per-file line number instead of rejecting the directory", async () => {
 		const appDir = path.join(testDir, "scripts", "app");
-		await fs.mkdir(appDir, { recursive: true });
+		await fs.promises.mkdir(appDir, { recursive: true });
 		await Bun.write(path.join(appDir, "one.ts"), "outside one\ninside one\noutside one again\n");
 		await Bun.write(path.join(appDir, "two.ts"), "outside two\ninside two\noutside two again\n");
 
@@ -431,7 +431,7 @@ describe("grep directory line selectors", () => {
 
 	it("fetches enough directory matches before applying an explicit later line selector", async () => {
 		const appDir = path.join(testDir, "scripts", "hot");
-		await fs.mkdir(appDir, { recursive: true });
+		await fs.promises.mkdir(appDir, { recursive: true });
 		const content = `${Array.from(
 			{ length: 30 },
 			(_, index) => `cap-needle line ${String(index + 1).padStart(2, "0")}`,
@@ -451,7 +451,7 @@ describe("grep directory line selectors", () => {
 
 	it("supports open-ended selectors on directories with a finite fetch budget", async () => {
 		const appDir = path.join(testDir, "scripts", "tail");
-		await fs.mkdir(appDir, { recursive: true });
+		await fs.promises.mkdir(appDir, { recursive: true });
 		const content = `${Array.from(
 			{ length: 60 },
 			(_, index) => `open-needle line ${String(index + 1).padStart(2, "0")}`,

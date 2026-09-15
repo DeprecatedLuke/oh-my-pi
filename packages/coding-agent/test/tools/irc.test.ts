@@ -1102,7 +1102,6 @@ describe("IRC", () => {
 			expect(text).toContain("No message");
 		});
 
-
 		it("op=wait returns an error if the requested specific 'from' agent is not active", async () => {
 			registry.register({ id: "0-Sub", displayName: "sub", kind: "sub", session: null, status: "parked" });
 			const tool = new HubTool(makeToolSession(registry, "0-Main"));
