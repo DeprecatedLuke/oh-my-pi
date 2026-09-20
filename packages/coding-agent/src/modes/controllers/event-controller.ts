@@ -6,26 +6,23 @@ import { formatDuration, logger, prompt, sanitizeText } from "@oh-my-pi/pi-utils
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { extractTextContent } from "../../commit/utils";
 import { settings } from "../../config/settings";
-import { AssistantMessageComponent } from "../../modes/components/assistant-message";
-import { detectCacheInvalidation } from "../../modes/components/cache-invalidation-marker";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
 import {
 	groupedReadUsageCallIds,
 	ReadToolGroupComponent,
 	readArgsCollapseIntoGroup,
 	readArgsHaveTarget,
-} from "../../modes/components/read-tool-group";
-import { TodoReminderComponent } from "../../modes/components/todo-reminder";
-import {
-	ToolExecutionComponent,
-	type ToolExecutionHandle,
-	toolRenderName,
-} from "../../modes/components/tool-execution";
-import { TtsrNotificationComponent } from "../../modes/components/ttsr-notification";
-import { createUsageRowBlock, turnElapsedMs } from "../../modes/components/usage-row";
-import { getSymbolTheme, theme } from "../../modes/theme/theme";
-import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
+} from "@oh-my-pi/pi-tui/chat/read-tool-group";
+import { TodoReminderComponent } from "@oh-my-pi/pi-tui/chat/todo-reminder";
+import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
+import { ToolExecutionComponent, type ToolExecutionHandle, toolRenderName } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import { TtsrNotificationComponent } from "@oh-my-pi/pi-tui/chat/ttsr-notification";
+import { createUsageRowBlock, turnElapsedMs } from "@oh-my-pi/pi-tui/overlays/usage-row";
+import { getSymbolTheme, theme } from "@oh-my-pi/pi-tui/theme";
+import type { InteractiveModeContext } from "../../modes/types";
+import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import idleRecapPrompt from "../../prompts/system/recap-user.md" with { type: "text" };
-import { deobfuscateToolArguments } from "../../secrets/message-transform";
 import type { AgentSessionEvent, AsyncJobSnapshotItem } from "../../session/agent-session";
 import {
 	isSilentAbort,
@@ -36,24 +33,24 @@ import {
 } from "../../session/messages";
 import { formatTaskId } from "../../task/render";
 import { type ApprovalMode, resolveApproval } from "../../tools/approval";
-import { previewLine, replaceTabs, TRUNCATE_LENGTHS } from "../../tools/render-utils";
-import { PROPOSE_DEVICE_NAME, writeDeviceDispatch } from "../../tools/resolve";
+import { Ellipsis, previewLine, replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
+import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
+import { writeDeviceDispatch } from "../../tools/resolve";
 import { nextActionableTask } from "../../tools/todo";
 import { SpeechEnhancer } from "../../tts/speech-enhancer";
 import { vocalizer } from "../../tts/vocalizer";
-import { Ellipsis, truncateToWidth } from "../../tui";
-import { canonicalizeMessage } from "../../utils/thinking-display";
+import { canonicalizeMessage } from "@oh-my-pi/pi-tui/chat/thinking-display";
 import { setTerminalTitleState } from "../../utils/title-generator";
 import {
 	assistantMessageLinkTargets,
 	createAssistantMessageComponent,
 	refreshAssistantMessageLinkTargets,
-} from "../utils/interactive-context-helpers";
+} from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
 import {
 	assistantHasVisibleContent,
 	assistantUsageIsBilled,
 	splitAssistantMessageToolTimeline,
-} from "../utils/transcript-render-helpers";
+} from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
 import { isWarpCliAgentProtocolActive } from "../warp-events";
 import { StreamingRevealController } from "./streaming-reveal";
 import { streamingStringKeysForTool, ToolArgsRevealController } from "./tool-args-reveal";
@@ -1052,7 +1049,7 @@ export class EventController {
 			// Only genuinely user-attributed prompts anchor the delta; a mid-run
 			// agent-attributed `user` message (advisor tool-loop redirect) must not.
 			if (event.message.attribution !== "agent") this.#turnStartedAt = event.message.timestamp;
-			const textContent = this.ctx.getUserMessageText(event.message);
+			const userText = textContent(event.message.content);
 			const imageBlocks =
 				typeof event.message.content === "string"
 					? []
@@ -1063,7 +1060,7 @@ export class EventController {
 								typeof content.mimeType === "string",
 						);
 			const imageCount = imageBlocks.length;
-			const signature = `${textContent}\u0000${imageCount}`;
+			const signature = `${userText}\u0000${imageCount}`;
 
 			this.#resetReadGroup();
 			this.#resolveDisplaceableHubSnapshot();
@@ -1397,31 +1394,26 @@ export class EventController {
 					this.#migrateStreamedToolCallId(priorId, content.id);
 				}
 				this.#streamedToolCallIdByIndex.set(contentIndex, content.id);
-				const obfuscator = this.ctx.viewSession.obfuscator;
-				const displayArgs = obfuscator
-					? deobfuscateToolArguments(obfuscator, content.arguments)
-					: content.arguments;
 				const tool = this.ctx.viewSession.getToolByName(content.name);
 				const renderToolName = toolRenderName(content.name, tool);
 				if (renderToolName === "read") {
-					if (!readArgsHaveTarget(displayArgs)) {
+					if (!readArgsHaveTarget(content.arguments)) {
 						// Args still streaming — defer until path is parseable so we can route to the
 						// read group (files + xd:// devices) vs ToolExecutionComponent (other internal URLs).
 						// Creating either component now would lock the read into the wrong shape.
 						continue;
 					}
-					if (readArgsCollapseIntoGroup(displayArgs)) {
+					if (readArgsCollapseIntoGroup(content.arguments)) {
 						const existing = this.ctx.pendingTools.get(content.id);
 						if (existing) {
-							this.#trackReadToolCall(content.id, displayArgs);
-							existing.updateArgs(displayArgs, content.id);
+							this.#trackReadToolCall(content.id, content.arguments);
+							existing.updateArgs(content.arguments, content.id);
 						} else if (!this.#toolTimelineComponents.has(content.id)) {
 							// A completed read remains in the timeline after leaving pendingTools.
 							this.#resolveDisplaceableHubSnapshot(renderToolName);
-							this.#trackReadToolCall(content.id, displayArgs);
+							this.#trackReadToolCall(content.id, content.arguments);
 							const group = this.#getReadGroup();
-							group.updateArgs(displayArgs, content.id);
-							this.ctx.pendingTools.set(content.id, group);
+							group.updateArgs(content.arguments, content.id);
 							this.#toolTimelineComponents.set(content.id, group);
 							this.#settleHeldCompletionIfPresent(content.id, group);
 						}
@@ -1447,7 +1439,7 @@ export class EventController {
 					});
 				} else {
 					this.#toolArgsReveal.finish(content.id);
-					renderArgs = displayArgs;
+					renderArgs = content.arguments;
 				}
 				// `message_update` is cumulative — every update re-lists all blocks
 				// of the streaming message — so creation must also be guarded by the
@@ -2787,15 +2779,6 @@ export class EventController {
 		// keeps the two notifications mutually exclusive for one settled turn.
 		const last = event.messages.findLast((message): message is AssistantMessage => message.role === "assistant");
 		if (last?.stopReason === "aborted" || last?.stopReason === "error") return;
-
-		// "bell" rings an audible terminal bell on every terminal; "on" sends the
-		// richer desktop notification (which already collapses to a BEL on
-		// bell-only terminals). Both fire only here, where the turn has reached the
-		// user with no background work pending (see #isWaitingForUserInput).
-		if (notify === "bell") {
-			TERMINAL.ringBell();
-			return;
-		}
 
 		const sessionName = this.ctx.sessionManager.getSessionName();
 		TERMINAL.sendNotification({

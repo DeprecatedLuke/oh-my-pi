@@ -1,24 +1,13 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { SENSITIVE_TOKEN_RE } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { getSecretPlaceholderKeyPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { YAML } from "bun";
 import { type SecretEntry, SecretObfuscator } from "./obfuscator";
+import { CREDENTIAL_PATTERNS } from "./patterns";
 import { sanitizeSecretFriendlyName, secretEntriesNeedPlaceholderKey } from "./placeholder";
 import { compileSecretRegex } from "./regex";
 import { regexHasUnresolvableShortMatchFallback } from "./replacement";
-
-export * from "./fix-refusal-state";
-export {
-	deobfuscateSessionContext,
-	deobfuscateToolArguments,
-	obfuscateMessages,
-	obfuscateProviderContext,
-} from "./message-transform";
-export { type SecretEntry, SecretObfuscator } from "./obfuscator";
-export { secretEntriesNeedPlaceholderKey, secretEntryNeedsPlaceholderKey } from "./placeholder";
 
 const PLACEHOLDER_KEY_RE = /^[A-Za-z0-9_-]{43}$/;
 const cachedPlaceholderKeys = new Map<string, string>();
@@ -160,113 +149,34 @@ async function readPlaceholderKeyFile(keyPath: string, retry: boolean): Promise<
 
 type RawSecretEntry = Omit<SecretEntry, "friendlyName"> & { friendlyName?: unknown };
 
-/** Hand-authored secrets file basename (`<scope>/secrets.yml`). */
-const SECRETS_BASENAME = "secrets.yml";
-/** Machine-managed secrets file basename, written by `/fix-refusal`. */
-export const MANAGED_SECRETS_BASENAME = "secrets-managed.yml";
+export {
+	deobfuscateSessionContext,
+	deobfuscateToolArguments,
+	obfuscateMessages,
+	obfuscateProviderContext,
+} from "./message-transform";
+export { type SecretEntry, SecretObfuscator } from "./obfuscator";
+export * from "./patterns";
+export { secretEntriesNeedPlaceholderKey, secretEntryNeedsPlaceholderKey } from "./placeholder";
 
 /**
- * Load secrets from the global and project-local `secrets.yml` files plus their
- * machine-managed `secrets-managed.yml` siblings (written by `/fix-refusal`).
- * Later files override earlier ones by content, so within a scope managed
- * entries override hand-authored ones, and project entries override global.
+ * Load secrets from project-local and global secrets.yml files.
+ * Project-local entries override global entries with matching content.
  */
 export async function loadSecrets(cwd: string, agentDir: string): Promise<SecretEntry[]> {
-	const managedPromises = new Map<string, Promise<SecretEntry[]>>();
-	const loadManaged = (filePath: string): Promise<SecretEntry[]> => {
-		const normalizedPath = path.resolve(filePath);
-		const existing = managedPromises.get(normalizedPath);
-		if (existing) return existing;
-		const promise = loadManagedSecretsFile(filePath);
-		managedPromises.set(normalizedPath, promise);
-		return promise;
-	};
-	const files = [
-		loadSecretsFile(path.join(agentDir, SECRETS_BASENAME)),
-		loadManaged(path.join(agentDir, MANAGED_SECRETS_BASENAME)),
-		loadSecretsFile(path.join(cwd, ".omp", SECRETS_BASENAME)),
-		loadManaged(path.join(cwd, ".omp", MANAGED_SECRETS_BASENAME)),
-	];
-	const groups = await Promise.all(files);
-	const byContent = new Map<string, SecretEntry>();
-	for (const group of groups) {
-		for (const entry of group) byContent.set(entry.content, entry);
-	}
-	return [...byContent.values()];
-}
+	const projectPath = path.join(cwd, ".omp", "secrets.yml");
+	const globalPath = path.join(agentDir, "secrets.yml");
 
-/** Outcome of {@link appendManagedSecrets}. */
-export interface AppendManagedSecretsResult {
-	/** Absolute path of the managed secrets file written. */
-	path: string;
-	/** Number of entries newly appended (already-present ones are skipped). */
-	added: number;
-	/** Total entry count in the file after the write. */
-	total: number;
-}
+	const globalEntries = await loadSecretsFile(globalPath);
+	const projectEntries = await loadSecretsFile(projectPath);
 
-/**
- * Append regex secret entries to the global machine-managed secrets file
- * (`<agentDir>/secrets-managed.yml`), preserving existing raw entries. Entries
- * whose (type, content, flags) triple already exists are skipped so repeated
- * `/fix-refusal` runs never duplicate. Returns the path and counts.
- */
-export async function appendManagedSecrets(
-	agentDir: string,
-	entries: SecretEntry[],
-): Promise<AppendManagedSecretsResult> {
-	const filePath = path.join(agentDir, MANAGED_SECRETS_BASENAME);
-	await fs.promises.mkdir(agentDir, { recursive: true, mode: 0o700 });
-	if (process.platform !== "win32") await fs.promises.chmod(agentDir, 0o700);
+	if (globalEntries.length === 0) return projectEntries;
+	if (projectEntries.length === 0) return globalEntries;
 
-	return await withFileLock(filePath, async () => {
-		let raw: unknown[] = [];
-		try {
-			const parsed = YAML.parse(await Bun.file(filePath).text());
-			if (Array.isArray(parsed)) raw = parsed;
-		} catch (err) {
-			if (!isEnoent(err)) throw err;
-		}
-
-		const seen = new Set<string>();
-		for (const item of raw) {
-			if (item !== null && typeof item === "object") {
-				const entry = item as Record<string, unknown>;
-				if (typeof entry.content === "string") seen.add(secretKey(String(entry.type), entry.content, entry.flags));
-			}
-		}
-
-		const additions: Record<string, unknown>[] = [];
-		for (const entry of entries) {
-			const key = secretKey(entry.type, entry.content, entry.flags);
-			if (seen.has(key)) continue;
-			seen.add(key);
-			additions.push(toManagedRecord(entry));
-		}
-
-		if (additions.length === 0) return { path: filePath, added: 0, total: raw.length };
-		const merged = [...raw, ...additions];
-		await fs.promises.writeFile(filePath, YAML.stringify(merged, null, 2), { mode: 0o600 });
-		if (process.platform !== "win32") await fs.promises.chmod(filePath, 0o600);
-		return { path: filePath, added: additions.length, total: merged.length };
-	});
-}
-
-function secretKey(type: string, content: string, flags: unknown): string {
-	return `${type}\u0000${content}\u0000${typeof flags === "string" ? flags : ""}`;
-}
-
-/** Serialize a {@link SecretEntry} to a minimal YAML record (omitting empty optionals). */
-function toManagedRecord(entry: SecretEntry): Record<string, unknown> {
-	const record: Record<string, unknown> = {
-		type: entry.type,
-		content: entry.content,
-		mode: entry.mode ?? "obfuscate",
-	};
-	if (entry.flags) record.flags = entry.flags;
-	if (entry.friendlyName) record.friendlyName = entry.friendlyName;
-	if (entry.replacement) record.replacement = entry.replacement;
-	return record;
+	// Merge: project overrides global by content match
+	const projectContents = new Set(projectEntries.map(e => e.content));
+	const merged = [...globalEntries.filter(e => !projectContents.has(e.content)), ...projectEntries];
+	return merged;
 }
 
 /** Minimum env var value length to consider as a secret. */
@@ -274,6 +184,9 @@ const MIN_ENV_VALUE_LENGTH = 8;
 
 /** Env var name patterns that indicate secret values. */
 const SECRET_ENV_PATTERNS = /(?:KEY|SECRET|TOKEN|PASSWORD|PASS|AUTH|CREDENTIAL|PRIVATE|OAUTH)(?:_|$)/i;
+
+/** Extracts the password group from a `scheme://user:password@host` value. */
+const CONNECTION_URL_PASSWORD_RE = /^[a-z][a-z0-9+.-]*:\/\/[^/:@?#\s]*:([^/?#\s]+)@/i;
 
 /** Collect environment variable values that look like secrets. */
 export function collectEnvSecrets(): SecretEntry[] {
@@ -286,12 +199,33 @@ export function collectEnvSecrets(): SecretEntry[] {
 		seen.add(value);
 		entries.push({ type: "plain", content: value, mode: "obfuscate" });
 	}
+	// Second pass: extract passwords embedded in connection-URL values
+	// (e.g. scheme://user:password@host) regardless of the variable name.
+	for (const [, value] of Object.entries(process.env)) {
+		const match = CONNECTION_URL_PASSWORD_RE.exec(value ?? "");
+		if (!match) continue;
+		const password = match[1];
+		if (password.length >= MIN_ENV_VALUE_LENGTH && !seen.has(password)) {
+			seen.add(password);
+			entries.push({ type: "plain", content: password, mode: "obfuscate" });
+		}
+		try {
+			const decoded = decodeURIComponent(password);
+			if (decoded !== password && decoded.length >= MIN_ENV_VALUE_LENGTH && !seen.has(decoded)) {
+				seen.add(decoded);
+				entries.push({ type: "plain", content: decoded, mode: "obfuscate" });
+			}
+		} catch {
+			// Malformed percent-encoding — the raw password is already registered.
+		}
+	}
 	return entries;
 }
 
 /**
- * Built-in entries covering credential-shaped tokens (GitHub/GitLab/OpenAI-style
- * API keys) that are NOT configured via secrets.yml or the environment. Without
+ * Built-in entries covering the credential-shaped tokens declared in
+ * `patterns.ts` (GitHub/GitLab/OpenAI-style API keys and other vendor-prefixed
+ * credentials) that are NOT configured via secrets.yml or the environment. Without
  * these, such a token in a tool result falls through to pi-ai's irreversible
  * provider-boundary redaction (`[openai_token_redacted]`); the model then echoes
  * that placeholder into edit-tool `old_string`, which can never match the real
@@ -303,15 +237,13 @@ export function collectEnvSecrets(): SecretEntry[] {
  * transparent because the round trip is lossless.
  */
 export function builtinCredentialSecretEntries(): SecretEntry[] {
-	return [
-		{
-			type: "regex",
-			content: SENSITIVE_TOKEN_RE.source,
-			flags: "i",
-			mode: "obfuscate",
-			friendlyName: "Credential",
-		},
-	];
+	return CREDENTIAL_PATTERNS.map(pattern => ({
+		type: "regex",
+		content: pattern.source,
+		flags: pattern.flags,
+		mode: "obfuscate",
+		friendlyName: pattern.name,
+	}));
 }
 
 /**
@@ -357,31 +289,6 @@ export async function buildSecretObfuscator(
 		obfuscator = new SecretObfuscator([{ type: "plain", mode: "replace", content: placeholderKey }], placeholderKey);
 	}
 	return obfuscator;
-}
-
-/** Read a managed secrets file while excluding concurrent `/fix-refusal` appends. */
-async function loadManagedSecretsFile(filePath: string): Promise<SecretEntry[]> {
-	const parentDir = path.dirname(filePath);
-	if (!(await isExistingDirectory(parentDir))) return [];
-	try {
-		return await withFileLock(filePath, async () => await loadSecretsFile(filePath));
-	} catch (err) {
-		if (isEnoent(err) || !(await isExistingDirectory(parentDir))) return [];
-		throw err;
-	}
-}
-
-async function isExistingDirectory(directory: string): Promise<boolean> {
-	try {
-		return (await fs.promises.stat(directory)).isDirectory();
-	} catch (err) {
-		if (isEnoent(err)) return false;
-		logger.warn("Failed to access managed secrets parent directory", {
-			path: directory,
-			error: String(err),
-		});
-		return false;
-	}
 }
 
 async function loadSecretsFile(filePath: string): Promise<SecretEntry[]> {

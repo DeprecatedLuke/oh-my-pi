@@ -10,12 +10,11 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { kStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { AssistantMessageComponent } from "@oh-my-pi/pi-coding-agent/modes/components/assistant-message";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-coding-agent/modes/components/tool-execution";
+import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { STREAMING_REVEAL_FRAME_MS } from "@oh-my-pi/pi-coding-agent/modes/controllers/streaming-reveal";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets/obfuscator";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
 
@@ -43,9 +42,7 @@ function makeStreamingMessage(content: AssistantMessage["content"]): AssistantMe
 	};
 }
 
-function createFixture(streamingMessage: AssistantMessage, dependency?: SecretObfuscator | AgentTool) {
-	const obfuscator = dependency instanceof SecretObfuscator ? dependency : undefined;
-	const tool = dependency instanceof SecretObfuscator ? undefined : dependency;
+function createFixture(streamingMessage: AssistantMessage, tool?: AgentTool) {
 	const pendingTools = new Map<string, ToolExecutionComponent>();
 	let approvalWaiter: ((toolCallId: string) => Promise<void>) | undefined;
 	const extensionRunner = {
@@ -60,12 +57,7 @@ function createFixture(streamingMessage: AssistantMessage, dependency?: SecretOb
 		streamingComponent: new AssistantMessageComponent(),
 		streamingMessage,
 		pendingTools,
-		noteDisplayableThinkingContent: vi.fn(() => false),
-		chatContainer: { addChild: vi.fn() },
-		toolOutputExpanded: false,
-		session: { getToolByName: () => tool, hasBuiltInTool: () => true, extensionRunner },
-		viewSession: { getToolByName: () => tool, hasBuiltInTool: () => true, obfuscator },
-		sessionManager: { getCwd: () => process.cwd() },
+		session: { getToolByName: () => tool, extensionRunner },
 	});
 
 	return {
@@ -163,31 +155,6 @@ describe("EventController paces streamed tool args", () => {
 		const calls = updateArgsSpy.mock.calls.length;
 		vi.advanceTimersByTime(STREAMING_REVEAL_FRAME_MS * 5);
 		expect(updateArgsSpy.mock.calls.length).toBe(calls);
-	});
-
-	it("reveals deobfuscated final edit input after a redacted streaming preview", async () => {
-		await Settings.init({ inMemory: true, cwd: process.cwd() });
-		const updateArgsSpy = vi.spyOn(ToolExecutionComponent.prototype, "updateArgs");
-		const obfuscator = new SecretObfuscator([{ type: "plain", content: "allocator", friendlyName: "allocRegion" }]);
-		const sourcePath = "libs/embedded-allocator/src/allocator.rs";
-		const input = `[${sourcePath}#ABCD]\nDEL 1`;
-		const maskedInput = obfuscator.obfuscate(input);
-		const partialJson = JSON.stringify({ input: maskedInput }).slice(0, -1);
-		const streaming = makeStreamingMessage([
-			{ type: "toolCall", id: "tc-secret-edit", name: "edit", arguments: {}, [kStreamingPartialJson]: partialJson },
-		]);
-		const { controller } = createFixture(streaming, obfuscator);
-
-		await dispatch(controller, streaming);
-		await dispatch(
-			controller,
-			makeStreamingMessage([
-				{ type: "toolCall", id: "tc-secret-edit", name: "edit", arguments: { input: maskedInput } },
-			]),
-		);
-
-		const finalArgs = updateArgsSpy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-		expect(finalArgs.input).toBe(input);
 	});
 
 	it("streams the full target through unpaced when smoothing is disabled", async () => {

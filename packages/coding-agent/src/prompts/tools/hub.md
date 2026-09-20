@@ -11,7 +11,7 @@ Use `op: "list"` to discover live peers. Default is running+idle plus running/id
 - **`inbox`**: drain queued messages without blocking.
 - **`cancel`**: kill background jobs by `ids` when they have hung, stalled, or are no longer needed. Returns immediately.
 - **`jobs`**: status snapshot of every job without waiting — intervention/inspection only, NEVER a polling or delay mechanism. A settled row acknowledges delivery, suppressing duplicate `async-result`. Also names running subagents with no job entry — coordinate with those via `send`.
-- Job rows are process-local and expire roughly five minutes after settlement. Afterward, use the agent ID with `send`, `agent://<id>`, or `history://<id>`.
+- Job rows are process-local. A row whose result was delivered or recovered by a snapshot expires shortly (~30s) after; unconsumed rows stay inspectable for up to five minutes after settlement. Afterward, use the agent ID with `send`, `agent://<id>`, or `history://<id>`.
 - `completed` means successful yield/job exit, not artifact acceptance. Verify claimed changes.
 - NEVER use shell tools, grep, or read other sessions' files to figure out what a peer is doing. Message them directly.
 - NEVER use hub messaging for something a tool can answer (e.g., grepping codebase, running a build).

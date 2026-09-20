@@ -1,3 +1,6 @@
+import { subprocessToolRegistry } from "./subprocess-tool-registry";
+import { isTaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
+import { taskSubprocessRenderer } from "@oh-my-pi/pi-tui/tools/subprocess";
 /**
  * Task tool - Delegate tasks to specialized agents.
  *
@@ -21,22 +24,20 @@ import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env, logger, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "..";
 import type { EffectiveExtensionRoots } from "../capability/types";
-import type { Theme } from "../modes/theme/theme";
+import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskAsyncContractTemplate from "../prompts/tools/task-async-contract.md" with { type: "text" };
 import taskFollowUpTemplate from "../prompts/tools/task-follow-up.md" with { type: "text" };
-import { TASK_EFFORTS, type TaskEffort } from "../thinking";
+import { TASK_EFFORTS, type TaskEffort } from "@oh-my-pi/pi-tui/thinking";
 import { truncateForPrompt } from "../tools/approval";
 import { isIrcEnabled } from "../tools/hub";
 import { isReadOnlyAgent } from "./read-only-policy";
 import { formatTaskResultSummary } from "./result-summary";
 import { isScoutSpawnable, resolveSpawnPolicy } from "./spawn-policy";
+import { type AgentDefinition, canSpawnAtDepth, getTaskSchema, type TaskToolSchemaInstance } from "./types";
 import {
-	type AgentDefinition,
 	type AgentProgress,
-	canSpawnAtDepth,
-	getTaskSchema,
 	type SingleResult,
 	type TaskItem,
 	type TaskParams,
@@ -44,10 +45,7 @@ import {
 	type TaskPatchStatus,
 	type TaskPatchSummary,
 	type TaskToolDetails,
-	type TaskToolSchemaInstance,
-} from "./types";
-// Import review tools for side effects (registers subagent tool handlers)
-import "../tools/review";
+} from "@oh-my-pi/pi-tui/tools/task";
 import { AsyncJobError, type AsyncJobManager } from "../async";
 import { hasResolvableTranscript } from "../internal-urls/registry-helpers";
 import {
@@ -70,8 +68,8 @@ import { createEvalCustomTools, describeEvalTools, evalToolsEnabled } from "./ev
 import { generateTaskName } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
 import { mapWithConcurrencyLimitAllSettled, Semaphore } from "./parallel";
-import { renderResult, renderCall as renderTaskCall } from "./render";
-import { repairTaskParams } from "./repair-args";
+import { renderResult, renderCall as renderTaskCall } from "@oh-my-pi/pi-tui/tools/task";
+import { repairTaskParams } from "@oh-my-pi/pi-tui/tools/task-repair-args";
 import { resolveEffectiveSubagentPolicy, runStructuredSubagent, StructuredSubagentError } from "./structured-subagent";
 import {
 	cleanupIsolation,
@@ -596,16 +594,8 @@ export { discoverCommands, expandCommand, getCommand } from "./commands";
 export { discoverAgents, getAgent } from "./discovery";
 export { AgentOutputManager } from "./output-manager";
 export * from "./read-only-policy";
-export type {
-	AgentDefinition,
-	AgentProgress,
-	SingleResult,
-	SubagentEventPayload,
-	SubagentLifecyclePayload,
-	SubagentProgressPayload,
-	TaskParams,
-	TaskToolDetails,
-} from "./types";
+export type { AgentDefinition, SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "./types";
+export type { AgentProgress, SingleResult, TaskParams, TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
 export * from "./result-summary";
 export {
 	TASK_SUBAGENT_EVENT_CHANNEL,
@@ -616,6 +606,7 @@ export {
 
 interface TaskDescriptionOptions {
 	agents: AgentDefinition[];
+	sessionAgents: readonly AgentDefinition[];
 	isolationEnabled: boolean;
 	applyIsolatedChanges: boolean;
 	disabledAgents: string[];
@@ -632,10 +623,9 @@ interface TaskDescriptionOptions {
 function renderDescription(options: TaskDescriptionOptions): string {
 	const spawnPolicy = resolveSpawnPolicy(options.parentSpawns);
 	const spawningDisabled = !spawnPolicy.enabled;
+	const agents = [...options.agents, ...options.sessionAgents];
 	let filteredAgents =
-		options.disabledAgents.length > 0
-			? options.agents.filter(agent => !options.disabledAgents.includes(agent.name))
-			: options.agents;
+		options.disabledAgents.length > 0 ? agents.filter(agent => !options.disabledAgents.includes(agent.name)) : agents;
 	if (spawningDisabled) {
 		filteredAgents = [];
 	} else if (spawnPolicy.allowedAgents !== null) {
@@ -662,6 +652,7 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		asyncEnabled: options.asyncEnabled,
 		MAX_CONCURRENCY: options.maxConcurrency,
 		hasBlockingAgents: renderedAgents.some(agent => agent.blocking),
+		hasModelMentions: options.sessionAgents.length > 0,
 		ircEnabled: options.ircEnabled,
 	});
 }
@@ -1099,6 +1090,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			agents:
 				discoverySnapshots.get(discoveryCacheKey(this.session.cwd, this.session.effectiveExtensionRoots?.())) ??
 				this.#discoveredAgents,
+			sessionAgents: this.session.getSessionAgents?.() ?? [],
 			isolationEnabled: !planMode && isolationEnabled,
 			applyIsolatedChanges: this.session.settings.get("task.isolation.apply"),
 			disabledAgents,
@@ -2083,3 +2075,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		};
 	}
 }
+
+subprocessToolRegistry.register<TaskToolDetails>("task", {
+	...taskSubprocessRenderer,
+	extractData: event => (isTaskToolDetails(event.result?.details) ? event.result.details : undefined),
+});

@@ -32,8 +32,9 @@ import type { SessionManager } from "../session/session-manager";
 import type { ToolChoiceQueue } from "../session/tool-choice-queue";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
-import { canSpawnAtDepth, type StructuredSubagentSchemaMode } from "../task/types";
+import { type AgentDefinition, canSpawnAtDepth } from "../task/types";
 import type { DiscoverableTool, DiscoverableToolSearchIndex } from "../tool-discovery/tool-index";
+import { type StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { EventBus } from "../utils/event-bus";
 import { WebSearchTool } from "../web/search";
@@ -71,7 +72,8 @@ import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { SecurityScanTool } from "./security-scan";
 import { loadSshTool } from "./ssh";
 import { supportsExternalThinking, ThinkTool } from "./think";
-import { type TodoPhase, TodoTool } from "./todo";
+import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import { TodoTool } from "./todo";
 import { WriteTool } from "./write";
 import { isMountableUnderXdev, type XdevState } from "./xdev";
 import { YieldTool } from "./yield";
@@ -79,13 +81,19 @@ import { YieldTool } from "./yield";
 export * from "../edit";
 export * from "../goals";
 export * from "../lsp";
-export * from "../session/streaming-output";
+export * from "@oh-my-pi/pi-tui/tools/streaming-output";
 export * from "../task";
 export * from "../web/search";
 export * from "./ask";
 export * from "./ast-edit";
 export * from "./ast-grep";
 export * from "./bash";
+export type {
+	BashToolDetails,
+	BashRenderArgs,
+	BashRenderContext,
+	ShellRendererConfig,
+} from "@oh-my-pi/pi-tui/tools/bash";
 export * from "./browser";
 export * from "./checkpoint";
 export * from "./computer";
@@ -100,24 +108,26 @@ export * from "./gh";
 export * from "./git";
 export * from "./glob";
 export * from "./grep";
-export { HubTool, hubToolRenderer, isRefreshableJobsSnapshotDetails } from "./hub";
+export * from "./hub";
 export type {
-	AgentActivitySnapshot,
-	CancelOutcome,
-	CancelStatus,
-	CoordinationDetails,
-	HubDetails,
 	HubOp,
 	HubPeerInfo,
-	HubRenderArgs,
+	HubListStatus,
+	HubRosterCounts,
 	JobSnapshot,
-} from "./hub/types";
-export * from "./image-gen";
+	CancelStatus,
+	CancelOutcome,
+	AgentActivitySnapshot,
+	CoordinationDetails,
+	HubDetails,
+	HubRenderArgs,
+} from "@oh-my-pi/pi-tui/tools/hub";
 export type { IrcDetails } from "./irc";
 export { IrcTool, ircToolRenderer } from "./irc";
 export * from "./issues";
 export * from "./job";
 export * from "./launch";
+export * from "./image-gen";
 export * from "./learn";
 export * from "./manage-skill";
 export * from "./memory-edit";
@@ -128,14 +138,19 @@ export * from "./patch";
 export * from "./read";
 export * from "./report-tool-issue";
 export * from "./resolve";
-export * from "./review";
-export * from "./search-tool-bm25";
-export * from "./security-scan";
+export type {
+	FindingPriority,
+	FindingPriorityInfo,
+	FindingDetails,
+	SubmitReviewDetails,
+} from "@oh-my-pi/pi-tui/tools/task";
 export * from "./ssh";
+export * from "./security-scan";
 export * from "./think";
 export * from "./todo";
 export * from "./tts";
 export * from "./vibe";
+export type { VibeToolDetails } from "@oh-my-pi/pi-tui/tools/vibe";
 export * from "./write";
 export * from "./xdev";
 export * from "./yield";
@@ -359,6 +374,8 @@ export interface ToolSession {
 	allocateOutputArtifact?: (toolType: string) => Promise<{ id?: string; path?: string }>;
 	/** Get session spawns */
 	getSessionSpawns: () => string | null;
+	/** Session-scoped agent definitions (user-tagged model pseudonyms) merged after discovered agents. */
+	getSessionAgents?: () => readonly AgentDefinition[];
 	/** Get resolved model string if explicitly set for this session */
 	getModelString?: () => string | undefined;
 	/** Get the current session model string, regardless of how it was chosen */
@@ -513,54 +530,6 @@ export interface ToolSession {
 
 export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
 
-export type BuiltinToolLoadMode = "essential" | "discoverable";
-
-/** Default essential tool names when tools.essentialOverride is empty. */
-export const DEFAULT_ESSENTIAL_TOOL_NAMES: readonly string[] = [
-	"read",
-	"bash",
-	"launch",
-	"edit",
-	"write",
-	"glob",
-	"eval",
-] as const;
-
-/** Resolve the active essential built-in tool names from settings. */
-export function computeEssentialBuiltinNames(settings: Settings): string[] {
-	const override = settings.get("tools.essentialOverride") ?? [];
-	const cleaned = normalizeToolNames(override.map(name => name.trim()).filter(Boolean));
-	if (cleaned.length > 0) {
-		return cleaned.filter(name => name in BUILTIN_TOOLS);
-	}
-	return [...DEFAULT_ESSENTIAL_TOOL_NAMES];
-}
-
-/**
- * Hide discoverable built-ins on initial load unless another active contract
- * explicitly requires them.
- */
-export function filterInitialToolsForDiscoveryAll(
-	initialToolNames: string[],
-	opts: {
-		loadModeOf: (name: string) => BuiltinToolLoadMode | undefined;
-		essentialNames: ReadonlySet<string>;
-		explicitlyRequested: ReadonlySet<string>;
-		restored: ReadonlySet<string>;
-		forceActive: ReadonlySet<string>;
-	},
-): string[] {
-	return initialToolNames.filter(name => {
-		const loadMode = opts.loadModeOf(name);
-		if (!loadMode) return true;
-		if (loadMode === "essential") return true;
-		if (opts.essentialNames.has(name)) return true;
-		if (opts.explicitlyRequested.has(name)) return true;
-		if (opts.restored.has(name)) return true;
-		if (opts.forceActive.has(name)) return true;
-		return false;
-	});
-}
 
 /**
  * Public callable factory map. External callers may invoke `BUILTIN_TOOLS.read(session)` or
@@ -570,37 +539,37 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	read: s => new ReadTool(s),
 	security_scan: s => new SecurityScanTool(s),
 	bash: s => new BashTool(s),
-	launch: s => new LaunchTool(s),
 	edit: s => new EditTool(s),
 	ast_grep: s => new AstGrepTool(s),
 	ast_edit: s => new AstEditTool(s),
 	ask: AskTool.createIf,
 	debug: DebugTool.createIf,
 	eval: s => new EvalTool(s),
-	ssh: loadSshTool,
+	launch: s => new LaunchTool(s),
 	github: GithubTool.createIf,
-	git: GitTool.createIf,
-	patch: PatchTool.createIf,
 	glob: s => new GlobTool(s),
 	grep: s => new GrepTool(s),
 	lsp: LspTool.createIf,
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
+	ssh: loadSshTool,
+	git: GitTool.createIf,
+	patch: PatchTool.createIf,
 	context_notes: ContextNotesTool.createIf,
 	new_context: NewContextTool.createIf,
 	task: s => TaskTool.create(s),
-	job: s => new JobTool(s),
-	irc: IrcTool.createIf,
-	issues: IssuesTool.createIf,
 	hub: s => new HubTool(s),
 	todo: s => new TodoTool(s),
 	web_search: s => new WebSearchTool(s),
-	search_tool_bm25: SearchToolBm25Tool.createIf,
+	job: s => new JobTool(s),
+	irc: IrcTool.createIf,
+	issues: IssuesTool.createIf,
 	write: s => new WriteTool(s),
 	memory_edit: MemoryEditTool.createIf,
 	retain: MemoryRetainTool.createIf,
 	recall: MemoryRecallTool.createIf,
 	reflect: MemoryReflectTool.createIf,
+	search_tool_bm25: SearchToolBm25Tool.createIf,
 	learn: LearnTool.createIf,
 	manage_skill: ManageSkillTool.createIf,
 };
@@ -747,8 +716,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 			const goalState = session.getGoalModeState?.();
 			return goalState === undefined || goalState.enabled === true || goalState.goal.status === "dropped";
 		}
-		if (name === "lsp") return enableLsp && session.settings.get("lsp.enabled");
 		if (name === "launch") return session.settings.get("launch.enabled");
+		if (name === "lsp") return enableLsp && session.settings.get("lsp.enabled");
 		if (name === "bash") return session.settings.get("bash.enabled");
 		if (name === "eval") return allowEval;
 		if (name === "debug") return session.settings.get("debug.enabled");
@@ -914,3 +883,24 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 
 	return tools;
 }
+
+export type { AskToolDetails, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask";
+export type {
+	TodoStatus,
+	TodoOperation,
+	TodoItem,
+	TodoPhase,
+	TodoCompletionTransition,
+	TodoToolDetails,
+	CollapsedTodoSelection,
+} from "@oh-my-pi/pi-tui/tools/todo";
+export type { ThinkRenderArgs } from "@oh-my-pi/pi-tui/tools/think";
+export type { ResolutionDeviceName, ResolveDetails } from "@oh-my-pi/pi-tui/tools/resolve";
+export type {
+	GhToolDetails,
+	GhPrCheckoutSummary,
+	GhRunWatchJobDetails,
+	GhRunWatchRunDetails,
+	GhRunWatchFailedLogDetails,
+	GhRunWatchViewDetails,
+} from "@oh-my-pi/pi-tui/tools/github";

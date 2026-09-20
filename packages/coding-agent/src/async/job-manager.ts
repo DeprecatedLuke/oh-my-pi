@@ -1,12 +1,24 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { StructuredSubagentOutput } from "../task/types";
-import type { OutputMeta } from "../tools/output-meta";
+import type { StructuredSubagentOutput } from "@oh-my-pi/pi-tui/tools/task";
+import type { OutputMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
 
 const DELIVERY_RETRY_BASE_MS = 500;
 const DELIVERY_RETRY_MAX_MS = 30_000;
 const DELIVERY_RETRY_JITTER_MS = 200;
 const DEFAULT_RETENTION_MS = 5 * 60 * 1000;
+/**
+ * A settled job row whose result was already consumed — auto-delivered to its
+ * sink, or recovered by a foreground `hub jobs`/`hub wait` snapshot — has
+ * served its inspectability purpose: the model holds the result, and later
+ * job snapshots listing it for the full retention window is exactly the
+ * "background jobs hang around after they complete" complaint. Evict shortly
+ * after consumption instead; the short grace still covers a follow-up
+ * `agent://<id>` read of the just-delivered pointer. Unconsumed rows
+ * (dead-lettered deliveries, still-retrying sinks, watch-suppressed jobs
+ * nobody polled) keep the full {@link DEFAULT_RETENTION_MS} window.
+ */
+const CONSUMED_RESULT_EVICTION_MS = 30_000;
 /**
  * Extra delay after an `async-result` delivery settles (its `ASIDE_MESSAGE_COMMIT`
  * hook fires, resolving `enqueueWithReceipt()`) before retained artifacts are
@@ -197,6 +209,13 @@ export interface AsyncJobManagerOptions {
 	 * a real-time wait.
 	 */
 	retainedArtifactsCleanupMaxWaitMs?: number;
+	/**
+	 * Delay before a settled job row is evicted once its result has been
+	 * consumed (delivered to a sink or recovered by a foreground snapshot).
+	 * Defaults to {@link CONSUMED_RESULT_EVICTION_MS}; tests override to a
+	 * small value to assert eviction without real-time waits.
+	 */
+	consumedResultEvictionMs?: number;
 }
 
 interface AsyncJobDelivery {
@@ -292,6 +311,7 @@ export class AsyncJobManager {
 	readonly #deliveryBatchMaxWaitMs: number;
 	readonly #retainedArtifactsCleanupGraceMs: number;
 	readonly #retainedArtifactsCleanupMaxWaitMs: number;
+	readonly #consumedResultEvictionMs: number;
 	#deliveryLoop: Promise<void> | undefined;
 	#deliveryQueueChanged = Promise.withResolvers<void>();
 	#disposed = false;
@@ -319,6 +339,10 @@ export class AsyncJobManager {
 		this.#retainedArtifactsCleanupMaxWaitMs = Math.max(
 			0,
 			Math.floor(options.retainedArtifactsCleanupMaxWaitMs ?? RETAINED_ARTIFACTS_CLEANUP_MAX_WAIT_MS),
+		);
+		this.#consumedResultEvictionMs = Math.max(
+			0,
+			Math.floor(options.consumedResultEvictionMs ?? CONSUMED_RESULT_EVICTION_MS),
 		);
 	}
 
@@ -618,7 +642,6 @@ export class AsyncJobManager {
 		for (const job of this.getRunningJobs(filter)) {
 			job.status = "cancelled";
 			job.abortController.abort(reason);
-			this.#scheduleEviction(job.id);
 		}
 	}
 
@@ -811,6 +834,23 @@ export class AsyncJobManager {
 		if (!job || job.status === "running" || this.#consumedJobResults.has(jobId)) return false;
 		if (job.resultText === undefined && job.errorText === undefined) return false;
 		this.#consumedJobResults.add(jobId);
+		// The result reached its consumer (sink delivery or foreground snapshot):
+		// the row no longer needs to outlive the full retention window. Re-arm the
+		// eviction timer with the short consumed grace — but only when no delivery
+		// for this job is still queued or in flight. An in-flight delivery is an
+		// async-result entry parked on the owner's yield queue, and the foreground
+		// snapshot that consumed this result suppressed exactly that entry via
+		// #suppressedDeliveries; evicting now would clear that marker (#evictJob)
+		// before the queue's isStale check drains it, letting the already-consumed
+		// result inject a duplicate async-result follow-up. A parked entry keeps
+		// the full retention window instead. Clamping inside #scheduleEviction
+		// keeps a shorter configured retention the effective cap.
+		const deliveryPending =
+			this.#deliveries.some(delivery => delivery.jobId === jobId) ||
+			this.#inFlightDeliveries.some(delivery => delivery.jobId === jobId);
+		if (!deliveryPending) {
+			this.#scheduleEviction(jobId, this.#consumedResultEvictionMs);
+		}
 		return true;
 	}
 
@@ -943,19 +983,23 @@ export class AsyncJobManager {
 		return this.#jobs.delete(jobId);
 	}
 
-	#scheduleEviction(jobId: string): void {
+	/**
+	 * Arm (or re-arm) this job's eviction timer. The default delay is the full
+	 * retention window; a consumed result passes the shorter
+	 * {@link #consumedResultEvictionMs}. The delay is clamped to the configured
+	 * retention so an explicit short retention always stays the effective cap.
+	 */
+	#scheduleEviction(jobId: string, delayMs: number = this.#retentionMs): void {
 		if (this.#disposed) return;
 		if (this.#retentionMs <= 0) {
 			this.#evictJob(jobId);
 			return;
 		}
-		const existing = this.#evictionTimers.get(jobId);
-		if (existing) {
-			clearTimeout(existing);
-		}
+		const delay = Math.max(0, Math.min(this.#retentionMs, delayMs));
+		clearTimeout(this.#evictionTimers.get(jobId));
 		const timer = setTimeout(() => {
 			this.#evictJob(jobId);
-		}, this.#retentionMs);
+		}, delay);
 		timer.unref();
 		this.#evictionTimers.set(jobId, timer);
 	}
@@ -1218,6 +1262,7 @@ export class AsyncJobManager {
 	#deliverBatch(batch: AsyncJobDelivery[]): Promise<void> {
 		const promise = (async () => {
 			for (const delivery of batch) this.#inFlightDeliveries.push(delivery);
+			const deliveredJobIds = new Set<string>();
 			try {
 				const failedDeliveries: Array<{ delivery: AsyncJobDelivery; error: unknown }> = [];
 				const ownerBatches = new Map<string | undefined, AsyncJobDelivery[]>();
@@ -1244,7 +1289,7 @@ export class AsyncJobManager {
 										job: this.#jobs.get(delivery.jobId) ?? this.#reconstructEvictedJob(delivery),
 									})),
 								);
-								for (const delivery of deliveries) this.#consumeJobResult(delivery.jobId);
+								for (const delivery of deliveries) deliveredJobIds.add(delivery.jobId);
 							} catch (error) {
 								for (const delivery of deliveries) failedDeliveries.push({ delivery, error });
 							}
@@ -1263,7 +1308,7 @@ export class AsyncJobManager {
 										delivery.text,
 										this.#jobs.get(delivery.jobId) ?? this.#reconstructEvictedJob(delivery),
 									);
-									this.#consumeJobResult(delivery.jobId);
+									deliveredJobIds.add(delivery.jobId);
 								} catch (error) {
 									failedDeliveries.push({ delivery, error });
 								}
@@ -1318,6 +1363,15 @@ export class AsyncJobManager {
 					if (index !== -1) this.#inFlightDeliveries.splice(index, 1);
 				}
 				if (this.#deliveries.length > 0) this.#ensureDeliveryLoop();
+			}
+			// A normally delivered result is consumed only after the attempt left
+			// #inFlightDeliveries, so it can arm the short eviction grace.
+			for (const jobId of deliveredJobIds) {
+				if (this.#consumedJobResults.has(jobId) && this.#jobs.has(jobId)) {
+					this.#scheduleEviction(jobId, this.#consumedResultEvictionMs);
+				} else {
+					this.#consumeJobResult(jobId);
+				}
 			}
 		})();
 		for (const delivery of batch) delivery.promise = promise;

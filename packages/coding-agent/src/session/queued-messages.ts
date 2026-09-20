@@ -68,6 +68,7 @@ export const MAGIC_KEYWORD_NOTICE_TYPES: Record<string, true> = {
 	"ultrasolve-notice": true,
 	"orchestrate-notice": true,
 	"workflow-notice": true,
+	"jevify-notice": true,
 };
 
 /** Hidden companion carrying vision descriptions for a text-only model. */

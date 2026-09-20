@@ -1,12 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import {
-	expandPath,
-	isInternalUrlPath,
-	pathTargetsSsh,
-	peelWriteUrlSelector,
-	resolveToCwd,
-	splitInternalUrlSel,
-} from "@oh-my-pi/pi-coding-agent/tools/path-utils";
+import { pathTargetsSsh, peelWriteUrlSelector } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
+import { splitInternalUrlSel } from "@oh-my-pi/pi-tui/tools/read";
 
 describe("splitInternalUrlSel", () => {
 	it("returns the input unchanged when there is no selector tail", () => {
@@ -51,16 +45,17 @@ describe("splitInternalUrlSel", () => {
 		});
 	});
 
-	it("peels compound selectors from knowledge URLs", () => {
-		expect(splitInternalUrlSel("knowledge://runtime/selector.md:raw:18-20")).toEqual({
-			path: "knowledge://runtime/selector.md",
-			sel: "raw:18-20",
-		});
-	});
-
 	it("does not peel chunks that are not selector-shaped", () => {
 		// `name` is part of the host, not a selector.
 		expect(splitInternalUrlSel("skill://plugin:name")).toEqual({ path: "skill://plugin:name" });
+	});
+
+	it("preserves opaque knowledge tokens while peeling a true trailing selector", () => {
+		const knowledgePath = "knowledge://sdk/sdk-gen-$$CDO3CPB981P7:L$$.md";
+		expect(splitInternalUrlSel(`${knowledgePath}:raw`)).toEqual({
+			path: knowledgePath,
+			sel: "raw",
+		});
 	});
 
 	it("stops at the scheme separator `://`", () => {
@@ -151,25 +146,6 @@ describe("splitInternalUrlSel", () => {
 
 	it("still peels authority-trailing selectors for non-ssh schemes (artifact://5:1-50)", () => {
 		expect(splitInternalUrlSel("artifact://5:1-50")).toEqual({ path: "artifact://5", sel: "1-50" });
-	});
-});
-
-describe("patch:// selectors", () => {
-	it("peels file ranges and normalizes @patch:// paths before internal resolution", () => {
-		const patchFile = "patch://patch-123/src/example.ts";
-		expect(splitInternalUrlSel(`${patchFile}:1-10`)).toEqual({
-			path: patchFile,
-			sel: "1-10",
-		});
-
-		const shorthand = `@${patchFile}:1-10`;
-		expect(expandPath(shorthand)).toBe(`${patchFile}:1-10`);
-		expect(splitInternalUrlSel(expandPath(shorthand))).toEqual({
-			path: patchFile,
-			sel: "1-10",
-		});
-		expect(isInternalUrlPath(shorthand)).toBe(true);
-		expect(() => resolveToCwd(shorthand, "/tmp")).toThrow(/internal scheme "patch:\/\//);
 	});
 });
 

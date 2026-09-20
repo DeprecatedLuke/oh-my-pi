@@ -212,6 +212,11 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.statsHelp,
 	},
 	{
+		name: "stream",
+		load: () => import("./commands/stream").then(m => m.default),
+		help: commandHelp.streamHelp,
+	},
+	{
 		name: "update",
 		load: () => import("./commands/update").then(m => m.default),
 		help: commandHelp.updateHelp,
@@ -245,7 +250,7 @@ export const commands: CommandEntry[] = [
 	{
 		name: "search",
 		load: () => import("./commands/web-search").then(m => m.default),
-		aliases: ["q"],
+		aliases: ["q", "web-search"],
 		help: commandHelp.searchHelp,
 	},
 ];

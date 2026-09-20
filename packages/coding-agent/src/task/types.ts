@@ -1,41 +1,19 @@
+import type { AgentSource, StructuredSubagentOutput } from "@oh-my-pi/pi-tui/tools/task";
+export {
+	TASK_SUBAGENT_PROGRESS_CHANNEL,
+	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+} from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
+export type {
+	SubagentProgressPayload,
+	SubagentLifecyclePayload,
+} from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
 import { type BaseType, type } from "@oh-my-pi/omptype";
 import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
+
 import type { AgentSessionEvent } from "../session/agent-session";
-import type { ConfiguredThinkingLevel, TaskEffort } from "../thinking";
+import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { NestedRepoPatch } from "./worktree";
-
-/** Source of an agent definition */
-export type AgentSource = "bundled" | "user" | "project";
-/**
- * Enforcement policy for a structured subagent output schema.
- *
- * `permissive` preserves legacy retry-budget overrides; `strict` turns every
- * invalid final payload, including an exhausted retry override, into a failed
- * `schema_violation` result.
- */
-export type StructuredSubagentSchemaMode = "permissive" | "strict";
-
-/** Origin of the schema selected for a structured subagent invocation. */
-export type StructuredSubagentSchemaSource = "caller" | "agent" | "session" | "none";
-
-/** Final validation state of a structured subagent invocation. */
-export type StructuredSubagentValidationStatus = "valid" | "invalid" | "unavailable";
-
-/**
- * Parsed structured completion and its schema-validation metadata.
- *
- * `data` is present whenever a payload could be assembled or parsed, even when
- * strict validation rejects it. `error` explains unavailable or invalid
- * validation without requiring consumers to parse presentation text.
- */
-export interface StructuredSubagentOutput {
-	source: StructuredSubagentSchemaSource;
-	mode: StructuredSubagentSchemaMode;
-	status: StructuredSubagentValidationStatus;
-	data?: unknown;
-	error?: string;
-}
 
 const parseNumber = (value: string | undefined, defaultValue: number): number => {
 	if (value) {
@@ -58,53 +36,11 @@ export const MAX_OUTPUT_LINES = parseNumber($env.PI_TASK_MAX_OUTPUT_LINES, 5000)
 /** EventBus channel for raw subagent events */
 export const TASK_SUBAGENT_EVENT_CHANNEL = "task:subagent:event";
 
-/** EventBus channel for aggregated subagent progress */
-export const TASK_SUBAGENT_PROGRESS_CHANNEL = "task:subagent:progress";
-
-/** EventBus channel for subagent lifecycle (start/end) */
-export const TASK_SUBAGENT_LIFECYCLE_CHANNEL = "task:subagent:lifecycle";
-
-/** Payload emitted on TASK_SUBAGENT_PROGRESS_CHANNEL */
-export interface SubagentProgressPayload {
-	index: number;
-	agent: string;
-	agentSource: AgentSource;
-	task: string;
-	parentToolCallId?: string;
-	assignment?: string;
-	progress: AgentProgress;
-	sessionFile?: string;
-	/** See {@link SubagentLifecyclePayload.detached}. */
-	detached?: boolean;
-}
-
 /** Payload emitted on TASK_SUBAGENT_EVENT_CHANNEL */
 export interface SubagentEventPayload {
 	id: string;
 	event: AgentSessionEvent;
 }
-
-/** Payload emitted on TASK_SUBAGENT_LIFECYCLE_CHANNEL */
-export interface SubagentLifecyclePayload {
-	id: string;
-	agent: string;
-	agentSource: AgentSource;
-	description?: string;
-	status: "started" | "completed" | "failed" | "aborted";
-	sessionFile?: string;
-	parentToolCallId?: string;
-	index: number;
-	/**
-	 * Spawn runs as a detached background job: the parent turn keeps working
-	 * while this agent runs. Sync task spawns (parent blocked on the call) and
-	 * eval `agent()` bridge spawns (rendered inside their eval cell) leave this
-	 * unset — surfaces like the subagent HUD only list detached spawns.
-	 */
-	detached?: boolean;
-}
-
-/** Display cap for a normalized one-line label (roster line, registry `displayName`, prompt field). */
-export const LABEL_MAX = 80;
 
 // Keep this explicit: ArkType serializes `unknown` as a boolean subschema, which llama.cpp grammars reject.
 const outputSchemaInputSchema = type("object | boolean | string | null");
@@ -130,26 +66,6 @@ const taskItemSchemaIsolated = type({
 	"isolated?": "boolean",
 	"+": "delete",
 });
-
-/** Single task item. Fields are optional defensively: args stream in token by token. */
-export interface TaskItem {
-	/** Stable agent name; becomes the registry/IRC id. Default = generated AdjectiveNoun. */
-	name?: string;
-	/** Agent type to run this item (e.g. "scout"). Defaults to the spawn policy's default agent. */
-	agent?: string;
-	/** The work; required by the schema. */
-	task?: string;
-	/** Per-spawn thinking effort: lowest/middle/highest level the resolved model supports. Overrides the agent's default selector (e.g. `auto`). */
-	effort?: TaskEffort;
-	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
-	outputSchema?: unknown;
-	/** Validation behavior for a caller-provided or inherited output schema. */
-	schemaMode?: "permissive" | "strict";
-	/** Eval-defined tool names exposed to this child. */
-	tools?: string[];
-	/** Run this spawn in an isolated worktree (batch form; flat form carries it top-level). */
-	isolated?: boolean;
-}
 
 export const taskSchema = type({
 	"name?": "string",
@@ -293,83 +209,12 @@ export function getTaskSchema(options: {
 }
 
 /**
- * Runtime params union over both wire shapes. The model sees exactly one shape
- * (`{ context, tasks[] }` when `task.batch` is on, `{ name?, agent?, task }`
- * otherwise); runtime stays permissive so internal callers and stale
- * transcripts using the flat form keep working under either setting.
- */
-export interface TaskParams {
-	/** Stable agent name (flat form). */
-	name?: string;
-	/** Agent type to spawn (flat form); omitted values resolve from the session spawn policy. */
-	agent?: string;
-	/** The work (flat form). */
-	task?: string;
-	/** Per-spawn thinking effort (flat form): lowest/middle/highest level the resolved model supports. */
-	effort?: TaskEffort;
-	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
-	outputSchema?: unknown;
-	/** Validation behavior for a caller-provided or inherited output schema. */
-	schemaMode?: "permissive" | "strict";
-	/** Eval-defined tool names exposed to the flat-form child. */
-	tools?: string[];
-	/** Batch form (`task.batch`): one subagent per item. */
-	tasks?: TaskItem[];
-	/** Batch form: shared background prepended to every assignment; required by the batch schema. */
-	context?: string;
-	/** Run in an isolated worktree (flat form; per-item in batch form). */
-	isolated?: boolean;
-}
-
-/**
- * One-line, length-capped label safe for a single roster line, a registry
- * `displayName`, or a system-prompt field. Collapses every run of whitespace
- * AND control/format characters — including U+0085 NEL, ESC/ANSI, and the
- * zero-width separators that `\s` misses — to a single space, then caps length.
- * So untrusted text (a generated task label, a peer activity gist) can neither
- * break the line, inject prompt structure, nor smuggle terminal escapes. Caps at
- * `max` characters (clamped to >= 1; default `LABEL_MAX`), appending an ellipsis when truncated.
- */
-export function oneLineLabel(text: string, max = LABEL_MAX): string {
-	const oneLine = text.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").trim();
-	const cap = Math.max(1, max);
-	// Count/cut by code point, not UTF-16 code unit, so truncation can never
-	// split an astral character into a lone surrogate.
-	const chars = [...oneLine];
-	return chars.length > cap ? `${chars.slice(0, cap - 1).join("")}…` : oneLine;
-}
-
-/**
  * Whether an agent at `taskDepth` may still spawn children — i.e. it currently
  * holds the `task` tool. Mirrors the task-tool availability gate;
  * `maxRecursionDepth < 0` disables the cap entirely.
  */
 export function canSpawnAtDepth(maxRecursionDepth: number, taskDepth: number): boolean {
 	return maxRecursionDepth < 0 || taskDepth < maxRecursionDepth;
-}
-
-/** A code review finding reported by the reviewer agent */
-export interface ReviewFinding {
-	title: string;
-	body: string;
-	priority: number;
-	confidence: number;
-	file_path: string;
-	line_start: number;
-	line_end: number;
-}
-
-/** Review summary submitted by the reviewer agent */
-export interface ReviewSummary {
-	overall_correctness: "correct" | "incorrect";
-	explanation: string;
-	confidence: number;
-}
-
-/** Structured review data extracted from reviewer agent */
-export interface ReviewData {
-	findings: ReviewFinding[];
-	summary?: ReviewSummary;
 }
 
 /** Agent definition (bundled or discovered) */
