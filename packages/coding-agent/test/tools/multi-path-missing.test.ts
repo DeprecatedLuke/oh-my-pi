@@ -51,7 +51,7 @@ describe("multi-path tools tolerate missing entries", () => {
 		const tool = new GrepTool(createTestSession(tempDir));
 
 		const result = await tool.execute("search-multi-missing", {
-			paths: "src/; tests/",
+			path: "src/; tests/",
 			pattern: "shared-needle",
 		});
 
@@ -69,7 +69,7 @@ describe("multi-path tools tolerate missing entries", () => {
 		const tool = new GrepTool(createTestSession(tempDir));
 
 		const promise = tool.execute("search-all-missing", {
-			paths: "does-not-exist/; also-missing/",
+			path: "does-not-exist/; also-missing/",
 			pattern: "shared-needle",
 		});
 
@@ -80,7 +80,7 @@ describe("multi-path tools tolerate missing entries", () => {
 		const tool = new GlobTool(createTestSession(tempDir), { rootPathAlias: true });
 
 		const result = await tool.execute("find-multi-missing", {
-			paths: ["src/**/*.ts", "tests/**/*.ts"],
+			path: "src/**/*.ts; tests/**/*.ts",
 		});
 
 		const text = getText(result);
@@ -99,7 +99,7 @@ describe("multi-path tools tolerate missing entries", () => {
 		const tool = new GlobTool(createTestSession(tempDir), { rootPathAlias: true });
 
 		const promise = tool.execute("find-all-missing", {
-			paths: ["nope/**/*.ts", "also-nope/**/*.ts"],
+			path: "nope/**/*.ts; also-nope/**/*.ts",
 		});
 
 		await expect(promise).rejects.toThrow(/Path not found.*nope.*also-nope/s);

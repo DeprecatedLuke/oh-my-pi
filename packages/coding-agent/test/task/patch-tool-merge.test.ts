@@ -16,7 +16,8 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
-import type { AgentDefinition, SingleResult, TaskParams } from "@oh-my-pi/pi-coding-agent/task/types";
+import type { AgentDefinition, TaskResult } from "@oh-my-pi/pi-coding-agent/task/types";
+import type { SingleResult, TaskParams } from "@oh-my-pi/pi-tui/tools/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
 const tempDirs: string[] = [];
@@ -142,7 +143,7 @@ describe("patch-tool merge strategy", () => {
 		// Auto-apply committed it: the working tree is clean afterward.
 		expect(await runGit(repo, ["status", "--porcelain"])).toBe("");
 
-		const patch = result.details?.results[0]?.patches?.[0];
+		const patch = (result.details?.results[0] as TaskResult | undefined)?.patches?.[0];
 		expect(patch?.status).toBe("applied");
 		expect(patch?.uri).toMatch(/^patch:\/\//);
 		expect(firstText(result)).toContain("automatically applied");
@@ -170,7 +171,7 @@ describe("patch-tool merge strategy", () => {
 			.catch(() => false);
 		expect(applied).toBe(false);
 
-		const patch = result.details?.results[0]?.patches?.[0];
+		const patch = (result.details?.results[0] as TaskResult | undefined)?.patches?.[0];
 		expect(patch?.status).toBe("pending");
 		expect(patch?.uri).toMatch(/^patch:\/\//);
 		expect(result.details?.results[0]?.error).toContain("dirty");
@@ -199,7 +200,7 @@ describe("patch-tool merge strategy", () => {
 		expect(await runGit(repo, ["status", "--porcelain"])).toBe("");
 
 		// ...it is preserved as a durable, unapplied recovery patch instead.
-		const single = result.details?.results[0];
+		const single = result.details?.results[0] as TaskResult | undefined;
 		expect(single?.recoveryCaptureStatus).toBe("preserved");
 		const patch = single?.patches?.[0];
 		expect(patch?.recovery).toBe(true);
@@ -223,7 +224,7 @@ describe("patch-tool merge strategy", () => {
 			isolated: true,
 		} as TaskParams);
 
-		const single = result.details?.results[0];
+		const single = result.details?.results[0] as TaskResult | undefined;
 		expect(single?.recoveryCaptureStatus).toBe("empty");
 		expect(single?.patches).toBeUndefined();
 		expect(firstText(result)).toContain("no recovery patch");

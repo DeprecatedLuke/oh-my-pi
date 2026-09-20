@@ -34,7 +34,7 @@ function createContext(options: { terminalProgress?: boolean } = {}) {
 			// The fork's Background Jobs panel refreshes on agent_start; with no async
 			// manager the snapshot is null and the panel stays clear.
 			getAsyncJobSnapshot: () => null,
-			hasPendingBackgroundJobs: () => false,
+			hasPendingAsyncWork: () => false,
 		},
 	});
 	const { statusContainer } = ctx;

@@ -20,6 +20,7 @@ import {
 } from "../config/model-resolver";
 import { getKnownRoleIds } from "../config/model-roles";
 import type { Settings } from "../config/settings";
+import { containsUltrasolve } from "../modes/ultrasolve";
 import { containsUltrathink } from "@oh-my-pi/pi-tui/prompt/ultrathink";
 import {
 	AUTO_THINKING,
@@ -53,7 +54,7 @@ export interface ModelControlsHost {
 	setModelWithProviderSessionReset(model: Model): Promise<void>;
 	clearActiveRetryFallback(): void;
 	clearInheritedProviderPromptCacheKey(): void;
-	magicKeywordEnabled(keyword: "orchestrate" | "ultrathink" | "workflow" | "jevify"): boolean;
+	magicKeywordEnabled(keyword: "orchestrate" | "ultrasolve" | "ultrathink" | "workflow" | "jevify"): boolean;
 	emit(event: AgentSessionEvent): void;
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
@@ -601,7 +602,10 @@ export class ModelControls {
 		if (getSupportedEfforts(model).length === 0) return;
 
 		let resolved: Effort | undefined;
-		if (this.#host.magicKeywordEnabled("ultrathink") && containsUltrathink(promptText)) {
+		if (
+			(this.#host.magicKeywordEnabled("ultrathink") && containsUltrathink(promptText)) ||
+			(this.#host.magicKeywordEnabled("ultrasolve") && containsUltrasolve(promptText))
+		) {
 			// The user explicitly asked for maximum thinking; bypass the classifier
 			// (and the `providers.autoThinkingMaxEffort` ceiling) and jump straight
 			// to the highest supported level for this model.

@@ -15,8 +15,8 @@ import {
 import patchDescription from "../prompts/tools/native-patch.md" with { type: "text" };
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import type { ToolSession } from "./index";
-import type { OutputMeta } from "./output-meta";
-import { ToolError } from "./tool-errors";
+import type { OutputMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { toolResult } from "./tool-result";
 
 const patchSchema = z.discriminatedUnion("op", [

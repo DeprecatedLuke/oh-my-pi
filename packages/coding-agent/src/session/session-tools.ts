@@ -8,6 +8,13 @@ import type { EffectiveExtensionRoots } from "../capability/types";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelString } from "../config/model-resolver";
 import type { Settings, SkillsSettings } from "../config/settings";
+import {
+	buildDiscoverableToolSearchIndex,
+	collectDiscoverableTools,
+	filterBySource,
+	type DiscoverableTool,
+	type DiscoverableToolSearchIndex,
+} from "../tool-discovery/tool-index";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
 import { CustomToolAdapter } from "../extensibility/custom-tools/wrapper";
 import type { ExtensionRunner, SourceInfo, ToolInfo } from "../extensibility/extensions";
@@ -264,6 +271,8 @@ export class SessionTools {
 	#lastAppliedToolSignature: string | undefined;
 	/** Full enabled set, including tools demoted from the model-visible surface. */
 	#enabledToolNames = new Set<string>();
+	/** Non-MCP names activated through legacy BM25 discovery. */
+	#selectedDiscoveredToolNames = new Set<string>();
 	/** Names currently exposed through tool-session `isToolActive` predicates. */
 	#toolPredicateNames: readonly string[] | undefined;
 	/** Wire-name snapshot for the direct Code Mode tools last applied successfully. */
@@ -748,6 +757,52 @@ export class SessionTools {
 			signature += `${name}\u0000${tool?.customWireName ?? name}\u0001`;
 		}
 		return signature;
+	}
+
+	/** Discoverable, inactive tools available to the legacy BM25 search surface. */
+	getDiscoverableTools(filter?: { source?: DiscoverableTool["source"] }): DiscoverableTool[] {
+		const activeNames = new Set(this.getActiveToolNames());
+		const discovered: DiscoverableTool[] = [];
+		for (const tool of this.#toolRegistry.values()) {
+			if (activeNames.has(tool.name) || tool.loadMode !== "discoverable") continue;
+			const source = isMCPToolName(tool.name)
+				? ("mcp" as const)
+				: this.#builtInToolNames.has(tool.name)
+					? ("builtin" as const)
+					: ("extension" as const);
+			discovered.push(...collectDiscoverableTools([tool], { source }));
+		}
+		return filter?.source ? filterBySource(discovered, filter.source) : discovered;
+	}
+
+	getDiscoverableToolSearchIndex(): DiscoverableToolSearchIndex {
+		return buildDiscoverableToolSearchIndex(this.getDiscoverableTools());
+	}
+
+	getSelectedDiscoveredToolNames(): string[] {
+		const activeNames = new Set(this.getActiveToolNames());
+		const nonMcp = [...this.#selectedDiscoveredToolNames].filter(
+			name => activeNames.has(name) && this.#toolRegistry.has(name) && !isMCPToolName(name),
+		);
+		return [...new Set([...this.getSelectedMCPToolNames(), ...nonMcp])];
+	}
+
+	async activateDiscoveredTools(toolNames: string[]): Promise<string[]> {
+		const accepted = [...new Set(toolNames.filter(name => this.#toolRegistry.has(name)))];
+		if (accepted.length === 0) return [];
+		const activeNames = new Set(this.getActiveToolNames());
+		const newlyAdded: string[] = [];
+		for (const name of accepted) {
+			if (isMCPToolName(name)) continue;
+			if (!activeNames.has(name)) {
+				newlyAdded.push(name);
+				this.#selectedDiscoveredToolNames.add(name);
+			}
+		}
+		if (newlyAdded.length > 0) {
+			await this.setActiveToolsByName([...activeNames, ...newlyAdded]);
+		}
+		return accepted;
 	}
 
 	/** Reapplies the enabled set after model or Code Mode setting changes. */

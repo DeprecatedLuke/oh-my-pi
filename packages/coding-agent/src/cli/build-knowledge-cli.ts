@@ -26,7 +26,7 @@ import { migrateSessionEntries } from "../session/session-migrations";
 import { buildSystemPrompt } from "../system-prompt";
 import type { ToolSession } from "../tools";
 import { ReadTool } from "../tools/read";
-import { shortenPath } from "../tools/render-utils";
+import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { WriteTool } from "../tools/write";
 
 const DEFAULT_LAST = "30d";

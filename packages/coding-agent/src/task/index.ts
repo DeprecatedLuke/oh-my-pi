@@ -35,15 +35,22 @@ import { isIrcEnabled } from "../tools/hub";
 import { isReadOnlyAgent } from "./read-only-policy";
 import { formatTaskResultSummary } from "./result-summary";
 import { isScoutSpawnable, resolveSpawnPolicy } from "./spawn-policy";
-import { type AgentDefinition, canSpawnAtDepth, getTaskSchema, type TaskToolSchemaInstance } from "./types";
+import {
+	type AgentDefinition,
+	canSpawnAtDepth,
+	getTaskSchema,
+	type TaskPatchConflict,
+	type TaskPatchResultMetadata,
+	type TaskPatchStatus,
+	type TaskPatchSummary,
+	type TaskResult,
+	type TaskToolSchemaInstance,
+} from "./types";
 import {
 	type AgentProgress,
 	type SingleResult,
 	type TaskItem,
 	type TaskParams,
-	type TaskPatchConflict,
-	type TaskPatchStatus,
-	type TaskPatchSummary,
 	type TaskToolDetails,
 } from "@oh-my-pi/pi-tui/tools/task";
 import { AsyncJobError, type AsyncJobManager } from "../async";
@@ -317,8 +324,8 @@ export async function applyTaskNativePatches(
 
 /** Agent-facing merge summary grouping native patches by outcome, including
  * recovery patches preserved from an aborted task. */
-function buildPatchMergeSummary(result: SingleResult): string {
-	const patches = result.patches ?? [];
+function buildPatchMergeSummary(result: SingleResult, metadata: TaskPatchResultMetadata): string {
+	const patches = metadata.patches ?? [];
 	let summary = "";
 	const applied = patches.filter(p => p.status === "applied" && !p.recovery);
 	if (applied.length > 0) {
@@ -349,15 +356,26 @@ function buildPatchMergeSummary(result: SingleResult): string {
 		const plural = recovered.length === 1 ? "" : "es";
 		summary += `\n\n<system-notification>${recovered.length} recovery patch${plural} preserved aborted task edits in the durable native patch store.\n\nRecovery patches:\n${lines.join("\n")}\n\nUse the \`patch\` tool to inspect/apply, or edit patch:// files and reapply.</system-notification>`;
 	}
-	if (result.recoveryCaptureStatus === "empty") {
+	if (metadata.recoveryCaptureStatus === "empty") {
 		summary += `\n\n<system-notification>Aborted task ${recoveryLabel} had no recovery patch because recovery capture found no file changes in the isolated worktree. Restart from the original assignment instead of searching session artifact directories for a missing patch.</system-notification>`;
 	}
-	if (result.recoveryCaptureStatus === "failed") {
-		const detail = result.recoveryCaptureError ? ` Error: ${result.recoveryCaptureError}` : "";
+	if (metadata.recoveryCaptureStatus === "failed") {
+		const detail = metadata.recoveryCaptureError ? ` Error: ${metadata.recoveryCaptureError}` : "";
 		summary += `\n\n<system-notification>Recovery capture failed for aborted task ${recoveryLabel}. The isolation worktree was torn down and no reliable native patch was written. Restart from the original assignment or inspect the logged recovery error if the work should have produced a delta.${detail}</system-notification>`;
 	}
 	const trimmed = summary.trimStart();
 	return trimmed.length > 0 ? trimmed : "No changes to apply.";
+}
+function attachTaskPatchMetadata(result: SingleResult, metadata?: TaskPatchResultMetadata): TaskResult {
+	if (
+		!metadata ||
+		(metadata.patches === undefined &&
+			metadata.recoveryCaptureStatus === undefined &&
+			metadata.recoveryCaptureError === undefined)
+	) {
+		return result;
+	}
+	return { ...result, ...metadata };
 }
 
 /** Outcome of an isolated knowledge-maintenance pass. `summary` is the
@@ -433,6 +451,10 @@ export async function runIsolatedKnowledgePass(options: {
 			const patches = captured.map(({ manifest, target }) =>
 				patchSummaryFromManifest(manifest, target, "pending", { recovery: true }),
 			);
+			const patchMetadata: TaskPatchResultMetadata = {
+				patches: patches.length > 0 ? patches : undefined,
+				recoveryCaptureStatus: patches.length > 0 ? "preserved" : "empty",
+			};
 			const result: SingleResult = {
 				index: 0,
 				id: options.taskId,
@@ -447,10 +469,13 @@ export async function runIsolatedKnowledgePass(options: {
 				tokens: 0,
 				requests: 0,
 				aborted: run.aborted,
-				patches: patches.length > 0 ? patches : undefined,
-				recoveryCaptureStatus: patches.length > 0 ? "preserved" : "empty",
 			};
-			return { exitCode: run.exitCode, aborted: run.aborted, patches, summary: buildPatchMergeSummary(result) };
+			return {
+				exitCode: run.exitCode,
+				aborted: run.aborted,
+				patches,
+				summary: buildPatchMergeSummary(result, patchMetadata),
+			};
 		}
 		const captured = await createTaskNativePatches({
 			store,
@@ -462,6 +487,9 @@ export async function runIsolatedKnowledgePass(options: {
 			pathFilter,
 		});
 		const patches = captured.length > 0 ? await applyTaskNativePatches(store, captured, options.generateMessage) : [];
+		const patchMetadata: TaskPatchResultMetadata = {
+			patches: patches.length > 0 ? patches : undefined,
+		};
 		const result: SingleResult = {
 			index: 0,
 			id: options.taskId,
@@ -475,9 +503,8 @@ export async function runIsolatedKnowledgePass(options: {
 			durationMs: 0,
 			tokens: 0,
 			requests: 0,
-			patches: patches.length > 0 ? patches : undefined,
 		};
-		return { exitCode: 0, aborted: false, patches, summary: buildPatchMergeSummary(result) };
+		return { exitCode: 0, aborted: false, patches, summary: buildPatchMergeSummary(result, patchMetadata) };
 	} finally {
 		if (task) await cleanupIsolation(task);
 		await cleanupIsolation(baseline);
@@ -557,6 +584,9 @@ export async function runInProcessKnowledgePatchPass(options: {
 			pathFilter,
 		});
 		const patches = captured.length > 0 ? await applyTaskNativePatches(store, captured, options.generateMessage) : [];
+		const patchMetadata: TaskPatchResultMetadata = {
+			patches: patches.length > 0 ? patches : undefined,
+		};
 		const result: SingleResult = {
 			index: 0,
 			id: options.taskId,
@@ -570,9 +600,8 @@ export async function runInProcessKnowledgePatchPass(options: {
 			durationMs: 0,
 			tokens: 0,
 			requests: 0,
-			patches: patches.length > 0 ? patches : undefined,
 		};
-		return { exitCode: 0, aborted: false, patches, summary: buildPatchMergeSummary(result) };
+		return { exitCode: 0, aborted: false, patches, summary: buildPatchMergeSummary(result, patchMetadata) };
 	} finally {
 		// Safety-net: if an early throw skipped the in-band revert, the real tree
 		// still carries the distill's uncommitted edits — restore it now.
@@ -594,7 +623,17 @@ export { discoverCommands, expandCommand, getCommand } from "./commands";
 export { discoverAgents, getAgent } from "./discovery";
 export { AgentOutputManager } from "./output-manager";
 export * from "./read-only-policy";
-export type { AgentDefinition, SubagentEventPayload, SubagentLifecyclePayload, SubagentProgressPayload } from "./types";
+export type {
+	AgentDefinition,
+	SubagentEventPayload,
+	SubagentLifecyclePayload,
+	SubagentProgressPayload,
+	TaskPatchConflict,
+	TaskPatchResultMetadata,
+	TaskPatchStatus,
+	TaskPatchSummary,
+	TaskResult,
+} from "./types";
 export type { AgentProgress, SingleResult, TaskParams, TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
 export * from "./result-summary";
 export {
@@ -2039,6 +2078,11 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				execution.policy.discovery.projectAgentsDir,
 				Date.now() - startTime,
 				execution.mergeSummary,
+				{
+					patches: execution.patches,
+					recoveryCaptureStatus: execution.recoveryCaptureStatus,
+					recoveryCaptureError: execution.recoveryCaptureError,
+				},
 			);
 		} catch (error) {
 			const message = error instanceof StructuredSubagentError ? error.message : String(error);
@@ -2060,17 +2104,19 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		projectAgentsDir: string | null,
 		totalDurationMs: number,
 		mergeSummary: string,
+		patchMetadata?: TaskPatchResultMetadata,
 	): AgentToolResult<TaskToolDetails> {
-		const summary = formatTaskResultSummary(result, { totalDurationMs, mergeSummary });
+		const taskResult = attachTaskPatchMetadata(result, patchMetadata);
+		const summary = formatTaskResultSummary(taskResult, { totalDurationMs, mergeSummary });
 
 		return {
 			content: [{ type: "text", text: summary }],
 			details: {
 				projectAgentsDir,
-				results: [result],
+				results: [taskResult],
 				totalDurationMs,
-				usage: result.usage,
-				outputPaths: result.outputPath ? [result.outputPath] : undefined,
+				usage: taskResult.usage,
+				outputPaths: taskResult.outputPath ? [taskResult.outputPath] : undefined,
 			},
 		};
 	}

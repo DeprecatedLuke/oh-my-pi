@@ -3706,7 +3706,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// catalogue so settled decisions and existing open reports are not
 			// duplicated.
 			let existingIssues = "";
-			if (toolNames?.includes("issues") && subagentSettings.get("issues.enabled") !== false) {
+			if (toolNames?.includes("issues")) {
 				try {
 					const summaries = await awaitAbortable(listIssues(worktree ?? cwd));
 					existingIssues =

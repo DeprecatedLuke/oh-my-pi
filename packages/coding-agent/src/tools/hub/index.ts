@@ -27,7 +27,6 @@ import type { ToolExample } from "@oh-my-pi/pi-ai";
 
 import { prompt } from "@oh-my-pi/pi-utils";
 
-
 import hubDescription from "../../prompts/tools/hub.md" with { type: "text" };
 import type { AgentRegistry } from "../../registry/agent-registry";
 import type { ToolSession } from "..";

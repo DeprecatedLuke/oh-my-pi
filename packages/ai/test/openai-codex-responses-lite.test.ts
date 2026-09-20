@@ -10,7 +10,8 @@ import {
 	resetOpenAICodexHistoryAfterCompaction,
 	streamOpenAICodexResponses,
 } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
-import { isOpenAIResponsesProgressEvent, NO_AUTH_SENTINEL } from "@oh-my-pi/pi-ai/providers/openai-shared";
+import { NO_AUTH_SENTINEL } from "@oh-my-pi/pi-ai/auth-retry";
+import { isOpenAIResponsesProgressEvent } from "@oh-my-pi/pi-ai/providers/openai-shared";
 import { configureCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import type {
 	CodexCompactionRequestContext,

@@ -2191,7 +2191,8 @@ export const SETTINGS_SCHEMA = {
 			tab: "interaction",
 			group: "Magic Keywords",
 			label: "Magic Keywords",
-			description: "Enable hidden notices for standalone ultrathink, orchestrate, workflowz, and jevify keywords",
+			description:
+				"Enable hidden notices for standalone ultrathink, ultrasolve, orchestrate, workflowz, and jevify keywords",
 		},
 	},
 
@@ -2203,6 +2204,18 @@ export const SETTINGS_SCHEMA = {
 			group: "Magic Keywords",
 			label: "Ultrathink Keyword",
 			description: "Let standalone ultrathink request maximum automatic thinking and append its hidden notice",
+		},
+	},
+
+	"magicKeywords.ultrasolve": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "interaction",
+			group: "Magic Keywords",
+			label: "Ultrasolve Keyword",
+			description:
+				"Let standalone ultrasolve inherit maximum thinking and request a self-contained solver escalation",
 		},
 	},
 
@@ -4316,6 +4329,44 @@ export const SETTINGS_SCHEMA = {
 			description: "Enable the launch tool for supervising shared long-running project processes",
 		},
 	},
+	"issues.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Issues",
+			description: "Enable the project-local issues tool",
+		},
+	},
+	"issues.reminders": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Issue Reminders",
+			description:
+				"Remind the agent before it ends a turn while issues are still marked in-progress (only when no background jobs are running).",
+		},
+	},
+
+	"issues.reminders.max": {
+		type: "number",
+		default: 3,
+		ui: {
+			tab: "tools",
+			group: "Available Tools",
+			label: "Issue Reminder Limit",
+			description: "Maximum number of in-progress issue reminders before giving up.",
+			options: [
+				{ value: "1", label: "1 reminder" },
+				{ value: "2", label: "2 reminders" },
+				{ value: "3", label: "3 reminders" },
+				{ value: "5", label: "5 reminders" },
+			],
+		},
+	},
 
 	"speechgen.enabled": {
 		type: "boolean",
@@ -4748,6 +4799,30 @@ export const SETTINGS_SCHEMA = {
 		default: 60_000,
 	},
 
+	// Legacy BM25 discovery settings remain schema-valid for SDK/tool callers.
+	"tools.discoveryMode": {
+		type: "enum",
+		values: ["auto", "off", "mcp-only", "all"] as const,
+		default: "auto",
+		ui: {
+			tab: "tools",
+			group: "Discovery & MCP",
+			label: "Tool Discovery",
+			description:
+				"Select the legacy search_tool_bm25 presentation mode; xd:// remains the default transport for current sessions.",
+		},
+	},
+	"tools.essentialOverride": {
+		type: "array",
+		default: EMPTY_STRING_ARRAY,
+		ui: {
+			tab: "tools",
+			group: "Discovery & MCP",
+			label: "Essential Tools Override",
+			description: "Override the built-in tools retained at the top level when legacy discovery hides tools.",
+		},
+	},
+
 	"tools.xdev": {
 		type: "boolean",
 		default: true,
@@ -4814,6 +4889,17 @@ export const SETTINGS_SCHEMA = {
 			group: "Discovery & MCP",
 			label: "MCP Markdown Results",
 			description: "Render non-JSON MCP text results as Markdown in the transcript",
+		},
+	},
+
+	"mcp.discoveryMode": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "tools",
+			group: "Discovery & MCP",
+			label: "MCP Tool Discovery",
+			description: "Enable legacy BM25 discovery for MCP tools.",
 		},
 	},
 
@@ -5397,6 +5483,18 @@ export const SETTINGS_SCHEMA = {
 			group: "Privacy",
 			label: "Hide Secrets",
 			description: "Obfuscate configured secrets and redact credential-shaped tokens before sending to AI providers",
+		},
+	},
+
+	"secrets.autoFixRefusal": {
+		type: "boolean",
+		default: false,
+		ui: {
+			tab: "providers",
+			group: "Privacy",
+			label: "Auto Fix Refusal",
+			description:
+				"When the model refuses, automatically run /fix-refusal (needs the `uncensored` model role) and re-send the prompt",
 		},
 	},
 

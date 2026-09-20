@@ -7,7 +7,7 @@ import {
 	resolveModelFromString,
 } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
-import { theme } from "../../modes/theme/theme";
+import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import {
 	appendManagedSecrets,
@@ -23,7 +23,7 @@ import {
 	type FixRefusalResult,
 	runFixRefusal,
 } from "../../secrets/fix-refusal";
-import { shortenPath } from "../../tools/render-utils";
+import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 
 /** Progress sink so the orchestrator renders identically in TUI and ACP modes. */
 export interface FixRefusalUi {
@@ -125,7 +125,7 @@ export async function executeFixRefusal(deps: FixRefusalDeps): Promise<FixRefusa
 		ui.step("No user turn in the conversation to re-test.");
 		return { resolved: false, saved: 0, patternsActive: 0 };
 	}
-	const { systemPrompt, messages: probeMessages } = session.buildSideRequestContext(
+	const { systemPrompt, messages: probeMessages } = await session.buildSideRequestContext(
 		session.messages.slice(0, sliceEnd),
 	);
 	const refusalText = latestRefusalText(session.messages) ?? "(no textual response)";

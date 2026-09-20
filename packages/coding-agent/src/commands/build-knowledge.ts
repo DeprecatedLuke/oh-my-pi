@@ -1,6 +1,6 @@
 import { Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { type BuildKnowledgeCommandArgs, runBuildKnowledgeCommand } from "../cli/build-knowledge-cli";
-import { initTheme } from "../modes/theme/theme";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
 export default class BuildKnowledge extends Command {
 	static description = "Backfill project-local knowledge from saved sessions";

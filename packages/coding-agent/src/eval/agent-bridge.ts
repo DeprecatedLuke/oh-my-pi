@@ -14,7 +14,7 @@ import {
 	type StructuredSubagentResult,
 } from "../task/structured-subagent";
 import type { AgentProgress, SingleResult, StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
-import type { NestedRepoPatch } from "@oh-my-pi/pi-tui/tools/task";
+import type { NestedRepoPatch, TaskPatchResultMetadata, TaskPatchSummary } from "../task/types";
 import type { ToolSession } from "../tools";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { JsStatusEvent } from "./js/shared/types";
@@ -81,6 +81,10 @@ export interface EvalAgentResult {
 		nestedPatchPaths?: string[];
 		changesApplied?: boolean | null;
 		isolationSummary?: string;
+		/** Native patch-tool summaries, including durable recovery patches. */
+		patches?: TaskPatchSummary[];
+		recoveryCaptureStatus?: TaskPatchResultMetadata["recoveryCaptureStatus"];
+		recoveryCaptureError?: string;
 	};
 }
 
@@ -109,13 +113,26 @@ function buildSubagentFailureMessage(agentName: string, result: SingleResult): s
 }
 
 async function buildEvalAgentResult(execution: StructuredSubagentResult): Promise<EvalAgentResult> {
-	const { result, policy, mergeSummary, changesApplied, artifactsDir } = execution;
+	const {
+		result,
+		policy,
+		mergeSummary,
+		changesApplied,
+		patches,
+		recoveryCaptureStatus,
+		recoveryCaptureError,
+		artifactsDir,
+	} = execution;
 	if (result.exitCode !== 0 || result.error || result.aborted) {
 		const failureMessage = buildSubagentFailureMessage(policy.agentName, result)
 			.replace(/<\/?system-notification>/g, "")
 			.trim();
+		const nativePatchSummary =
+			patches !== undefined || recoveryCaptureStatus !== undefined
+				? mergeSummary.replace(/<\/?system-notification>/g, "").trim()
+				: "";
 		const recoveryHint = policy.isIsolated ? await buildStructuredSubagentRecoveryHint(result, artifactsDir) : "";
-		throw new ToolError(`${failureMessage}${recoveryHint}`);
+		throw new ToolError(`${failureMessage}${nativePatchSummary ? ` ${nativePatchSummary}` : ""}${recoveryHint}`);
 	}
 	if (policy.isIsolated && changesApplied === false) {
 		const summary = mergeSummary.replace(/<\/?system-notification>/g, "").trim();
@@ -161,6 +178,9 @@ async function buildEvalAgentResult(execution: StructuredSubagentResult): Promis
 			...(nestedPatches !== undefined ? { nestedPatches } : {}),
 			...(result.nestedPatchPaths?.length ? { nestedPatchPaths: result.nestedPatchPaths } : {}),
 			...(isolationSummary !== undefined ? { isolationSummary } : {}),
+			...(patches !== undefined ? { patches } : {}),
+			...(recoveryCaptureStatus !== undefined ? { recoveryCaptureStatus } : {}),
+			...(recoveryCaptureError !== undefined ? { recoveryCaptureError } : {}),
 		},
 	};
 }

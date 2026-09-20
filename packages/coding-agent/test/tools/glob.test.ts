@@ -24,7 +24,7 @@ async function expectRootSearchRejected(searchPath: string): Promise<void> {
 	const tool = new GlobTool(createSession());
 	let thrown: unknown;
 	try {
-		await tool.execute("glob-root-regression", { paths: [searchPath] });
+		await tool.execute("glob-root-regression", { path: searchPath });
 	} catch (error) {
 		thrown = error;
 	}
@@ -63,7 +63,7 @@ describe("GlobTool.execute", () => {
 				return { matches: [], totalMatches: 0 };
 			},
 		});
-		const execution = tool.execute("glob-preparation-abort", { paths: ["."] }, controller.signal);
+		const execution = tool.execute("glob-preparation-abort", { path: "." }, controller.signal);
 
 		await statStarted.promise;
 		try {
@@ -100,7 +100,7 @@ describe("GlobTool.execute", () => {
 			},
 		});
 
-		const execution = tool.execute("glob-timeout-cleanup", { paths: ["."] });
+		const execution = tool.execute("glob-timeout-cleanup", { path: "." });
 		let executionSettled = false;
 		void execution.then(
 			() => {
@@ -156,7 +156,7 @@ describe("GlobTool.execute", () => {
 		});
 		const execution = tool.execute(
 			"glob-abort-cleanup",
-			{ paths: [".", path.dirname(process.cwd())] },
+			{ path: `.; ${path.dirname(process.cwd())}` },
 			controller.signal,
 		);
 		let executionSettled = false;

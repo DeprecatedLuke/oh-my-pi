@@ -172,10 +172,10 @@ describe("GrepTool internal URL resolution", () => {
 
 		const grepResult = await grepTool.execute("test-search", {
 			pattern: "deep needle",
-			paths: ["skill://demo/references"],
+			path: "skill://demo/references",
 		});
 		const globResult = await globTool.execute("test-find", {
-			paths: ["skill://demo/references"],
+			path: "skill://demo/references",
 		});
 
 		const grepText = getResultText(grepResult);
@@ -192,10 +192,10 @@ describe("GrepTool internal URL resolution", () => {
 
 		const grepResult = await grepTool.execute("test-search", {
 			pattern: "deep needle",
-			paths: ["skill://demo"],
+			path: "skill://demo",
 		});
 		const globResult = await globTool.execute("test-find", {
-			paths: ["skill://demo"],
+			path: "skill://demo",
 		});
 
 		expect(getResultText(grepResult)).toContain("deep needle");
@@ -228,7 +228,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("current-history-search", {
 			pattern: "pre-compaction needle",
-			paths: "history://current/full",
+			path: "history://current/full",
 		});
 
 		expect(getResultText(result)).toContain("searchable pre-compaction needle");
@@ -243,7 +243,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "needle",
-			paths: ["artifact://5"],
+			path: "artifact://5",
 		});
 
 		const text = getResultText(result);
@@ -259,7 +259,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "ERROR.*",
-			paths: ["artifact://3"],
+			path: "artifact://3",
 		});
 
 		const text = getResultText(result);
@@ -277,7 +277,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "needle",
-			paths: ["virtual://doc.md"],
+			path: "virtual://doc.md",
 		});
 
 		const text = getResultText(result);
@@ -293,7 +293,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "needle",
-			paths: ["virtual://doc.md:3-3"],
+			path: "virtual://doc.md:3-3",
 		});
 
 		const text = getResultText(result);
@@ -307,7 +307,7 @@ describe("GrepTool internal URL resolution", () => {
 		const content = `${Array.from({ length: 2100 }, (_, i) => `needle ${i + 1}`).join("\n")}\n`;
 		registerVirtualDocs(new Map([["big.md", content]]));
 		const tool = new GrepTool(createSession());
-		const result = await tool.execute("ranged-cap", { pattern: "needle", paths: ["virtual://big.md:2090-2100"] });
+		const result = await tool.execute("ranged-cap", { pattern: "needle", path: "virtual://big.md:2090-2100" });
 		expect(getResultText(result)).toContain("needle 2095");
 	});
 
@@ -319,7 +319,7 @@ describe("GrepTool internal URL resolution", () => {
 		const content = `${fillerLine.repeat(2049)}needle here\n`;
 		registerVirtualDocs(new Map([["big.md", content]]));
 		const tool = new GrepTool(createSession());
-		const result = await tool.execute("big-virtual", { pattern: "(?i)NEEDLE", paths: ["virtual://big.md"] });
+		const result = await tool.execute("big-virtual", { pattern: "(?i)NEEDLE", path: "virtual://big.md" });
 		expect(getResultText(result)).toContain("needle");
 	});
 
@@ -332,7 +332,7 @@ describe("GrepTool internal URL resolution", () => {
 		registerVirtualDocs(new Map([["mb.md", `${line}\n`]]));
 		const result = await new GrepTool(createSession()).execute("mb-virtual", {
 			pattern: "needle",
-			paths: ["virtual://mb.md"],
+			path: "virtual://mb.md",
 		});
 		const text = getResultText(result);
 		expect(text).toContain("…");
@@ -344,19 +344,19 @@ describe("GrepTool internal URL resolution", () => {
 	it("rejects a malformed selector on a selector-capable internal URL instead of widening the search", async () => {
 		const session = createSession();
 		const tool = new GrepTool(session);
-		await expect(tool.execute("bad-sel", { pattern: "needle", paths: ["artifact://5:-10"] })).rejects.toThrow(
+		await expect(tool.execute("bad-sel", { pattern: "needle", path: "artifact://5:-10" })).rejects.toThrow(
 			/invalid selector/i,
 		);
-		await expect(tool.execute("bad-mixed", { pattern: "needle", paths: ["artifact://5:1-1:-10"] })).rejects.toThrow(
+		await expect(tool.execute("bad-mixed", { pattern: "needle", path: "artifact://5:1-1:-10" })).rejects.toThrow(
 			/invalid selector/i,
 		);
 		// Multi-range colon compounds are rejected by read's parseSel; search must match.
-		await expect(tool.execute("bad-multi", { pattern: "needle", paths: ["artifact://5:1-1:1-2"] })).rejects.toThrow(
+		await expect(tool.execute("bad-multi", { pattern: "needle", path: "artifact://5:1-1:1-2" })).rejects.toThrow(
 			/invalid selector/i,
 		);
 		// A `conflicts` display chunk is not valid in a range compound (only `raw` is).
 		await expect(
-			tool.execute("bad-conflicts", { pattern: "needle", paths: ["artifact://5:conflicts:1-1"] }),
+			tool.execute("bad-conflicts", { pattern: "needle", path: "artifact://5:conflicts:1-1" }),
 		).rejects.toThrow(/invalid selector/i);
 	});
 
@@ -381,7 +381,7 @@ describe("GrepTool internal URL resolution", () => {
 		const tool = new GrepTool(session);
 		// Lookbehind is supported by native PCRE2; pure-virtual resources use the
 		// same pattern dialect and must return the matching line.
-		const result = await tool.execute("re2", { pattern: "(?<=alpha )line", paths: ["virtual://doc.md"] });
+		const result = await tool.execute("re2", { pattern: "(?<=alpha )line", path: "virtual://doc.md" });
 		const text = getResultText(result);
 		expect(text).toContain("alpha line");
 		expect(text).not.toContain("beta line");
@@ -393,7 +393,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "Grep file contents with a regex across files",
-			paths: ["omp://"],
+			path: "omp://",
 		});
 
 		const text = getResultText(result);
@@ -407,7 +407,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "Read files, directories, archives",
-			paths: ["omp://docs"],
+			path: "omp://docs",
 		});
 
 		const text = getResultText(result);
@@ -419,7 +419,7 @@ describe("GrepTool internal URL resolution", () => {
 		const session = createSession();
 		const tool = new GrepTool(session);
 
-		expect(tool.execute("test-call", { pattern: "foo", paths: ["artifact://999"] })).rejects.toThrow(
+		expect(tool.execute("test-call", { pattern: "foo", path: "artifact://999" })).rejects.toThrow(
 			"Artifact 999 not found",
 		);
 	});
@@ -432,7 +432,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "hello",
-			paths: ["test.txt"],
+			path: "test.txt",
 		});
 
 		const text = getResultText(result);
@@ -447,7 +447,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "data",
-			paths: ["data.log"],
+			path: "data.log",
 		});
 
 		const text = getResultText(result);
@@ -463,7 +463,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "needle",
-			paths: ["artifact://9"],
+			path: "artifact://9",
 		});
 
 		const text = getResultText(result);
@@ -484,7 +484,7 @@ describe("GrepTool internal URL resolution", () => {
 		const tool = new GlobTool(session);
 
 		const result = await tool.execute("test-call", {
-			paths: ["local://PLAN.md"],
+			path: "local://PLAN.md",
 		});
 
 		const text = getResultText(result);
@@ -501,7 +501,7 @@ describe("GrepTool internal URL resolution", () => {
 		const session = createSession({ hasEditTool: true });
 		const readResult = await new ReadTool(session).execute("test-read", { path: "local://notes" });
 		const globResult = await new GlobTool(session).execute("test-find", {
-			paths: ["local://notes"],
+			path: "local://notes",
 		});
 		const dirResource = await InternalUrlRouter.instance().resolve("local://notes");
 
@@ -525,7 +525,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "needle",
-			paths: ["local://plan.md"],
+			path: "local://plan.md",
 		});
 
 		const text = getResultText(result);
@@ -574,7 +574,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "needle",
-			paths: ["artifact://11", "mixed.txt"],
+			path: "artifact://11; mixed.txt",
 		});
 
 		const text = getResultText(result);
@@ -588,7 +588,7 @@ describe("GrepTool internal URL resolution", () => {
 		const session = createSession();
 		const tool = new GrepTool(session);
 
-		expect(tool.execute("test-call", { pattern: "foo", paths: ["artifact://999"] })).rejects.toThrow(
+		expect(tool.execute("test-call", { pattern: "foo", path: "artifact://999" })).rejects.toThrow(
 			"Artifact 999 not found",
 		);
 	});
@@ -603,7 +603,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "needle",
-			paths: ["virtual://doc.md"],
+			path: "virtual://doc.md",
 		});
 
 		const text = getResultText(result);
@@ -623,7 +623,7 @@ describe("GrepTool internal URL resolution", () => {
 	it("matches an RE2 inline-flag pattern on a virtual resource (native dialect, not JS RegExp)", async () => {
 		registerVirtualDocs(new Map([["doc.md", "needle here\n"]]));
 		const tool = new GrepTool(createSession());
-		const result = await tool.execute("re2-virtual", { pattern: "(?i)NEEDLE", paths: ["virtual://doc.md"] });
+		const result = await tool.execute("re2-virtual", { pattern: "(?i)NEEDLE", path: "virtual://doc.md" });
 		expect(getResultText(result)).toContain("needle");
 	});
 
@@ -633,7 +633,7 @@ describe("GrepTool internal URL resolution", () => {
 		const tool = new GrepTool(createSession());
 		const result = await tool.execute("re2-mixed", {
 			pattern: "(?i)NEEDLE",
-			paths: [path.join(tmpDir, "local.txt"), "virtual://doc.md"],
+			path: `${path.join(tmpDir, "local.txt")}; virtual://doc.md`,
 		});
 		const text = getResultText(result);
 		expect(text).toContain("local");
@@ -649,7 +649,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "needle",
-			paths: ["."],
+			path: ".",
 			skip: 5,
 		});
 
@@ -670,7 +670,7 @@ describe("GrepTool internal URL resolution", () => {
 			},
 		});
 		const tool = new GrepTool(createSession());
-		await expect(tool.execute("dir-search", { pattern: "x", paths: ["dirstub://host/dir"] })).rejects.toThrow(
+		await expect(tool.execute("dir-search", { pattern: "x", path: "dirstub://host/dir" })).rejects.toThrow(
 			/directory listing|cannot recurse/,
 		);
 	});
@@ -686,7 +686,7 @@ describe("GrepTool internal URL resolution", () => {
 		vi.spyOn(sshFileTransfer, "statRemotePath").mockResolvedValue("directory");
 		const listSpy = vi.spyOn(sshFileTransfer, "listRemoteDir").mockResolvedValue([]);
 		const tool = new GrepTool(createSession());
-		await expect(tool.execute("ssh-dir-search", { pattern: "x", paths: ["ssh://h/etc"] })).rejects.toThrow(
+		await expect(tool.execute("ssh-dir-search", { pattern: "x", path: "ssh://h/etc" })).rejects.toThrow(
 			/grep cannot recurse the directory listing/,
 		);
 		expect(listSpy).not.toHaveBeenCalled();
@@ -705,7 +705,7 @@ describe("GrepTool internal URL resolution", () => {
 			truncated: false,
 		});
 		const tool = new GrepTool(createSession());
-		const result = await tool.execute("ssh-ipv6", { pattern: "needle", paths: ["ssh://[::1]/etc/hosts"] });
+		const result = await tool.execute("ssh-ipv6", { pattern: "needle", path: "ssh://[::1]/etc/hosts" });
 		expect(getResultText(result)).toContain("needle");
 	});
 });

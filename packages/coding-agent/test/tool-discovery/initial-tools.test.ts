@@ -15,6 +15,16 @@ import {
 	SshTool,
 } from "@oh-my-pi/pi-coding-agent/tools";
 
+const sessionId = "tool-discovery-test-session";
+const liveSessionManager: NonNullable<ToolSession["sessionManager"]> = {
+	appendCustomEntry: () => "context-entry",
+	ensureOnDisk: async () => {},
+	flush: async () => {},
+	getBranch: () => [],
+	getEntries: () => [],
+	getSessionId: () => sessionId,
+};
+
 const allToolsSettings = Settings.isolated({
 	"astGrep.enabled": true,
 	"astEdit.enabled": true,
@@ -27,6 +37,8 @@ const allToolsSettings = Settings.isolated({
 	"browser.enabled": true,
 	"checkpoint.enabled": true,
 	"todo.enabled": true,
+	"security.enabled": true,
+	"compaction.experimentalContextManagement": true,
 	"memory.backend": "mnemopi",
 	"autolearn.enabled": true,
 	"tools.discoveryMode": "all",
@@ -37,6 +49,8 @@ const toolSession: ToolSession = {
 	hasUI: false,
 	getSessionFile: () => null,
 	getSessionSpawns: () => null,
+	getSessionId: () => sessionId,
+	sessionManager: liveSessionManager,
 	settings: allToolsSettings,
 	isToolDiscoveryEnabled: () => true,
 	getSelectedDiscoveredToolNames: () => [],
@@ -105,12 +119,12 @@ describe("computeEssentialBuiltinNames", () => {
 
 	it("respects tools.essentialOverride when provided", () => {
 		const settings = Settings.isolated({ "tools.essentialOverride": ["read", "glob"] });
-		expect(computeEssentialBuiltinNames(settings).sort()).toEqual(["find", "read"]);
+		expect(computeEssentialBuiltinNames(settings).sort()).toEqual(["glob", "read"]);
 	});
 
 	it("maps legacy essential override tool names", () => {
 		const settings = Settings.isolated({ "tools.essentialOverride": ["read", "find", "search", "glob"] });
-		expect(computeEssentialBuiltinNames(settings).sort()).toEqual(["find", "read", "search"]);
+		expect(computeEssentialBuiltinNames(settings).sort()).toEqual(["glob", "grep", "read"]);
 	});
 
 	it("filters override entries that are not known built-in tools", () => {

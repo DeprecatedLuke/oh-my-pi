@@ -158,6 +158,8 @@ import { GoalRuntime } from "../goals/runtime";
 import type { GoalModeState } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
 import { type LocalProtocolOptions, resolveLocalUrlToPath } from "../internal-urls";
+import { type IssueSummary, listIssues } from "../issues";
+import type { DiscoverableTool } from "../tool-discovery/tool-index";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/hub";
 import type { DaemonCompletionNotification } from "../launch/protocol";
 import { shutdownMnemopiEmbedClient } from "../mnemopi/embed-client";
@@ -168,6 +170,7 @@ import { renderOrchestrateNotice } from "../modes/orchestrate";
 import { containsOrchestrate } from "@oh-my-pi/pi-tui/prompt/orchestrate";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { parseTurnBudget } from "../modes/turn-budget";
+import { ULTRASOLVE_NOTICE, containsUltrasolve } from "../modes/ultrasolve";
 import { ULTRATHINK_NOTICE } from "../modes/ultrathink";
 import { containsUltrathink } from "@oh-my-pi/pi-tui/prompt/ultrathink";
 import { computeNonMessageTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
@@ -675,6 +678,8 @@ export class AgentSession {
 	#planModeReminderCount = 0;
 	#planModeReminderAwaitingProgress = false;
 	readonly #todo: TodoTracker;
+	// In-progress issue reminder state (mirrors the todo reminder cap/reset).
+	#issuesReminderCount = 0;
 	readonly #modelMentions: ModelMentionRegistry;
 	#workPoolYieldItems: readonly WorkPoolYieldItem[] = [];
 	/** Item set matching the last successfully rebuilt provider prompt. The base
@@ -860,6 +865,7 @@ export class AgentSession {
 	#inFlightSettledCallbacks: Array<() => void | Promise<void>> = [];
 	#sessionStopContinuationCount = 0;
 	#sessionStopHookActive = false;
+	readonly #secretPlaceholderKeyDir: string | undefined;
 	#obfuscator: SecretObfuscator | undefined;
 	/** Session-start value of `inlineToolDescriptors`; drives handoff tool pruning. */
 	#pruneToolDescriptions = false;
@@ -1300,6 +1306,7 @@ export class AgentSession {
 		this.#codeModeState = config.codeModeState ?? {};
 		this.sessionManager = config.sessionManager;
 		this.settings = config.settings;
+		this.#secretPlaceholderKeyDir = config.secretPlaceholderKeyDir;
 		this.memoryEnabled = config.memoryEnabled ?? true;
 		this.#modelRegistry = config.modelRegistry;
 		this.#extensionRoots =
@@ -1724,7 +1731,7 @@ export class AgentSession {
 			onPayload: this.#onPayload,
 			onResponse: this.#onResponse,
 			onSseEvent: this.#onSseEvent,
-			obfuscator: this.#obfuscator,
+			getObfuscator: () => this.#obfuscator,
 		};
 		this.#providerBoundary = new SessionProviderBoundary(providerBoundaryHost);
 		const streamGuardsHost: StreamGuardsHost = {
@@ -1839,7 +1846,7 @@ export class AgentSession {
 			settings: this.settings,
 			modelRegistry: this.#modelRegistry,
 			yieldQueue: this.yieldQueue,
-			obfuscator: this.#obfuscator,
+			getObfuscator: () => this.#obfuscator,
 			providerSessionState: this.#providerSessionState,
 			preferWebsockets: this.#preferWebsockets,
 			onPayload: this.#onPayload,
@@ -1992,7 +1999,7 @@ export class AgentSession {
 			settings: this.settings,
 			modelRegistry: this.#modelRegistry,
 			sideStreamFn: this.#sideStreamFn,
-			obfuscator: this.#obfuscator,
+			getObfuscator: () => this.#obfuscator,
 			model: () => this.model,
 			thinkingLevel: () => this.thinkingLevel,
 			sessionId: () => this.sessionId,
@@ -2242,6 +2249,11 @@ export class AgentSession {
 		return this.#obfuscator;
 	}
 
+	/** Swap the active secret obfuscator so newly managed patterns apply immediately. */
+	setObfuscator(obfuscator: SecretObfuscator | undefined): void {
+		this.#obfuscator = obfuscator;
+	}
+
 	/** Whether a TTSR abort is pending (stream was aborted to inject rules) */
 	get isTtsrAbortPending(): boolean {
 		return this.#ttsr.abortPending;
@@ -2277,6 +2289,7 @@ export class AgentSession {
 			status: job.status,
 			label: job.label,
 			startTime: job.startTime,
+			agentType: job.agentType,
 			agentId: job.agentId,
 		}));
 		const recent = manager.getRecentJobs(options?.recentLimit ?? 5, ownerFilter).map(job => ({
@@ -2285,6 +2298,7 @@ export class AgentSession {
 			status: job.status,
 			label: job.label,
 			startTime: job.startTime,
+			agentType: job.agentType,
 			agentId: job.agentId,
 		}));
 		const delivery = manager.getDeliveryState(ownerFilter);
@@ -2358,6 +2372,14 @@ export class AgentSession {
 	 */
 	hasPendingAsyncWork(): boolean {
 		return this.#hasPendingAsyncWake();
+	}
+
+	/** True while this session has running background jobs or undelivered results. */
+	hasPendingBackgroundJobs(): boolean {
+		const manager = this.#asyncJobManager;
+		if (!manager) return false;
+		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
+		return manager.getRunningJobs(ownerFilter).length > 0 || manager.hasPendingDeliveries(ownerFilter);
 	}
 
 	/** True while a submission has been admitted but has not yet started a turn, queued, or bailed. */
@@ -3778,6 +3800,11 @@ export class AgentSession {
 					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
+				const issueContinuationScheduled = await this.#checkInProgressIssues();
+				if (issueContinuationScheduled) {
+					await emitAgentEndNotification({ willContinue: true });
+					return;
+				}
 			}
 			// A pending async wake means this settle is a scheduling pause, not
 			// the terminal stop: the async-result delivery continues the loop and
@@ -3792,6 +3819,71 @@ export class AgentSession {
 			await emitAgentEndNotification(sessionStopWillContinue ? { willContinue: true } : undefined);
 		}
 	};
+
+	/**
+	 * Check whether the agent is ending its turn while issues are still marked
+	 * `in-progress` and, if so, append a reminder and schedule a continue.
+	 *
+	 * Background work re-wakes the session with its own follow-up, so reminders
+	 * are withheld while jobs or their deliveries are still pending. The
+	 * per-prompt cap prevents an unchanged issue from causing an infinite loop.
+	 */
+	async #checkInProgressIssues(): Promise<boolean> {
+		if (this.settings.get("issues.enabled") === false) return false;
+		if (!this.settings.get("issues.reminders")) {
+			this.#issuesReminderCount = 0;
+			return false;
+		}
+		if (this.hasPendingBackgroundJobs()) return false;
+
+		const remindersMax = this.settings.get("issues.reminders.max");
+		if (this.#issuesReminderCount >= remindersMax) {
+			logger.debug("Issues reminder: max reminders reached", { count: this.#issuesReminderCount });
+			return false;
+		}
+
+		let inProgress: IssueSummary[];
+		try {
+			inProgress = await listIssues(this.sessionManager.getCwd(), {
+				status: "in-progress",
+				archived: false,
+			});
+		} catch (error) {
+			logger.debug("Issues reminder: listIssues failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+			return false;
+		}
+		if (inProgress.length === 0) {
+			this.#issuesReminderCount = 0;
+			return false;
+		}
+
+		this.#issuesReminderCount++;
+		const issueList = inProgress.map(issue => `- #${issue.id} ${issue.title} (${issue.category})`).join("\n");
+		const reminder =
+			`<system-reminder>\n` +
+			`You are ending the turn with ${inProgress.length} issue(s) still marked in-progress:\n${issueList}\n\n` +
+			`Finish the work and set each to fixed (or archive it), or — if it is not actively being worked on — set it back to open via the \`issues\` tool.\n` +
+			`(Reminder ${this.#issuesReminderCount}/${remindersMax})\n` +
+			`</system-reminder>`;
+
+		logger.debug("Issues reminder: sending reminder", {
+			inProgress: inProgress.length,
+			attempt: this.#issuesReminderCount,
+		});
+
+		const reminderMessage: Message = {
+			role: "developer",
+			content: [{ type: "text", text: reminder }],
+			attribution: "agent",
+			timestamp: Date.now(),
+		};
+		this.agent.appendMessage(reminderMessage);
+		this.sessionManager.appendMessage(reminderMessage);
+		this.#scheduleAgentContinue({ source: "issues-reminder", generation: this.#promptGeneration });
+		return true;
+	}
 
 	#ensurePostPromptTasksPromise(): void {
 		if (this.#postPromptTasksPromise) return;
@@ -5504,6 +5596,22 @@ export class AgentSession {
 	getSelectedMCPToolNames(): string[] {
 		return this.#tools.getSelectedMCPToolNames();
 	}
+	/** Discoverable, inactive tools available to legacy BM25 search callers. */
+	getDiscoverableTools(filter?: { source?: DiscoverableTool["source"] }): DiscoverableTool[] {
+		return this.#tools.getDiscoverableTools(filter);
+	}
+
+	getDiscoverableToolSearchIndex() {
+		return this.#tools.getDiscoverableToolSearchIndex();
+	}
+
+	getSelectedDiscoveredToolNames(): string[] {
+		return this.#tools.getSelectedDiscoveredToolNames();
+	}
+
+	activateDiscoveredTools(toolNames: string[]): Promise<string[]> {
+		return this.#tools.activateDiscoveredTools(toolNames);
+	}
 
 	/** Rediscovers reloadable skills and refreshes prompt metadata. */
 	refreshSkills(): Promise<void> {
@@ -5715,6 +5823,21 @@ export class AgentSession {
 		return this.#providerBoundary.convertToLlmForSideRequest(messages);
 	}
 
+	/**
+	 * Build a provider-format side-request context with the session's current
+	 * secret obfuscation applied. Used by `/fix-refusal` to reproduce the refused turn.
+	 */
+	async buildSideRequestContext(messages: AgentMessage[]): Promise<{ systemPrompt: string[]; messages: Message[] }> {
+		const systemPrompt = this.#obfuscator?.hasSecrets()
+			? this.#obfuscator.obfuscateObject(this.systemPrompt)
+			: this.systemPrompt;
+		const llmMessages = this.#convertToLlmForSideRequest(messages);
+		const context = await this.agent.buildSideRequestContext(llmMessages, systemPrompt);
+		return {
+			systemPrompt: context.systemPrompt ?? systemPrompt,
+			messages: context.messages,
+		};
+	}
 	/** Convert session messages using the same pre-LLM pipeline as the active session. */
 	async convertMessagesToLlm(messages: AgentMessage[], signal?: AbortSignal): Promise<Message[]> {
 		return await this.#providerBoundary.convertMessagesToLlm(messages, signal);
@@ -5754,6 +5877,10 @@ export class AgentSession {
 	}
 	getEvalKernelOwnerId(): string {
 		return this.#eval.getKernelOwnerId();
+	}
+
+	getSecretPlaceholderKeyDir(): string | undefined {
+		return this.#secretPlaceholderKeyDir;
 	}
 
 	/** Current session display name, if set */
@@ -6230,7 +6357,7 @@ export class AgentSession {
 		return this.#providerBoundary.normalizeAgentMessageImages(message);
 	}
 
-	#magicKeywordEnabled(keyword: "orchestrate" | "ultrathink" | "workflow" | "jevify"): boolean {
+	#magicKeywordEnabled(keyword: "orchestrate" | "ultrasolve" | "ultrathink" | "workflow" | "jevify"): boolean {
 		return this.settings.get("magicKeywords.enabled") && this.settings.get(`magicKeywords.${keyword}`);
 	}
 
@@ -6239,7 +6366,18 @@ export class AgentSession {
 		const turnBudget = parseTurnBudget(text);
 		this.sessionManager.beginTurnBudget(turnBudget?.total ?? null, turnBudget?.hard ?? false);
 		const keywordNotices: CustomMessage[] = [];
-		if (this.#magicKeywordEnabled("ultrathink") && containsUltrathink(text)) {
+		const ultrasolveActive = this.#magicKeywordEnabled("ultrasolve") && containsUltrasolve(text);
+		const ultrathinkActive = this.#magicKeywordEnabled("ultrathink") && containsUltrathink(text);
+		if (ultrasolveActive) {
+			keywordNotices.push({
+				role: "custom",
+				customType: "ultrasolve-notice",
+				content: ULTRASOLVE_NOTICE,
+				display: false,
+				attribution: "user",
+				timestamp,
+			});
+		} else if (ultrathinkActive) {
 			keywordNotices.push({
 				role: "custom",
 				customType: "ultrathink-notice",
@@ -6377,7 +6515,7 @@ export class AgentSession {
 		const templated = expandPromptTemplates ? expandPromptTemplate(text, [...this.#promptTemplates]) : text;
 		const expandedText = options?.synthetic ? templated : this.#modelMentions.expandMentions(templated);
 
-		// Magic keywords ("ultrathink", "orchestrate", "workflowz", "jevify"): append hidden system notices after the
+		// Magic keywords ("ultrathink", "ultrasolve", "orchestrate", "workflowz", "jevify"): append hidden system notices after the
 		// user's message that steer this turn. User-authored prompts only — synthetic /
 		// agent-initiated turns never trigger them.
 		const keywordNotices = options?.synthetic ? [] : this.#createMagicKeywordNotices(expandedText);
@@ -6813,6 +6951,7 @@ export class AgentSession {
 			this.#irc.flushPending();
 
 			this.#todo.resetCycle();
+			this.#issuesReminderCount = 0;
 			this.#resetPromptMaintenanceState();
 			this.#recovery.setAcceptTerminalEmptyStop(options?.acceptTerminalEmptyStop === true);
 
@@ -8390,6 +8529,7 @@ export class AgentSession {
 			this.sessionManager.appendServiceTierChange(this.#models.serviceTierEntry());
 
 			this.#todo.resetCycle();
+			this.#issuesReminderCount = 0;
 			this.#planReferenceSent = false;
 			this.#planReferencePath = "local://PLAN.md";
 			this.#advisors.resetSessionState();

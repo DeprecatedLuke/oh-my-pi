@@ -16,12 +16,12 @@ import { prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import * as z from "zod/v4";
 import type { AddIssueInput, IssueRecord, IssueSeverity, IssueStatus, IssueSummary } from "../issues";
 import { addIssue, archiveIssue, listIssues, normalizeCategory, renderIssueListing, unarchiveIssue } from "../issues";
-import type { Theme } from "../modes/theme/theme";
+import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import issuesDescription from "../prompts/tools/issues.md" with { type: "text" };
 import { subprocessToolRegistry } from "../task/subprocess-tool-registry";
 import type { ToolSession } from "./index";
-import type { OutputMeta } from "./output-meta";
-import { ToolError } from "./tool-errors";
+import type { OutputMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { toolResult } from "./tool-result";
 
 const severityEnum = z.enum(["low", "medium", "high", "critical"]);

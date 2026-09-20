@@ -5,10 +5,17 @@ import { Text } from "@oh-my-pi/pi-tui";
 import { prompt } from "@oh-my-pi/pi-utils";
 import type { AsyncJob, AsyncJobManager, AsyncJobType } from "../async";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { shimmerEnabled, shimmerText } from "../modes/theme/shimmer";
-import type { Theme } from "../modes/theme/theme";
+import { shimmerEnabled, shimmerText } from "@oh-my-pi/pi-tui/theme/shimmer";
+import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import jobDescription from "../prompts/tools/job.md" with { type: "text" };
-import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
+import {
+	Ellipsis,
+	Hasher,
+	type RenderCache,
+	renderStatusLine,
+	renderTreeList,
+	truncateToWidth,
+} from "@oh-my-pi/pi-tui/render";
 import type { ToolSession } from "./index";
 import {
 	formatBadge,
@@ -20,8 +27,8 @@ import {
 	replaceTabs,
 	type ToolUIColor,
 	type ToolUIStatus,
-} from "./render-utils";
-import { ToolError } from "./tool-errors";
+} from "@oh-my-pi/pi-tui/render/render-utils";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 
 const jobSchema = type({
 	"cancel?": type("string[]").describe("job ids to cancel"),

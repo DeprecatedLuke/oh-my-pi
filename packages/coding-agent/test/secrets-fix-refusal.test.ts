@@ -10,7 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage, Context, Message, Model } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import {
 	classifierRefusalText,
 	dropRedundantlyCoveredPatterns,

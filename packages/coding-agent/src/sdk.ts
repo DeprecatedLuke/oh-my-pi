@@ -139,6 +139,8 @@ import { resolveMCPToolAlias } from "./mcp/tool-bridge";
 import { createSessionMemoryRuntimeContext, resolveMemoryBackend } from "./memory-backend";
 import { MEMORY_BACKEND_TOOL_NAMES } from "./memory-backend/tool-names";
 import type { MnemopiSessionState } from "./mnemopi/state";
+import { countToolsForAutoDiscovery, resolveEffectiveToolDiscoveryMode } from "./tool-discovery/mode";
+import type { DiscoverableTool } from "./tool-discovery/tool-index";
 import mcpXdevGuidanceTemplate from "./prompts/system/mcp-xdev-guidance.md" with { type: "text" };
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
@@ -215,8 +217,10 @@ import {
 	EditTool,
 	EvalTool,
 	GlobTool,
+	computeEssentialBuiltinNames,
 	GrepTool,
 	HIDDEN_TOOLS,
+	filterInitialToolsForDiscoveryAll,
 	isMountableUnderXdev,
 	type LspStartupServerInfo,
 	listXdevTools,
@@ -224,6 +228,7 @@ import {
 	ReadTool,
 	releaseComputerSessionsForOwner,
 	resolveMountedXdevExecutable,
+	SearchToolBm25Tool,
 	supportsExternalThinking,
 	type Tool,
 	type ToolSession,
@@ -748,6 +753,8 @@ export {
 	WebSearchTool,
 	WriteTool,
 };
+export { DEFAULT_ESSENTIAL_TOOL_NAMES, computeEssentialBuiltinNames, filterInitialToolsForDiscoveryAll } from "./tools";
+export type { BuiltinToolLoadMode } from "./tools";
 
 // Helper Functions
 
@@ -1885,6 +1892,22 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getMnemopiSessionState: () => session?.getMnemopiSessionState(),
 			getAgentId: () => resolvedAgentId,
 			getToolByName: name => session?.getToolByName(name),
+			isToolDiscoveryEnabled: () =>
+				resolveEffectiveToolDiscoveryMode(settings, countToolsForAutoDiscovery(toolRegistry.keys())) !== "off",
+			isMCPDiscoveryEnabled: () =>
+				resolveEffectiveToolDiscoveryMode(settings, countToolsForAutoDiscovery(toolRegistry.keys())) === "mcp-only",
+			getSelectedMCPToolNames: () => session?.getSelectedMCPToolNames() ?? [],
+			activateDiscoveredMCPTools: toolNames => session?.activateDiscoveredTools(toolNames) ?? Promise.resolve([]),
+			getDiscoverableTools: (filter?: { source?: DiscoverableTool["source"] }) =>
+				session?.getDiscoverableTools(filter) ?? [],
+			getDiscoverableToolSearchIndex: () =>
+				session?.getDiscoverableToolSearchIndex() ?? {
+					documents: [],
+					averageLength: 0,
+					documentFrequencies: new Map(),
+				},
+			getSelectedDiscoveredToolNames: () => session?.getSelectedDiscoveredToolNames() ?? [],
+			activateDiscoveredTools: toolNames => session?.activateDiscoveredTools(toolNames) ?? Promise.resolve([]),
 			getToolForEvalBridge: name => session?.getToolForEvalBridge(name),
 			getEvalBridgeToolNames: () => session?.getEvalBridgeToolNames() ?? [],
 			getCodeModeDirectToolNames: () => session?.getCodeModeDirectToolNames(),
@@ -2927,6 +2950,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const wrappedExtensionTools: Tool[] = deduplicateMCPToolsByName(
 			wrapRegisteredTools(allCustomTools, extensionRunner).map(wrapToolWithMetaNotice),
 		);
+		// Auto mode decides against the complete startup catalog, including MCP and
+		// extension tools loaded after the initial built-in pass.
+		const discoveryMode = resolveEffectiveToolDiscoveryMode(
+			settings,
+			countToolsForAutoDiscovery([...toolRegistry.keys(), ...wrappedExtensionTools.map(tool => tool.name)]),
+		);
+		if (!restrictToolNames && discoveryMode !== "off" && !toolRegistry.has("search_tool_bm25")) {
+			const searchTool = new SearchToolBm25Tool(toolSession);
+			toolRegistry.set(searchTool.name, wrapToolWithMetaNotice(searchTool));
+		}
+
 		const initialMcpManagerToolNames = new Set<string>();
 		for (const tool of wrappedExtensionTools) {
 			const originKey = getMCPToolOriginKey(tool);
@@ -3419,6 +3453,23 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			? requestedActiveToolNames
 			: requestedActiveToolNames.filter(name => !defaultInactiveToolNames.has(name));
 		let initialToolNames = [...initialRequestedActiveToolNames];
+
+		if (discoveryMode === "all") {
+			const forceActive = new Set<string>();
+			if (settings.get("todo.eager") !== "default" && settings.get("todo.enabled") && toolRegistry.has("todo")) {
+				forceActive.add("todo");
+			}
+			if (settings.get("task.eager") !== "default" && toolRegistry.has("task")) {
+				forceActive.add("task");
+			}
+			initialToolNames = filterInitialToolsForDiscoveryAll(initialToolNames, {
+				loadModeOf: name => toolRegistry.get(name)?.loadMode as "essential" | "discoverable" | undefined,
+				essentialNames: new Set(computeEssentialBuiltinNames(settings)),
+				explicitlyRequested: new Set(options.toolNames ? normalizeToolNames(options.toolNames) : []),
+				restored: new Set(session?.getSelectedDiscoveredToolNames() ?? []),
+				forceActive,
+			});
+		}
 
 		// Custom tools and extension-registered tools are always included
 		// unless the effective registry winner is hidden / defaultInactive. Restricted callers own the list.

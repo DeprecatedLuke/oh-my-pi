@@ -68,15 +68,15 @@ import { wrapToolWithMetaNotice } from "./output-meta";
 import { PatchTool } from "./patch";
 import { ReadTool } from "./read";
 import type { PlanProposalHandler } from "./resolve";
-import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { SecurityScanTool } from "./security-scan";
-import { loadSshTool } from "./ssh";
 import { supportsExternalThinking, ThinkTool } from "./think";
 import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TodoTool } from "./todo";
 import { WriteTool } from "./write";
 import { isMountableUnderXdev, type XdevState } from "./xdev";
+import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { YieldTool } from "./yield";
+import { loadSshTool } from "./ssh";
 
 export * from "../edit";
 export * from "../goals";
@@ -105,9 +105,9 @@ export * from "./eval";
 export * from "./eval-backends";
 export * from "./file-write-fallback";
 export * from "./gh";
-export * from "./git";
 export * from "./glob";
 export * from "./grep";
+export * from "./git";
 export * from "./hub";
 export type {
 	HubOp,
@@ -144,7 +144,7 @@ export type {
 	FindingDetails,
 	SubmitReviewDetails,
 } from "@oh-my-pi/pi-tui/tools/task";
-export * from "./ssh";
+export * from "./search-tool-bm25";
 export * from "./security-scan";
 export * from "./think";
 export * from "./todo";
@@ -152,6 +152,7 @@ export * from "./tts";
 export * from "./vibe";
 export type { VibeToolDetails } from "@oh-my-pi/pi-tui/tools/vibe";
 export * from "./write";
+export * from "./ssh";
 export * from "./xdev";
 export * from "./yield";
 
@@ -448,13 +449,11 @@ export interface ToolSession {
 	/** Replace the active workpool item contract and refresh its provider-facing prompt. */
 	setWorkPoolYieldItems?: (items: readonly WorkPoolYieldItem[]) => Promise<void>;
 	/** The tool-choice queue used to force forthcoming tool invocations and carry invocation handlers. */
-	getToolChoiceQueue?(): ToolChoiceQueue;
 	/** Whether legacy/generic tool discovery is active for this session. */
 	isToolDiscoveryEnabled?: () => boolean;
-	/** Names selected by prior discovery calls. */
 	/** Whether legacy MCP-only discovery is active for this session. */
 	isMCPDiscoveryEnabled?: () => boolean;
-	/** MCP tool names selected by prior discovery calls. */
+	/** Names selected by prior discovery calls. */
 	getSelectedMCPToolNames?: () => string[];
 	/** Activate MCP tools and return names accepted by the session. */
 	activateDiscoveredMCPTools?: (toolNames: string[]) => Promise<string[]>;
@@ -465,6 +464,7 @@ export interface ToolSession {
 	getSelectedDiscoveredToolNames?: () => string[];
 	/** Activate discovered tools and return the names accepted by the session. */
 	activateDiscoveredTools?: (toolNames: string[]) => Promise<string[]>;
+	getToolChoiceQueue?(): ToolChoiceQueue;
 	/** Build a model-provider-specific ToolChoice that targets the named tool, or undefined if unsupported. */
 	buildToolChoice?(toolName: string): ToolChoice | undefined;
 	/** Steer a hidden custom message into the conversation (e.g. a preview reminder). */
@@ -527,9 +527,56 @@ export interface ToolSession {
 	/** Return image attachments visible to tools for resolving labels such as `Image #1`. */
 	getImageAttachments?: () => ImageAttachmentEntry[];
 }
+export type BuiltinToolLoadMode = "essential" | "discoverable";
+
+/** Default essential names retained by the current tool presentation contract. */
+export const DEFAULT_ESSENTIAL_TOOL_NAMES: readonly string[] = [
+	"read",
+	"bash",
+	"edit",
+	"write",
+	"glob",
+	"eval",
+	"task",
+	"hub",
+	"learn",
+	"manage_skill",
+	"context_notes",
+	"new_context",
+] as const;
+
+/** Resolve the active essential built-in names from the compatibility override. */
+export function computeEssentialBuiltinNames(settings: Settings): string[] {
+	const override = settings.get("tools.essentialOverride") ?? [];
+	const cleaned = normalizeToolNames(override.map(name => name.trim()).filter(Boolean));
+	if (cleaned.length > 0) return cleaned.filter(name => name in BUILTIN_TOOLS);
+	return [...DEFAULT_ESSENTIAL_TOOL_NAMES];
+}
+
+/** Hide discoverable built-ins on initial load while preserving explicit contracts. */
+export function filterInitialToolsForDiscoveryAll(
+	initialToolNames: string[],
+	opts: {
+		loadModeOf: (name: string) => BuiltinToolLoadMode | undefined;
+		essentialNames: ReadonlySet<string>;
+		explicitlyRequested: ReadonlySet<string>;
+		restored: ReadonlySet<string>;
+		forceActive: ReadonlySet<string>;
+	},
+): string[] {
+	return initialToolNames.filter(name => {
+		const loadMode = opts.loadModeOf(name);
+		if (!loadMode || loadMode === "essential") return true;
+		return (
+			opts.essentialNames.has(name) ||
+			opts.explicitlyRequested.has(name) ||
+			opts.restored.has(name) ||
+			opts.forceActive.has(name)
+		);
+	});
+}
 
 export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
-
 
 /**
  * Public callable factory map. External callers may invoke `BUILTIN_TOOLS.read(session)` or
@@ -539,37 +586,37 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	read: s => new ReadTool(s),
 	security_scan: s => new SecurityScanTool(s),
 	bash: s => new BashTool(s),
+	launch: s => new LaunchTool(s),
 	edit: s => new EditTool(s),
 	ast_grep: s => new AstGrepTool(s),
 	ast_edit: s => new AstEditTool(s),
 	ask: AskTool.createIf,
 	debug: DebugTool.createIf,
 	eval: s => new EvalTool(s),
-	launch: s => new LaunchTool(s),
 	github: GithubTool.createIf,
-	glob: s => new GlobTool(s),
+	glob: s => new GlobTool(s, { rootPathAlias: true }),
 	grep: s => new GrepTool(s),
 	lsp: LspTool.createIf,
+	git: GitTool.createIf,
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
 	ssh: loadSshTool,
-	git: GitTool.createIf,
 	patch: PatchTool.createIf,
 	context_notes: ContextNotesTool.createIf,
 	new_context: NewContextTool.createIf,
 	task: s => TaskTool.create(s),
-	hub: s => new HubTool(s),
-	todo: s => new TodoTool(s),
-	web_search: s => new WebSearchTool(s),
 	job: s => new JobTool(s),
 	irc: IrcTool.createIf,
 	issues: IssuesTool.createIf,
+	hub: s => new HubTool(s),
+	todo: s => new TodoTool(s),
+	web_search: s => new WebSearchTool(s),
+	search_tool_bm25: SearchToolBm25Tool.createIf,
 	write: s => new WriteTool(s),
 	memory_edit: MemoryEditTool.createIf,
 	retain: MemoryRetainTool.createIf,
 	recall: MemoryRecallTool.createIf,
 	reflect: MemoryReflectTool.createIf,
-	search_tool_bm25: SearchToolBm25Tool.createIf,
 	learn: LearnTool.createIf,
 	manage_skill: ManageSkillTool.createIf,
 };

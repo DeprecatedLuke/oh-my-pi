@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import { taskToolRenderer } from "@oh-my-pi/pi-coding-agent/task/renderer";
-import type { SingleResult, TaskToolDetails } from "@oh-my-pi/pi-coding-agent/task/types";
+import { getThemeByName, setThemeInstance, type Theme } from "@oh-my-pi/pi-tui/theme";
+import { taskToolRenderer, type SingleResult, type TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
 
 // The reviewer agent files findings through the `issues` tool (`op: add`), not
 // `report_finding`. The subprocess registry captures each add into

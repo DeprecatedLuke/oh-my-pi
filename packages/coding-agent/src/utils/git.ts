@@ -11,7 +11,8 @@ import {
 } from "../commit/git/diff";
 import type { FileDiff, FileHunks, NumstatEntry } from "../commit/types";
 import { REJECT_PROMPT_COMMAND } from "../exec/non-interactive-env";
-import { ToolAbortError, ToolError, throwIfAborted } from "../tools/tool-errors";
+import { ToolAbortError, throwIfAborted } from "../tools/tool-errors";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 
 // ════════════════════════════════════════════════════════════════════════════
 // Types

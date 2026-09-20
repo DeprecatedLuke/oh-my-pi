@@ -51,14 +51,10 @@ import {
 import { generateTaskName } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
 import { resolveSpawnPolicy } from "./spawn-policy";
-import {
-	type AgentDefinition,
-	type AgentProgress,
-	canSpawnAtDepth,
-	type SingleResult,
-	type TaskPatchSummary,
-} from "./types";
+import { type AgentDefinition, canSpawnAtDepth, type TaskPatchResultMetadata, type TaskPatchSummary } from "./types";
 import type {
+	AgentProgress,
+	SingleResult,
 	StructuredSubagentOutput,
 	StructuredSubagentSchemaMode,
 	StructuredSubagentSchemaSource,
@@ -173,10 +169,12 @@ export interface StructuredSubagentResult {
 	policy: EffectiveSubagentPolicy;
 	mergeSummary: string;
 	changesApplied: boolean | null;
+	patches?: TaskPatchSummary[];
+	recoveryCaptureStatus?: TaskPatchResultMetadata["recoveryCaptureStatus"];
+	recoveryCaptureError?: string;
 	artifactsDir: string;
 	temporaryArtifacts: boolean;
 }
-
 /** Machine-readable failure category so adapters can retain their native errors. */
 export class StructuredSubagentError extends Error {
 	readonly kind: "preflight" | "isolation" | "execution";
@@ -550,6 +548,9 @@ function nativePatchSummary(
 		recovery: options.recovery,
 	};
 }
+type NativePatchSubprocessResult = {
+	result: SingleResult;
+} & TaskPatchResultMetadata;
 
 async function runNativePatchSubprocess(
 	request: StructuredSubagentRequest,
@@ -557,7 +558,7 @@ async function runNativePatchSubprocess(
 	baseOptions: ExecutorOptions,
 	isolationContext: IsolationContext,
 	id: string,
-): Promise<SingleResult> {
+): Promise<NativePatchSubprocessResult> {
 	const preferredBackend = parseIsolationBackend(request.session.settings.get("isolation.backend"));
 	const discovered = await detectGitRepos(request.session.cwd);
 	const targets = buildNativePatchTargets(request.session.cwd, isolationContext.repoRoot, discovered?.repos ?? null);
@@ -597,7 +598,7 @@ async function runNativePatchSubprocess(
 			const summaries: TaskPatchSummary[] = [];
 			const failures: string[] = [];
 			const recovery = result.aborted === true || result.exitCode !== 0 || result.error !== undefined;
-			let recoveryCaptureStatus: SingleResult["recoveryCaptureStatus"] = recovery ? "empty" : undefined;
+			let recoveryCaptureStatus: TaskPatchResultMetadata["recoveryCaptureStatus"] = recovery ? "empty" : undefined;
 			for (const target of targets) {
 				const baselineRoot = target.relativePath
 					? path.join(baselineHandle.mergedDir, target.relativePath)
@@ -676,13 +677,15 @@ async function runNativePatchSubprocess(
 					? [result.error, ...failures].filter(Boolean).join("; ")
 					: result.error;
 			return {
-				...result,
+				result: {
+					...result,
+					...(error ? { error } : {}),
+				},
 				patches: summaries.length > 0 ? summaries : undefined,
 				recoveryCaptureStatus,
 				...(recoveryCaptureStatus === "failed"
 					? { recoveryCaptureError: failures.join("; ") || "native recovery capture failed" }
 					: {}),
-				...(error ? { error } : {}),
 			};
 		} finally {
 			await cleanupIsolation(childHandle);
@@ -691,8 +694,8 @@ async function runNativePatchSubprocess(
 		await cleanupIsolation(baselineHandle);
 	}
 }
-function buildNativePatchMergeSummary(result: SingleResult): string {
-	const patches = result.patches ?? [];
+function buildNativePatchMergeSummary(result: SingleResult, metadata: TaskPatchResultMetadata): string {
+	const patches = metadata.patches ?? [];
 	let summary = "";
 	const applied = patches.filter(patch => patch.status === "applied" && !patch.recovery);
 	if (applied.length > 0) {
@@ -726,13 +729,13 @@ function buildNativePatchMergeSummary(result: SingleResult): string {
 		const plural = recovered.length === 1 ? "" : "es";
 		summary += `\n\n<system-notification>${recovered.length} recovery patch${plural} preserved ${recoveryVerb} task edits in the durable native patch store.\n\nRecovery patches:\n${recovered.map(patch => `- ${recoveryLabel}: ${patch.repoLabel}: ${patch.uri}`).join("\n")}\n\nUse the \`patch\` tool to inspect/apply, or edit patch:// files and reapply.</system-notification>`;
 	}
-	if (result.recoveryCaptureStatus === "empty") {
+	if (metadata.recoveryCaptureStatus === "empty") {
 		const recoveryLabel = result.description ? `${result.id} — ${result.description}` : result.id;
 		summary += `\n\n<system-notification>${recoveryTitle} task ${recoveryLabel} had no recovery patch because recovery capture found no file changes in the isolated worktree. Restart from the original assignment instead of searching session artifact directories for a missing patch.</system-notification>`;
 	}
-	if (result.recoveryCaptureStatus === "failed") {
+	if (metadata.recoveryCaptureStatus === "failed") {
 		const recoveryLabel = result.description ? `${result.id} — ${result.description}` : result.id;
-		const detail = result.recoveryCaptureError ? ` Error: ${result.recoveryCaptureError}` : "";
+		const detail = metadata.recoveryCaptureError ? ` Error: ${metadata.recoveryCaptureError}` : "";
 		summary += `\n\n<system-notification>Recovery capture failed for ${recoveryVerb} task ${recoveryLabel}. The isolation worktree was torn down and no reliable native patch was written. Restart from the original assignment or inspect the logged recovery error if the work should have produced a delta.${detail}</system-notification>`;
 	}
 	return summary.trimStart() || "No changes to apply.";
@@ -888,9 +891,13 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			}
 		}
 		const nativePatchMode = policy.isIsolated && policy.mergeMode === "patch-tool";
+		let nativePatchMetadata: TaskPatchResultMetadata | undefined;
 		let result: SingleResult;
 		if (nativePatchMode && isolationContext) {
-			result = await runNativePatchSubprocess(request, policy, baseOptions, isolationContext, id);
+			const native = await runNativePatchSubprocess(request, policy, baseOptions, isolationContext, id);
+			nativePatchMetadata = native;
+			result = native.result;
+			onSubprocessResult?.(result);
 		} else if (!isolationContext) {
 			result = await runSubprocess(baseOptions);
 			onSubprocessResult?.(result);
@@ -910,19 +917,19 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 		}
 		attachStructuredOutputMetadata(result, policy.schema);
 		hasValidStructuredOutput = result.structuredOutput?.status === "valid";
+		const nativePatches = nativePatchMetadata?.patches ?? [];
 		requiresRecoveryArtifacts =
 			policy.isIsolated &&
 			(result.exitCode !== 0 || result.error !== undefined || result.aborted === true) &&
 			(result.patchPath !== undefined ||
 				result.branchName !== undefined ||
 				(result.nestedPatches?.length ?? 0) > 0 ||
-				(result.patches?.length ?? 0) > 0 ||
-				result.recoveryCaptureStatus === "failed");
+				nativePatches.length > 0 ||
+				nativePatchMetadata?.recoveryCaptureStatus === "failed");
 
-		if (nativePatchMode) {
-			const patches = result.patches ?? [];
-			changesApplied = patches.length === 0 ? null : !!patches.some(patch => patch.status === "applied");
-			mergeSummary = buildNativePatchMergeSummary(result);
+		if (nativePatchMode && nativePatchMetadata) {
+			changesApplied = nativePatches.length === 0 ? null : !!nativePatches.some(patch => patch.status === "applied");
+			mergeSummary = buildNativePatchMergeSummary(result, nativePatchMetadata);
 		}
 		if (
 			!nativePatchMode &&
@@ -973,13 +980,20 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 		} else if (!nativePatchMode && policy.isIsolated && isolationContext && !policy.applyChanges) {
 			mergeSummary = describeCapturedChanges(result);
 		}
-
 		completedSuccessfully = result.exitCode === 0 && !result.error && !result.aborted;
+
 		return {
 			result,
 			policy,
 			mergeSummary,
 			changesApplied,
+			...(nativePatchMetadata
+				? {
+						patches: nativePatchMetadata.patches,
+						recoveryCaptureStatus: nativePatchMetadata.recoveryCaptureStatus,
+						recoveryCaptureError: nativePatchMetadata.recoveryCaptureError,
+					}
+				: {}),
 			artifactsDir: lease.artifactsDir,
 			temporaryArtifacts: lease.temporary,
 		};

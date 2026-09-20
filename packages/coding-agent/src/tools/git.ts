@@ -7,8 +7,8 @@ import gitDescription from "../prompts/tools/git.md" with { type: "text" };
 import { type CommitDirtyRepoEntry, commitDirtyRepos } from "../task/auto-commit";
 import * as git from "../utils/git";
 import type { ToolSession } from "./index";
-import type { OutputMeta } from "./output-meta";
-import { ToolError } from "./tool-errors";
+import type { OutputMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { toolResult } from "./tool-result";
 
 const gitSchema = z.object({

@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
-import type { SegmentContext } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/segments";
-import { renderSegment } from "@oh-my-pi/pi-coding-agent/modes/components/status-line/segments";
-import { initTheme, theme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import type { SegmentContext } from "@oh-my-pi/pi-tui/status-line/segments";
+import { renderSegment } from "@oh-my-pi/pi-tui/status-line/segments";
+import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 
 beforeAll(async () => {
 	await initTheme();
@@ -25,6 +25,7 @@ function createCtx(usage: Partial<SegmentContext["usageStats"]>): SegmentContext
 		vibeMode: null,
 		vim: null,
 		collab: null,
+		stream: null,
 		usageStats: {
 			input: 0,
 			output: 0,

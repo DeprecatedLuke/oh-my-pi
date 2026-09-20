@@ -170,7 +170,7 @@ describe("internal URL tools resolve against the caller root (A/B same ids)", ()
 		expect(registry.get("Worker")?.sessionFile).toBe(childB);
 
 		const tool = new GrepTool(makeSession(dir, rootA));
-		const result = await tool.execute("grep-history-a", { pattern: "secret-A-line", paths: ["history://Worker"] });
+		const result = await tool.execute("grep-history-a", { pattern: "secret-A-line", path: "history://Worker" });
 		const text = getResultText(result);
 		expect(text).toContain("secret-A-line");
 		expect(text).not.toContain("secret-B-line");
@@ -179,11 +179,11 @@ describe("internal URL tools resolve against the caller root (A/B same ids)", ()
 		// A settled roster latch: the second resolution reuses it — no re-scan.
 		const again = await tool.execute("grep-history-a-again", {
 			pattern: "secret-A-line",
-			paths: ["history://Worker"],
+			path: "history://Worker",
 		});
 		expect(getResultText(again)).toContain("secret-A-line");
 		// agent:// from the same caller shares the settled latch too.
-		const agent = await tool.execute("grep-agent-a", { pattern: "A OUTPUT", paths: ["agent://Worker"] });
+		const agent = await tool.execute("grep-agent-a", { pattern: "A OUTPUT", path: "agent://Worker" });
 		expect(getResultText(agent)).toContain("A OUTPUT");
 		expect(getResultText(agent)).not.toContain("B OUTPUT");
 		expect(countReaddirs(readdirs, scanDir(rootA))).toBe(1);
@@ -195,7 +195,7 @@ describe("internal URL tools resolve against the caller root (A/B same ids)", ()
 		await installGlobalMainB(registry, rootB);
 
 		const tool = new GrepTool(makeSession(dir, rootA));
-		const result = await tool.execute("grep-agent-a", { pattern: "A OUTPUT", paths: ["agent://Worker"] });
+		const result = await tool.execute("grep-agent-a", { pattern: "A OUTPUT", path: "agent://Worker" });
 		expect(getResultText(result)).toContain("A OUTPUT");
 		expect(getResultText(result)).not.toContain("B OUTPUT");
 	});
@@ -205,7 +205,7 @@ describe("internal URL tools resolve against the caller root (A/B same ids)", ()
 		await installGlobalMainB(registry, rootB);
 
 		const tool = new GlobTool(makeSession(dir, rootA));
-		const result = await tool.execute("find-history-a", { paths: ["history://Worker"] });
+		const result = await tool.execute("find-history-a", { path: "history://Worker" });
 		const text = getResultText(result);
 		expect(text).toContain("# a/main/");
 		expect(text).toContain("Worker.jsonl");
@@ -242,20 +242,20 @@ describe("internal URL tools resolve against the caller root (A/B same ids)", ()
 
 		// Caller A: A's refs replace B's and A's output wins.
 		const toolA = new GrepTool(makeSession(dir, rootA));
-		const aHistory = await toolA.execute("grep-history-a", { pattern: "secret-A-line", paths: ["history://Worker"] });
+		const aHistory = await toolA.execute("grep-history-a", { pattern: "secret-A-line", path: "history://Worker" });
 		expect(getResultText(aHistory)).toContain("secret-A-line");
 		expect(getResultText(aHistory)).not.toContain("secret-B-line");
-		const aAgent = await toolA.execute("grep-agent-a", { pattern: "A OUTPUT", paths: ["agent://Worker"] });
+		const aAgent = await toolA.execute("grep-agent-a", { pattern: "A OUTPUT", path: "agent://Worker" });
 		expect(getResultText(aAgent)).toContain("A OUTPUT");
 
 		// Caller B: A's re-scan superseded B's latch, so B re-scans exactly
 		// once and B's transcript + output win again.
 		const toolB = new GrepTool(makeSession(dir, rootB));
-		const bHistory = await toolB.execute("grep-history-b", { pattern: "secret-B-line", paths: ["history://Worker"] });
+		const bHistory = await toolB.execute("grep-history-b", { pattern: "secret-B-line", path: "history://Worker" });
 		expect(getResultText(bHistory)).toContain("secret-B-line");
 		expect(getResultText(bHistory)).not.toContain("secret-A-line");
 		expect(registry.get("Worker")?.sessionFile).toBe(childB);
-		const bAgent = await toolB.execute("grep-agent-b", { pattern: "B OUTPUT", paths: ["agent://Worker"] });
+		const bAgent = await toolB.execute("grep-agent-b", { pattern: "B OUTPUT", path: "agent://Worker" });
 		expect(getResultText(bAgent)).toContain("B OUTPUT");
 		expect(getResultText(bAgent)).not.toContain("A OUTPUT");
 
@@ -272,9 +272,9 @@ describe("internal URL tools resolve against the caller root (A/B same ids)", ()
 		// not crash and keeps serving the global best effort (B's refs).
 		const rootC = path.join(dir, "c", "main.jsonl");
 		const tool = new GrepTool(makeSession(dir, rootC));
-		const history = await tool.execute("grep-history-c", { pattern: "secret-B-line", paths: ["history://Worker"] });
+		const history = await tool.execute("grep-history-c", { pattern: "secret-B-line", path: "history://Worker" });
 		expect(getResultText(history)).toContain("secret-B-line");
-		const agent = await tool.execute("grep-agent-c", { pattern: "B OUTPUT", paths: ["agent://Worker"] });
+		const agent = await tool.execute("grep-agent-c", { pattern: "B OUTPUT", path: "agent://Worker" });
 		expect(getResultText(agent)).toContain("B OUTPUT");
 	});
 

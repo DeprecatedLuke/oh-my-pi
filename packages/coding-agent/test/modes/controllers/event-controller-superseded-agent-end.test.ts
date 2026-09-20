@@ -20,11 +20,12 @@ function createContext() {
 			},
 			getToolByName: () => undefined,
 			getAsyncJobSnapshot: () => null,
+			hasPendingAsyncWork: () => false,
 		},
 		viewSession: {
 			isCompacting: false,
 			getLastAssistantMessage: () => undefined,
-			hasPendingBackgroundJobs: () => false,
+			hasPendingAsyncWork: () => false,
 			getAsyncJobSnapshot: () => null,
 		},
 	});

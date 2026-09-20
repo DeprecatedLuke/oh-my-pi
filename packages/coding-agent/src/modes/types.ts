@@ -335,11 +335,11 @@ export interface InteractiveModeContext {
 	ensureLoadingAnimation(): void;
 	/** Stop and tear down the loading spinner started by {@link ensureLoadingAnimation}. */
 	stopLoadingAnimation(): void;
-	/** Begin tracking an in-flight /fix-refusal run; returns the abort signal to pass to executeFixRefusal. */
+	/** Begin tracking an in-flight /fix-refusal run; returns its abort signal. */
 	beginFixRefusal?(): AbortSignal;
-	/** Clear the in-flight /fix-refusal tracking (call in a finally). */
+	/** Clear in-flight /fix-refusal tracking after completion or cancellation. */
 	endFixRefusal?(): void;
-	/** True while a /fix-refusal run is in flight and not yet aborted. */
+	/** True while a /fix-refusal run remains active and un-aborted. */
 	isFixingRefusal?(): boolean;
 	/** Abort the in-flight /fix-refusal run (Esc handler). */
 	abortFixRefusal?(): void;

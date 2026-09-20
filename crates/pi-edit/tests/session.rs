@@ -420,6 +420,7 @@ async fn hashline_rem_streaming_preview_does_not_error_on_invalid_utf8() {
 			cwd:                  cwd.clone(),
 			home_dir:             cwd,
 			local_sandbox_root:   None,
+			knowledge_root:       None,
 			vault_roots:          None,
 			plan_active:          false,
 			block_auto_generated: true,

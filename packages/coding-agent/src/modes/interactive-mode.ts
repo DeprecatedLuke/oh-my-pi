@@ -45,6 +45,7 @@ import {
 	$env,
 	adjustHsv,
 	formatNumber,
+	getAgentDir,
 	getProjectDir,
 	hsvToRgb,
 	isEnoent,
@@ -125,8 +126,15 @@ import type { SessionContext } from "../session/session-context";
 import { getRecentSessions } from "../session/session-listing";
 import type { SessionManager } from "../session/session-manager";
 import type { ShakeMode } from "../session/shake-types";
+import { isRefusalMessage } from "../secrets/fix-refusal";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
+import {
+	createTuiFixRefusalUi,
+	executeFixRefusal,
+	latestUserPromptText,
+	resolveRefusalModelPattern,
+} from "../slash-commands/helpers/fix-refusal";
 import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
 import { STTController, type SttState } from "../stt";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
@@ -511,6 +519,8 @@ const DEFERRED_PREVIEW_VIEWPORT_FRACTION = 0.4;
  *  before it auto-clears, mirroring the todo HUD's auto-clear timer. */
 const MODEL_CYCLE_TRACK_CLEAR_MS = 4000;
 
+const AUTO_FIX_REFUSAL_MAX_ROUNDS = 2;
+
 /** Active subagent sessions the anchored HUD jump-lists, sync or detached. Slots follow registry order. */
 function isHudSubagent(session: ObservableSession): boolean {
 	return session.kind === "subagent" && session.status === "active";
@@ -861,6 +871,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	locallySubmittedUserSignatures: Set<string> = new Set();
 	#pendingSubmittedInput: SubmittedUserInput | undefined;
 	#pendingSubmissionDispose: (() => void) | undefined;
+	#autoFixRefusalRounds = 0;
+	#autoFixRefusalInFlight = false;
+	#autoFixRefusalIdleWait = false;
+	#fixRefusalAbort?: AbortController;
 	#pendingSubmissionPreservesDraft = false;
 	#optimisticUserMessageComponents: Component[] = [];
 	#optimisticSkillMessageComponents: Component[] = [];
@@ -1716,6 +1730,8 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.#syncConfigWarningHeader();
 				}
 				void this.#handleGoalSessionEvent(event);
+				void this.#maybeAutoFixRefusal(event);
+				void this.#saveRefusalDump(event);
 			}),
 			onStatusLineSessionAccentChanged(() => {
 				this.#syncStatusLineSettings();
@@ -2025,6 +2041,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		const { promise, resolve } = Promise.withResolvers<SubmittedUserInput>();
 		this.onInputCallback = input => {
+			if (input.customType !== "auto-fix-refusal") {
+				this.#autoFixRefusalRounds = 0;
+			}
 			this.onInputCallback = undefined;
 			resolve(input);
 		};
@@ -2077,7 +2096,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Background jobs still running: don't fire the goal continuation yet.
 		// Their completion delivers a follow-up turn whose agent_end re-schedules
 		// this, so the goal resumes once background work has settled.
-		if (this.session.hasPendingBackgroundJobs()) return;
+		if (this.session.hasPendingAsyncWork()) return;
 		const prompt = this.session.goalRuntime.buildContinuationPrompt();
 		if (!prompt) return;
 		this.#goalContinuationTimer = setTimeout(() => {
@@ -2097,7 +2116,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			if ((this.editor.pendingImages?.length ?? 0) > 0) return;
 			const latestState = this.session.getGoalModeState();
 			if (!latestState?.enabled || latestState.goal.status !== "active") return;
-			if (this.session.hasPendingBackgroundJobs()) return;
+			if (this.session.hasPendingAsyncWork()) return;
 			this.#pendingGoalContinuationTurns++;
 			this.onInputCallback(
 				this.startPendingSubmission({
@@ -2134,7 +2153,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.session.isStreaming ||
 			this.session.isCompacting ||
 			this.session.hasPostPromptWork ||
-			this.session.hasPendingBackgroundJobs()
+			this.session.hasPendingAsyncWork()
 		);
 	}
 
@@ -2760,6 +2779,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.editor.borderColor = (str: string) => `\x1b[2m${base(str)}\x1b[22m`;
 		}
 		this.ui.requestRender();
+	}
+	updateEditorTopBorder(): void {
+		const availableWidth = this.editor.getTopBorderAvailableWidth(this.ui.terminal.columns);
+		this.editor.setTopBorder(this.statusLine.getTopBorder(availableWidth));
 	}
 
 	/** Refresh the running-subagents status badge from the active local or collab registry. */
@@ -3497,6 +3520,115 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		this.#scheduleGoalContinuation();
+	}
+
+	/**
+	 * When enabled, run the refusal-fix flow after a refusal and resubmit the
+	 * triggering prompt with newly discovered masks. Each user prompt gets a
+	 * bounded number of automatic recovery rounds.
+	 */
+	async #maybeAutoFixRefusal(event: AgentSessionEvent): Promise<void> {
+		if (event.type !== "agent_end" || event.isTerminal === false) return;
+		if (!this.isInitialized || this.#isShuttingDown) return;
+		if (!this.settings.get("secrets.autoFixRefusal")) return;
+		if (this.#autoFixRefusalInFlight) return;
+		if (this.#isAutoSubmitBlocked()) {
+			if (!this.#autoFixRefusalIdleWait && (this.session.isStreaming || this.session.hasPostPromptWork)) {
+				this.#autoFixRefusalIdleWait = true;
+				void this.session.waitForIdle().then(
+					() => {
+						this.#autoFixRefusalIdleWait = false;
+						void this.#maybeAutoFixRefusal(event);
+					},
+					() => {
+						this.#autoFixRefusalIdleWait = false;
+					},
+				);
+			}
+			return;
+		}
+		if (!this.onInputCallback) return;
+		if (this.#pendingSubmittedInput) return;
+		if (this.editor.getText().trim().length > 0) return;
+		if ((this.editor.pendingImages?.length ?? 0) > 0) return;
+		if (this.planModeEnabled || this.planModePaused) return;
+		if (!isRefusalMessage(this.session.getLastAssistantMessage())) return;
+		if (!resolveRefusalModelPattern(this.settings)) return;
+		if (this.#autoFixRefusalRounds >= AUTO_FIX_REFUSAL_MAX_ROUNDS) {
+			this.showWarning("Auto fix-refusal: retry limit reached; leaving the refusal in place.");
+			return;
+		}
+		const promptText = latestUserPromptText(this.session.messages);
+		if (!promptText) return;
+
+		this.#autoFixRefusalInFlight = true;
+		const ui = createTuiFixRefusalUi(this);
+		const signal = this.beginFixRefusal();
+		try {
+			const outcome = await executeFixRefusal({
+				session: this.session,
+				settings: this.settings,
+				cwd: this.sessionManager.getCwd(),
+				keyDir: this.session.getSecretPlaceholderKeyDir(),
+				signal,
+				ui,
+			});
+			if (outcome.resolved && outcome.patternsActive > 0 && this.onInputCallback) {
+				this.#autoFixRefusalRounds += 1;
+				this.onInputCallback(
+					this.startPendingSubmission({ text: promptText, customType: "auto-fix-refusal", display: true }),
+				);
+			}
+		} catch (err) {
+			ui.step(`Auto fix-refusal failed: ${err instanceof Error ? err.message : String(err)}`);
+		} finally {
+			ui.done();
+			this.#autoFixRefusalInFlight = false;
+			this.endFixRefusal();
+		}
+	}
+
+	/** Preserve refusal-ending turns as transcripts for later analysis. */
+	async #saveRefusalDump(event: AgentSessionEvent): Promise<void> {
+		if (event.type !== "agent_end" || event.isTerminal === false) return;
+		const refusal = this.session.getLastAssistantMessage();
+		if (!refusal || !isRefusalMessage(refusal)) return;
+		try {
+			let formatted = this.session.formatSessionAsText();
+			if (!formatted) return;
+			if (!this.session.messages.includes(refusal)) {
+				const refusalText =
+					refusal.content
+						.filter(block => block.type === "text")
+						.map(block => block.text)
+						.join("\n")
+						.trim() ||
+					refusal.errorMessage?.trim() ||
+					"(refusal contained no text)";
+				formatted += `\n\n## Assistant\n\n${refusalText}`;
+			}
+			let sidecarPath: string | undefined;
+			try {
+				sidecarPath = await this.session.dumpLlmRequestToTmpDir();
+			} catch {
+				// Keep the transcript when the request snapshot is unavailable.
+			}
+			const document = sidecarPath
+				? `${formatted}\n\n---\nLLM request JSON: ${sidecarPath}\nThis file persists on disk and may contain raw context/secrets — treat accordingly.`
+				: formatted;
+			const refusalsDir = path.join(getAgentDir(), "refusals");
+			await fs.mkdir(refusalsDir, { recursive: true });
+			const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -1);
+			const filePath = path.join(refusalsDir, `${stamp}.txt`);
+			await Bun.write(filePath, `${document}\n`);
+			const statusParts = [`Refusal saved to ${filePath}`];
+			if (sidecarPath) statusParts.push(`LLM request JSON: ${sidecarPath}`);
+			this.showStatus(statusParts.join("\n"));
+		} catch (error) {
+			logger.warn("Failed to save refusal snapshot", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
 
 	async #applyPlanModeModel(): Promise<void> {
@@ -6106,6 +6238,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.applyPendingWorkingMessage();
 	}
 
+	stopLoadingAnimation(): void {
+		this.#stopLoadingAnimation(true);
+	}
+
 	#stopLoadingAnimation(clearStatusContainer: boolean): void {
 		if (!this.loadingAnimation) return;
 		this.loadingAnimation.stop();
@@ -6141,6 +6277,24 @@ export class InteractiveMode implements InteractiveModeContext {
 		const message = this.#pendingWorkingMessage;
 		this.#pendingWorkingMessage = undefined;
 		this.setWorkingMessage(message);
+	}
+
+	beginFixRefusal(): AbortSignal {
+		this.#fixRefusalAbort?.abort();
+		this.#fixRefusalAbort = new AbortController();
+		return this.#fixRefusalAbort.signal;
+	}
+
+	endFixRefusal(): void {
+		this.#fixRefusalAbort = undefined;
+	}
+
+	isFixingRefusal(): boolean {
+		return !!this.#fixRefusalAbort && !this.#fixRefusalAbort.signal.aborted;
+	}
+
+	abortFixRefusal(): void {
+		this.#fixRefusalAbort?.abort();
 	}
 
 	showNewVersionNotification(newVersion: string): void {

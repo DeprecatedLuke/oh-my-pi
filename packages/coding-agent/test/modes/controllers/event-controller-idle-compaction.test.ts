@@ -80,7 +80,7 @@ function createContext(
 			messages: [createAssistantMessage()],
 			getContextUsage: () => ({ tokens: 210, contextWindow: 1_000, percent: 21 }),
 			getGoalModeState: () => goalState,
-			hasPendingBackgroundJobs: () => false,
+			hasPendingAsyncWork: () => false,
 			getAsyncJobSnapshot: (_options?: { recentLimit?: number; scope?: "owner" | "all" }) => ({
 				running: [],
 				recent: [],
@@ -114,7 +114,7 @@ describe("EventController idle compaction teardown", () => {
 
 	function makeContext(
 		runIdleCompaction: () => void,
-		hasPendingBackgroundJobs: () => boolean = () => false,
+		hasPendingAsyncWork: () => boolean = () => false,
 	): InteractiveModeContext {
 		const context = {
 			isInitialized: true,
@@ -129,13 +129,14 @@ describe("EventController idle compaction teardown", () => {
 			statusContainer: { clear: vi.fn() },
 			statusLine: { invalidate: vi.fn(), markActivityEnd: vi.fn() },
 			updateEditorTopBorder: vi.fn(),
+			syncRetryHintRow: vi.fn(),
 			editor: { getText: () => "" },
 			sessionManager: { getSessionName: () => undefined },
 			session: {
 				isCompacting: false,
 				isStreaming: false,
 				runIdleCompaction,
-				hasPendingBackgroundJobs,
+				hasPendingAsyncWork,
 				getAsyncJobSnapshot: (_options?: { recentLimit?: number; scope?: "owner" | "all" }) => ({
 					running: [],
 					recent: [],

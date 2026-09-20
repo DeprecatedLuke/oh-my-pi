@@ -23,10 +23,13 @@ import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/eve
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import * as titleGenerator from "@oh-my-pi/pi-coding-agent/utils/title-generator";
-import { TERMINAL } from "@oh-my-pi/pi-tui";
+import { NotifyProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
 
 const originalWarpProtocolVersion = process.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
+const originalNotifyProtocol = TERMINAL.notifyProtocol;
+// TerminalInfo's runtime clone is writable even though constructor fields are readonly.
+const mutableTerminal = TERMINAL as unknown as { notifyProtocol: NotifyProtocol };
 
 function restoreWarpProtocolEnvironment(): void {
 	if (originalWarpProtocolVersion === undefined) {
@@ -52,6 +55,7 @@ afterEach(() => {
 	vi.restoreAllMocks();
 	resetSettingsForTest();
 	restoreWarpProtocolEnvironment();
+	mutableTerminal.notifyProtocol = originalNotifyProtocol;
 });
 
 type StopReason = "stop" | "aborted" | "error";
@@ -84,10 +88,11 @@ function makeTurnEndContext(options: { lastAssistantMessage?: AssistantMessage }
 		sessionManager: { getSessionName: () => "test-session" },
 		session: {
 			getAsyncJobSnapshot: () => null,
+			hasPendingAsyncWork: () => false,
 		},
 		viewSession: {
 			getLastAssistantMessage: () => options.lastAssistantMessage,
-			hasPendingBackgroundJobs: () => false,
+			hasPendingAsyncWork: () => false,
 			getAsyncJobSnapshot: () => null,
 		},
 	});
@@ -238,23 +243,25 @@ describe("EventController — notifications through the real turn-end path (#han
 		expect(notify).toHaveBeenCalledWith(expect.objectContaining({ body: "Complete", type: "completion" }));
 	});
 
-	it("suppresses a nonterminal normal stop and rings exactly once on the legacy terminal settle in bell mode", async () => {
-		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
-		const bell = vi.spyOn(TERMINAL, "ringBell").mockImplementation(() => {});
-		settings.override("completion.notify", "bell");
+	it("suppresses a nonterminal normal stop and uses the terminal bell protocol on the legacy terminal settle", async () => {
+		mutableTerminal.notifyProtocol = NotifyProtocol.Bell;
+		const formatted: string[] = [];
+		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(message => {
+			formatted.push(TERMINAL.formatNotification(message));
+		});
+		settings.override("completion.notify", "on");
 		const controller = new EventController(makeTurnEndContext());
 
 		await controller.handleEvent({
 			...makeAgentEndEvent([makeAssistantMessage("stop")]),
 			isTerminal: false,
 		} as Extract<AgentSessionEvent, { type: "agent_end" }>);
-		expect(bell).not.toHaveBeenCalled();
 		expect(notify).not.toHaveBeenCalled();
 
 		// Undefined isTerminal is the legacy terminal event shape.
 		await controller.handleEvent(makeAgentEndEvent([makeAssistantMessage("stop")]));
-		expect(bell).toHaveBeenCalledTimes(1);
-		expect(notify).not.toHaveBeenCalled();
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect(formatted).toEqual([NotifyProtocol.Bell]);
 	});
 	it("fires the error notification when the dispatched turn settles with stopReason === 'error', even with a stale active-context snapshot", async () => {
 		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
@@ -423,42 +430,56 @@ describe("EventController — error toast gated while auto-retry is pending", ()
 	});
 });
 
-describe("EventController.sendCompletionNotification — bell mode", () => {
-	it("rings the terminal bell and skips the desktop notification when completion.notify=bell", () => {
-		const bell = vi.spyOn(TERMINAL, "ringBell").mockImplementation(() => {});
-		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
-		settings.override("completion.notify", "bell");
+describe("EventController.sendCompletionNotification — terminal notification protocol", () => {
+	it("uses the terminal bell protocol when completion.notify=on", () => {
+		mutableTerminal.notifyProtocol = NotifyProtocol.Bell;
+		const formatted: string[] = [];
+		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(message => {
+			formatted.push(TERMINAL.formatNotification(message));
+		});
+		settings.override("completion.notify", "on");
 		const controller = new EventController(makeContext());
 		controller.sendCompletionNotification(makeAgentEndEvent([makeAssistantMessage("stop")]));
-		expect(bell).toHaveBeenCalledTimes(1);
-		expect(notify).toHaveBeenCalledTimes(0);
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect(formatted).toEqual([NotifyProtocol.Bell]);
 	});
 
-	it("honors the abort/error skip in bell mode", () => {
-		const bell = vi.spyOn(TERMINAL, "ringBell").mockImplementation(() => {});
-		settings.override("completion.notify", "bell");
+	it("honors the abort/error skip with the terminal bell protocol", () => {
+		mutableTerminal.notifyProtocol = NotifyProtocol.Bell;
+		const formatted: string[] = [];
+		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(message => {
+			formatted.push(TERMINAL.formatNotification(message));
+		});
+		settings.override("completion.notify", "on");
 		const aborted = new EventController(makeContext());
 		aborted.sendCompletionNotification(makeAgentEndEvent([makeAssistantMessage("aborted")]));
 		const errored = new EventController(makeContext());
 		errored.sendCompletionNotification(makeAgentEndEvent([makeAssistantMessage("error")]));
-		expect(bell).toHaveBeenCalledTimes(0);
+		expect(notify).not.toHaveBeenCalled();
+		expect(formatted).toEqual([]);
 	});
 
-	it("does not ring the bell when completion.notify=on (desktop notification only)", () => {
-		const bell = vi.spyOn(TERMINAL, "ringBell").mockImplementation(() => {});
-		vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+	it("uses a negotiated non-bell protocol when completion.notify=on", () => {
+		mutableTerminal.notifyProtocol = NotifyProtocol.Osc99;
+		const formatted: string[] = [];
+		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(message => {
+			formatted.push(TERMINAL.formatNotification(message));
+		});
 		settings.override("completion.notify", "on");
 		const controller = new EventController(makeContext());
 		controller.sendCompletionNotification(makeAgentEndEvent([makeAssistantMessage("stop")]));
-		expect(bell).toHaveBeenCalledTimes(0);
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect(formatted[0]).toContain(NotifyProtocol.Osc99);
+		expect(formatted[0]).not.toBe(NotifyProtocol.Bell);
 	});
 
-	it("rings nothing when completion.notify=off", () => {
-		const bell = vi.spyOn(TERMINAL, "ringBell").mockImplementation(() => {});
+	it("sends nothing when completion.notify=off", () => {
+		mutableTerminal.notifyProtocol = NotifyProtocol.Bell;
+		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
 		settings.override("completion.notify", "off");
 		const controller = new EventController(makeContext());
 		controller.sendCompletionNotification(makeAgentEndEvent([makeAssistantMessage("stop")]));
-		expect(bell).toHaveBeenCalledTimes(0);
+		expect(notify).not.toHaveBeenCalled();
 	});
 });
 

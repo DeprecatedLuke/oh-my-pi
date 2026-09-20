@@ -3,17 +3,20 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { type AsyncJob, AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
-import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type {
 	AgentSessionEvent,
 	AsyncJobSnapshot,
 	AsyncJobSnapshotItem,
 } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { TERMINAL } from "@oh-my-pi/pi-tui";
+import { NotifyProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 
 const MAIN_OWNER_ID = "main-session";
 const NESTED_OWNER_ID = "nested-agent";
+const originalNotifyProtocol = TERMINAL.notifyProtocol;
+// TerminalInfo's runtime clone is writable even though constructor fields are readonly.
+const mutableTerminal = TERMINAL as unknown as { notifyProtocol: NotifyProtocol };
 
 type SnapshotOptions = { recentLimit?: number; scope?: "owner" | "all" };
 
@@ -50,8 +53,8 @@ function makeContext(manager: AsyncJobManager): {
 		messages: [],
 		getContextUsage: () => undefined,
 		getAsyncJobSnapshot,
-		hasPendingBackgroundJobs: () => {
-			const snapshot = getAsyncJobSnapshot();
+		hasPendingAsyncWork: () => {
+			const snapshot = getAsyncJobSnapshot({ scope: "all" });
 			return (
 				snapshot.running.length > 0 ||
 				snapshot.delivery.queued > 0 ||
@@ -87,6 +90,7 @@ function makeContext(manager: AsyncJobManager): {
 		settings: { get: () => false },
 		clearPinnedError: vi.fn(),
 		ensureLoadingAnimation: vi.fn(),
+		syncRetryHintRow: vi.fn(),
 		session,
 		get viewSession() {
 			return session;
@@ -125,14 +129,21 @@ beforeEach(async () => {
 afterEach(() => {
 	vi.restoreAllMocks();
 	resetSettingsForTest();
+	mutableTerminal.notifyProtocol = originalNotifyProtocol;
 });
 
 describe("EventController completion notification and nested-owner async jobs", () => {
-	for (const mode of ["on", "bell"] as const) {
-		it(`defers ${mode} completion output until a nested-owner job settles`, async () => {
-			settings.override("completion.notify", mode);
-			const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
-			const bell = vi.spyOn(TERMINAL, "ringBell").mockImplementation(() => {});
+	for (const [protocolName, protocol] of [
+		["bell", NotifyProtocol.Bell],
+		["osc99", NotifyProtocol.Osc99],
+	] as const) {
+		it(`defers ${protocolName} completion output until a nested-owner job settles`, async () => {
+			mutableTerminal.notifyProtocol = protocol;
+			settings.override("completion.notify", "on");
+			const formatted: string[] = [];
+			const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(message => {
+				formatted.push(TERMINAL.formatNotification(message));
+			});
 			const manager = new AsyncJobManager({ retentionMs: 0, onJobComplete: async () => {} });
 			const nestedGate = Promise.withResolvers<string>();
 			const nestedJobId = manager.register("task", "nested work", async () => nestedGate.promise, {
@@ -150,7 +161,7 @@ describe("EventController completion notification and nested-owner async jobs", 
 
 				await controller.handleEvent(makeAgentEndEvent());
 				expect(notify).not.toHaveBeenCalled();
-				expect(bell).not.toHaveBeenCalled();
+				expect(formatted).toEqual([]);
 				expect(manager.getRunningJobs({ ownerId: NESTED_OWNER_ID }).map(job => job.id)).toEqual([nestedJobId]);
 
 				// Cancellation settles the nested owner without producing a follow-up delivery.
@@ -162,13 +173,12 @@ describe("EventController completion notification and nested-owner async jobs", 
 				// completion event, and must not emit it again on a later refresh.
 				controller.refreshBackgroundJobs();
 				controller.refreshBackgroundJobs();
-				if (mode === "on") {
-					expect(notify).toHaveBeenCalledTimes(1);
-					expect(notify).toHaveBeenCalledWith(expect.objectContaining({ body: "Complete", type: "completion" }));
-					expect(bell).toHaveBeenCalledTimes(0);
+				expect(notify).toHaveBeenCalledTimes(1);
+				expect(formatted).toHaveLength(1);
+				if (protocol === NotifyProtocol.Bell) {
+					expect(formatted[0]).toBe(NotifyProtocol.Bell);
 				} else {
-					expect(bell).toHaveBeenCalledTimes(1);
-					expect(notify).toHaveBeenCalledTimes(0);
+					expect(formatted[0]).toContain(NotifyProtocol.Osc99);
 				}
 			} finally {
 				nestedGate.resolve("cancelled");

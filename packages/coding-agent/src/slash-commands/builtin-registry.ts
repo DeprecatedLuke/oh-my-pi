@@ -1,4 +1,4 @@
-import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import type { AutocompleteItem } from "@oh-my-pi/pi-tui/autocomplete";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
 import { BUILTIN_COLLABORATION_SLASH_COMMANDS } from "./builtin-collaboration";
 import {
@@ -15,7 +15,7 @@ import { BUILTIN_MARKETPLACE_SLASH_COMMANDS, reloadTuiPluginState } from "./buil
 import { BUILTIN_MODE_SLASH_COMMANDS } from "./builtin-modes";
 import { BUILTIN_SESSION_SLASH_COMMANDS } from "./builtin-session";
 import { createTuiFixRefusalUi, executeFixRefusal } from "./helpers/fix-refusal";
-import { commandConsumed, errorMessage, parseSlashCommand, parseSubcommand, usage } from "./helpers/parse";
+import { commandConsumed, errorMessage, parseSlashCommand, usage } from "./helpers/parse";
 import type {
 	BuiltinSlashCommand,
 	ParsedSlashCommand,
@@ -36,166 +36,47 @@ export interface TuiBuiltinSlashCommand extends BuiltinSlashCommand {
 	getAutocompleteDescription?: () => string | undefined;
 }
 
-const FORK_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
-	{
-		name: "knowledge",
-		description: "Save, build, update, or compact the project knowledge base",
-		subcommands: [
-			{ name: "save", description: "Save durable knowledge from the current session to .omp/knowledge" },
-			{
-				name: "build",
-				description:
-					"Background agent: explore the project and author the knowledge base from scratch (`/knowledge build [focus]`)",
-			},
-			{
-				name: "update",
-				description:
-					"Background agent: read every knowledge file, confirm/correct facts against the repo, and resolve conflicts (`/knowledge update [focus]`)",
-			},
-			{
-				name: "compact",
-				description:
-					"Background agent: prune duplicate/outdated knowledge files, or pursue a goal (`/knowledge compact <goal>`)",
-			},
-		],
-		allowArgs: true,
-		handle: async (command, runtime) => {
-			const { verb, rest } = parseSubcommand(command.args);
-			if (verb === "build") {
-				const focus = rest.trim() || undefined;
-				const result = runtime.session.buildKnowledge({
-					sourceTitle: focus ? `/knowledge build ${focus}` : "/knowledge build",
-					focus,
-				});
-				if (result.started) {
-					await runtime.output(`Knowledge build started in the background (job ${result.jobId ?? "?"}).`);
-				} else {
-					await runtime.output(`Knowledge build unavailable: ${result.reason ?? "unknown"}.`);
-				}
-				return commandConsumed();
-			}
-			if (verb === "update") {
-				const focus = rest.trim() || undefined;
-				const result = runtime.session.updateKnowledge({
-					sourceTitle: focus ? `/knowledge update ${focus}` : "/knowledge update",
-					focus,
-				});
-				if (result.started) {
-					await runtime.output(`Knowledge update started in the background (job ${result.jobId ?? "?"}).`);
-				} else {
-					await runtime.output(`Knowledge update unavailable: ${result.reason ?? "unknown"}.`);
-				}
-				return commandConsumed();
-			}
-			if (verb === "compact") {
-				const goal = rest.trim() || undefined;
-				const result = runtime.session.compactKnowledge({
-					sourceTitle: goal ? `/knowledge compact ${goal}` : "/knowledge compact",
-					goal,
-				});
-				if (result.started) {
-					await runtime.output(`Knowledge compaction started in the background (job ${result.jobId ?? "?"}).`);
-				} else {
-					await runtime.output(`Knowledge compaction unavailable: ${result.reason ?? "unknown"}.`);
-				}
-				return commandConsumed();
-			}
-			if (verb && verb !== "save") {
-				return usage("Usage: /knowledge <save|build|update|compact>", runtime);
-			}
-			const result = await runtime.session.saveKnowledge();
-			await runtime.output(
-				result.committed ? `Knowledge saved${result.sha ? ` (${result.sha})` : ""}.` : "Knowledge save failed.",
-			);
-			return commandConsumed();
-		},
+const FIX_REFUSAL_SLASH_COMMAND: SlashCommandSpec = {
+	name: "fix-refusal",
+	description: "Mask whatever made the model refuse, then save the redaction patterns",
+	handleTui: async (_command, runtime) => {
+		const ctx = runtime.ctx;
+		ctx.editor.setText("");
+		const ui = createTuiFixRefusalUi(ctx);
+		const signal = ctx.beginFixRefusal?.();
+		try {
+			await executeFixRefusal({
+				session: ctx.session,
+				settings: ctx.settings,
+				cwd: ctx.sessionManager.getCwd(),
+				keyDir: ctx.session.getSecretPlaceholderKeyDir(),
+				signal,
+				ui,
+			});
+		} catch (err) {
+			ui.step(`Failed: ${errorMessage(err)}`);
+		} finally {
+			ui.done();
+			ctx.endFixRefusal?.();
+		}
+		return commandConsumed();
 	},
-	{
-		name: "fix-refusal",
-		description: "Mask whatever made the model refuse, then save the redaction patterns",
-		handleTui: async (_command, runtime) => {
-			const ctx = runtime.ctx;
-			ctx.editor.setText("");
-			const ui = createTuiFixRefusalUi(ctx);
-			const signal = ctx.beginFixRefusal?.();
-			try {
-				await executeFixRefusal({
-					session: ctx.session,
-					settings: ctx.settings,
-					cwd: ctx.sessionManager.getCwd(),
-					keyDir: ctx.session.getSecretPlaceholderKeyDir(),
-					signal,
-					ui,
-				});
-			} catch (err) {
-				ui.step(`Failed: ${errorMessage(err)}`);
-			} finally {
-				ui.done();
-				ctx.endFixRefusal?.();
-			}
+	handle: async (_command, runtime) => {
+		try {
+			await executeFixRefusal({
+				session: runtime.session,
+				settings: runtime.settings,
+				cwd: runtime.cwd,
+				keyDir: runtime.session.getSecretPlaceholderKeyDir(),
+				signal: runtime.signal,
+				ui: { step: line => void runtime.output(line), working: () => {} },
+			});
 			return commandConsumed();
-		},
-		handle: async (_command, runtime) => {
-			try {
-				await executeFixRefusal({
-					session: runtime.session,
-					settings: runtime.settings,
-					cwd: runtime.cwd,
-					keyDir: runtime.session.getSecretPlaceholderKeyDir(),
-					ui: { step: line => void runtime.output(line), working: () => {} },
-				});
-				return commandConsumed();
-			} catch (err) {
-				return usage(`Failed: ${errorMessage(err)}`, runtime);
-			}
-		},
+		} catch (err) {
+			return usage(`Failed: ${errorMessage(err)}`, runtime);
+		}
 	},
-	{
-		name: "git",
-		description: "Git checkpoint / status via the git tool",
-		subcommands: [
-			{ name: "checkpoint", description: "Commit outstanding work with the git tool", usage: "[reason]" },
-			{ name: "status", description: "Show working-tree status" },
-		],
-		allowArgs: true,
-		handle: async (command, runtime) => {
-			const { verb, rest } = parseSubcommand(command.args);
-			if (verb !== "checkpoint" && verb !== "status") {
-				return usage("Usage: /git <checkpoint [reason]|status>", runtime);
-			}
-			const tool = runtime.session.getToolByName("git");
-			if (!tool) {
-				await runtime.output("git is unavailable. Run inside a top-level Git-backed session.");
-				return commandConsumed();
-			}
-			if (verb === "checkpoint") {
-				const reason = rest.trim() || "slash-invoked checkpoint";
-				try {
-					const result = await tool.execute("slash-git-checkpoint", { op: "checkpoint", reason });
-					const text = result.content
-						.map(c => (c.type === "text" ? c.text : ""))
-						.join("\n")
-						.trim();
-					await runtime.output(text || "Checkpoint complete.");
-				} catch (err) {
-					await runtime.output(`Checkpoint failed: ${err instanceof Error ? err.message : String(err)}`);
-				}
-				return commandConsumed();
-			}
-			try {
-				const result = await tool.execute("slash-git-status", { op: "status" });
-				const text = result.content
-					.map(c => (c.type === "text" ? c.text : ""))
-					.join("\n")
-					.trim();
-				await runtime.output(text || "Working tree clean.");
-			} catch (err) {
-				await runtime.output(`Status failed: ${err instanceof Error ? err.message : String(err)}`);
-			}
-			return commandConsumed();
-		},
-	},
-];
+};
 
 const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	...BUILTIN_MODE_SLASH_COMMANDS,
@@ -204,7 +85,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	...BUILTIN_LIFECYCLE_SLASH_COMMANDS,
 	...BUILTIN_MARKETPLACE_SLASH_COMMANDS,
 	...BUILTIN_CONTROL_SLASH_COMMANDS,
-	...FORK_SLASH_COMMANDS,
+	FIX_REFUSAL_SLASH_COMMAND,
 ];
 
 const BUILTIN_SLASH_COMMAND_LOOKUP = new Map<string, SlashCommandSpec>();

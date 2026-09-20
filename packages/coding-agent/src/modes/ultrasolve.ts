@@ -1,6 +1,6 @@
 import ultrasolveNotice from "../prompts/system/ultrasolve-notice.md" with { type: "text" };
-import { createGradientHighlighter, type KeywordHighlighter } from "./gradient-highlight";
-import { keywordInProse } from "./markdown-prose";
+import { createGradientHighlighter, type KeywordHighlighter } from "@oh-my-pi/pi-tui/prompt/gradient-highlight";
+import { keywordInProse } from "@oh-my-pi/pi-tui/prompt/markdown-prose";
 
 /**
  * "ultrasolve" keyword support.

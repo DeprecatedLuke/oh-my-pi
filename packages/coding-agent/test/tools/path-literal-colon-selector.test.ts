@@ -280,7 +280,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const tool = new GrepTool(createSession());
 			const result = await tool.execute("grep-literal", {
 				pattern: "needle",
-				paths: [absolute],
+				path: absolute,
 			});
 			const output = getText(result);
 
@@ -295,7 +295,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const tool = new GrepTool(createSession());
 			const result = await tool.execute("grep-escaped-literal", {
 				pattern: "needle",
-				paths: ["dir/a\\ b:1-2"],
+				path: "dir/a\\ b:1-2",
 			});
 			const output = getText(result);
 
@@ -312,7 +312,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const tool = new GrepTool(createSession());
 			const result = await tool.execute("grep-literal-semicolon-selector", {
 				pattern: "needle",
-				paths: [literal],
+				path: literal,
 			});
 			const output = getText(result);
 
@@ -331,7 +331,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const tool = new GrepTool(createSession());
 			const result = await tool.execute("grep-literal-zip-selector", {
 				pattern: "needle",
-				paths: [literal],
+				path: literal,
 			});
 			const output = getText(result);
 
@@ -345,7 +345,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const tool = new GrepTool(createSession());
 			const result = await tool.execute("grep-ranged-brace-literal", {
 				pattern: "offer",
-				paths: [`${literal}:1-2`],
+				path: `${literal}:1-2`,
 			});
 			const output = getText(result);
 
@@ -360,7 +360,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const tool = new GrepTool(createSession());
 			const result = await tool.execute("grep-ranged-delimiter-literal", {
 				pattern: "needle",
-				paths: [`${literal}:1-2`],
+				path: `${literal}:1-2`,
 			});
 			const output = getText(result);
 
@@ -375,7 +375,7 @@ describe("literal colon filename resolution (issue #4618)", () => {
 			const tool = new GrepTool(createSession());
 			const rangedResult = await tool.execute("grep-range-filter", {
 				pattern: ".",
-				paths: [`${absolute}:1-2`],
+				path: `${absolute}:1-2`,
 			});
 			const rangedOutput = getText(rangedResult);
 
@@ -417,7 +417,7 @@ describe("grep directory line selectors", () => {
 
 		const result = await new GrepTool(createSession()).execute("grep-directory-selector", {
 			pattern: "inside|outside",
-			paths: ["scripts/app:2-2"],
+			path: "scripts/app:2-2",
 		});
 
 		const text = getText(result);
@@ -440,7 +440,7 @@ describe("grep directory line selectors", () => {
 
 		const result = await new GrepTool(createSession()).execute("grep-directory-selector-cap", {
 			pattern: "cap-needle",
-			paths: ["scripts/hot:25-25"],
+			path: "scripts/hot:25-25",
 		});
 
 		const text = getText(result);
@@ -460,7 +460,7 @@ describe("grep directory line selectors", () => {
 
 		const result = await new GrepTool(createSession()).execute("grep-directory-selector-open", {
 			pattern: "open-needle",
-			paths: ["scripts/tail:35-"],
+			path: "scripts/tail:35-",
 		});
 
 		const text = getText(result);
@@ -569,7 +569,7 @@ describe("leading-colon path recovery (issue #5508)", () => {
 
 		const result = await new GrepTool(createSession()).execute("grep-leading-colon", {
 			pattern: "needle",
-			paths: [`:${abs}`],
+			path: `:${abs}`,
 		});
 		const output = getText(result);
 

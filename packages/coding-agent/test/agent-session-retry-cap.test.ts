@@ -3582,7 +3582,7 @@ describe("AgentSession retry delay cap", () => {
 			modelRegistry,
 		});
 
-		vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
+		mockSchedulerWaitWithClock();
 		const retryStartEvents: AutoRetryStartEvent[] = [];
 		const retryEndEvents: AutoRetryEndEvent[] = [];
 		session.subscribe(event => {

@@ -31,9 +31,15 @@ import {
 	readQueueChipText,
 	resolveAbortLabel,
 } from "../../session/messages";
-import { formatTaskId } from "../../task/render";
+import { formatTaskId } from "@oh-my-pi/pi-tui/tools/task";
 import { type ApprovalMode, resolveApproval } from "../../tools/approval";
-import { Ellipsis, previewLine, replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "@oh-my-pi/pi-tui/render/render-utils";
+import {
+	Ellipsis,
+	previewLine,
+	replaceTabs,
+	TRUNCATE_LENGTHS,
+	truncateToWidth,
+} from "@oh-my-pi/pi-tui/render/render-utils";
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 import { writeDeviceDispatch } from "../../tools/resolve";
 import { nextActionableTask } from "../../tools/todo";
@@ -2487,7 +2493,7 @@ export class EventController {
 		// Don't schedule idle work while context maintenance is already running; the
 		// maintenance flow may reset the session before this timer fires.
 		if (this.ctx.viewSession.isCompacting) return;
-		if (this.ctx.viewSession.hasPendingBackgroundJobs()) return;
+		if (this.ctx.viewSession.hasPendingAsyncWork()) return;
 
 		const idleSettings = settings.getGroup("compaction");
 		if (!idleSettings.idleEnabled) return;
@@ -2506,7 +2512,7 @@ export class EventController {
 			// the timer and now, dropping usage back below the idle threshold.
 			if (this.ctx.viewSession.isStreaming) return;
 			if (this.ctx.viewSession.isCompacting) return;
-			if (this.ctx.viewSession.hasPendingBackgroundJobs()) return;
+			if (this.ctx.viewSession.hasPendingAsyncWork()) return;
 			if (this.ctx.editor.getText().trim()) return;
 			if (this.#currentContextTokens() < threshold) return;
 			void this.ctx.viewSession.runIdleCompaction();
@@ -2622,14 +2628,7 @@ export class EventController {
 	}
 
 	#hasPendingAsyncWork(): boolean {
-		const snapshot = this.ctx.session.getAsyncJobSnapshot({ scope: "all" });
-		if (!snapshot) return false;
-		return (
-			snapshot.running.length > 0 ||
-			snapshot.delivery.queued > 0 ||
-			snapshot.delivery.delivering ||
-			snapshot.delivery.pendingJobIds.length > 0
-		);
+		return this.ctx.session.hasPendingAsyncWork();
 	}
 
 	#isWaitingForUserInput(): boolean {
