@@ -69,6 +69,7 @@ fn path_policy(cwd: &std::path::Path, home: &std::path::Path) -> PathPolicy {
 		cwd:                  cwd.to_owned(),
 		home_dir:             home.to_owned(),
 		local_sandbox_root:   None,
+		knowledge_root:        None,
 		vault_roots:          None,
 		plan_active:          false,
 		block_auto_generated: true,

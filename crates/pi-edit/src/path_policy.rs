@@ -16,12 +16,15 @@ const VAULT_DISABLED_MESSAGE: &str = "vault:// is disabled. Enable it by setting
                                       true` (Settings → Tools → Obsidian Vault).";
 const VAULT_ROOT_MISSING_MESSAGE: &str = "vault:// path resolution requires a cached vault root; \
                                           read vault:// first or use the write tool";
-const INTERNAL_PREFIXES: [&str; 9] = [
+const KNOWLEDGE_ROOT_MISSING_MESSAGE: &str = "knowledge:// is unavailable in this session";
+const KNOWLEDGE_ESCAPE_MESSAGE: &str = "knowledge:// URL escapes knowledge root";
+const INTERNAL_PREFIXES: [&str; 10] = [
 	"agent://",
 	"artifact://",
 	"skill://",
 	"rule://",
 	"security://",
+	"knowledge://",
 	"local://",
 	"mcp://",
 	"ssh://",
@@ -35,6 +38,8 @@ pub struct PathPolicy {
 	pub home_dir:             PathBuf,
 	/// Root of the `local://` artifact sandbox.
 	pub local_sandbox_root:   Option<PathBuf>,
+	/// Root of the `knowledge://` project knowledge tree.
+	pub knowledge_root:       Option<PathBuf>,
 	/// Cached `vault://` roots keyed by vault name (`_` = the active vault).
 	pub vault_roots:          Option<Vec<(String, PathBuf)>>,
 	pub plan_active:          bool,
@@ -60,6 +65,8 @@ impl PathPolicy {
 				format!("{host}/{path}")
 			};
 			resolve_relative_under_root(root, &relative, "local:// URL escapes local root")?
+		} else if let Some(rest) = normalized.strip_prefix("knowledge://") {
+			self.resolve_knowledge(rest)?
 		} else if let Some(rest) = normalized.strip_prefix("vault://") {
 			self.resolve_vault(rest)?
 		} else {
@@ -104,6 +111,47 @@ impl PathPolicy {
 			.ok_or_else(|| EditError::apply(VAULT_ROOT_MISSING_MESSAGE))?;
 		let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
 		resolve_relative_under_root(&root, &relative, "vault:// URL escapes vault root")
+	}
+
+	fn resolve_knowledge(&self, rest: &str) -> EditResult<PathBuf> {
+		let root = self
+			.knowledge_root
+			.as_ref()
+			.ok_or_else(|| EditError::apply(KNOWLEDGE_ROOT_MISSING_MESSAGE))?;
+		let (host, path) = split_url_authority(rest)?;
+		if !host.is_empty() && !is_valid_knowledge_category(&host) {
+			return Err(EditError::apply(
+				"knowledge:// category must be a non-hidden relative path segment",
+			));
+		}
+		let relative = if host.is_empty() {
+			path
+		} else {
+			format!("{host}/{path}")
+		};
+		let relative = normalize_knowledge_path(&relative)?;
+		let root = std::fs::canonicalize(root)
+			.map_err(|_| EditError::apply(KNOWLEDGE_ROOT_MISSING_MESSAGE))?;
+		let target = resolve_relative_under_root(&root, &relative, KNOWLEDGE_ESCAPE_MESSAGE)?;
+
+		let parent = target
+			.parent()
+			.ok_or_else(|| EditError::apply(KNOWLEDGE_ESCAPE_MESSAGE))?;
+		match std::fs::canonicalize(parent) {
+			Ok(real_parent) if !is_within(&real_parent, &root) => {
+				return Err(EditError::apply(KNOWLEDGE_ESCAPE_MESSAGE));
+			},
+			Err(_) if is_symlink(parent) => return Err(EditError::apply(KNOWLEDGE_ESCAPE_MESSAGE)),
+			_ => {},
+		}
+		match std::fs::canonicalize(&target) {
+			Ok(real_target) if !is_within(&real_target, &root) => {
+				return Err(EditError::apply(KNOWLEDGE_ESCAPE_MESSAGE));
+			},
+			Err(_) if is_symlink(&target) => return Err(EditError::apply(KNOWLEDGE_ESCAPE_MESSAGE)),
+			_ => {},
+		}
+		Ok(target)
 	}
 
 	/// Locate a missing authored path by unique trailing-suffix match under
@@ -368,6 +416,39 @@ fn split_url_authority(rest: &str) -> EditResult<(String, String)> {
 	Ok((host, path))
 }
 
+fn normalize_knowledge_path(relative: &str) -> EditResult<String> {
+	let normalized = relative.replace('\\', "/");
+	let mut segments = normalized.split('/');
+	let category = segments.next().unwrap_or_default();
+	let topic = segments.next().unwrap_or_default();
+	if segments.next().is_some()
+		|| !is_valid_knowledge_category(category)
+		|| topic.is_empty()
+		|| topic == "."
+		|| topic == ".."
+		|| topic.starts_with('.')
+		|| topic.contains('\0')
+		|| !topic.to_ascii_lowercase().ends_with(".md")
+	{
+		return Err(EditError::apply("knowledge:// path must be <category>/<topic>.md"));
+	}
+	Ok(format!("{category}/{topic}"))
+}
+
+fn is_valid_knowledge_category(category: &str) -> bool {
+	let normalized = category.replace('\\', "/");
+	!normalized.is_empty()
+		&& normalized != "."
+		&& normalized != ".."
+		&& !normalized.starts_with('.')
+		&& !normalized.contains('/')
+		&& !normalized.contains('\0')
+}
+
+fn is_symlink(path: &Path) -> bool {
+	std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink())
+}
+
 fn resolve_relative_under_root(
 	root: &Path,
 	relative: &str,
@@ -578,6 +659,7 @@ mod tests {
 				("_".into(), root.join("vault")),
 				("notes".into(), root.join("named")),
 			]),
+			knowledge_root:       None,
 			plan_active:          false,
 			block_auto_generated: true,
 		}

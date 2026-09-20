@@ -72,6 +72,8 @@ pub struct EditPolicy {
 	pub plan_active:          bool,
 	/// Root of the `local://` artifact sandbox; null when the session has none.
 	pub local_sandbox_root:   Option<String>,
+	/// Root of the `knowledge://` project knowledge tree; null when unavailable.
+	pub knowledge_root:       Option<String>,
 	/// Cached vault roots; null when the vault protocol is disabled.
 	pub vault_roots:          Option<Vec<EditVaultRoot>>,
 	pub home_dir:             String,
@@ -87,6 +89,7 @@ impl EditPolicy {
 				cwd:                  PathBuf::from(self.cwd),
 				home_dir:             PathBuf::from(self.home_dir),
 				local_sandbox_root:   self.local_sandbox_root.map(PathBuf::from),
+				knowledge_root:       self.knowledge_root.map(PathBuf::from),
 				vault_roots:          self.vault_roots.map(|roots| {
 					roots
 						.into_iter()
@@ -669,6 +672,7 @@ pub fn edit_auto_generated_message(absolute_path: String, display_path: String) 
 		cwd:                  PathBuf::new(),
 		home_dir:             PathBuf::new(),
 		local_sandbox_root:   None,
+		knowledge_root:       None,
 		vault_roots:          None,
 		plan_active:          false,
 		block_auto_generated: true,

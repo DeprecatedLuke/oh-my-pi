@@ -64,14 +64,14 @@ describe("edit tool knowledge:// support", () => {
 	async function buildEditInput(): Promise<string> {
 		const resource = await InternalUrlRouter.instance().resolve(`knowledge://${KNOWLEDGE_FILE}`, { cwd: tmpDir });
 		const tag = computeFileHash(resource.content);
-		return `[knowledge://${KNOWLEDGE_FILE}#${tag}]\nSWAP 7.=7:\n+- Edited durable fact.`;
+		return `[knowledge://${KNOWLEDGE_FILE}#${tag}]\nPUT 7.=7:\n+- Edited durable fact.`;
 	}
 
 	/** Build the same body edit addressed by the on-disk filesystem path instead of the URL. */
 	async function buildFsEditInput(): Promise<string> {
 		const relPath = path.join(".omp", "knowledge", ...KNOWLEDGE_FILE.split("/"));
 		const tag = computeFileHash(await Bun.file(knowledgeAbsPath(tmpDir)).text());
-		return `[${relPath}#${tag}]\nSWAP 7.=7:\n+- Edited durable fact.`;
+		return `[${relPath}#${tag}]\nPUT 7.=7:\n+- Edited durable fact.`;
 	}
 
 	it("rewrites a knowledge file through the knowledge:// URL handler", async () => {
@@ -89,6 +89,30 @@ describe("edit tool knowledge:// support", () => {
 		expect(onDisk).not.toContain("- Original durable fact.");
 	});
 
+	it("edits opaque redaction-token knowledge URLs in raw and encoded forms", async () => {
+		const relativePath = "sdk/sdk-gen-$$CDO3CPB981P7:L$$.md";
+		const rawUri = "knowledge://sdk/sdk-gen-$$CDO3CPB981P7:L$$.md";
+		const encodedUri = "knowledge://sdk/sdk-gen-%24%24CDO3CPB981P7%3AL%24%24.md";
+		const notePath = path.join(getKnowledgeRoot(tmpDir), ...relativePath.split("/"));
+		const noteContent = "---\ndescription: sdk generator\n---\n\n# SDK Generator\n\n- Opaque token filename.\n";
+		await Bun.write(notePath, noteContent);
+
+		const tool = new EditTool(createSession(tmpDir), "hashline");
+		const rawTag = computeFileHash(await Bun.file(notePath).text());
+		await tool.execute("call-opaque-raw", {
+			input: `[${rawUri}#${rawTag}]\nPUT 7.=7:\n+- Edited through raw URI.`,
+		});
+		expect(await Bun.file(notePath).text()).toContain("- Edited through raw URI.");
+
+		const encodedTag = computeFileHash(await Bun.file(notePath).text());
+		await tool.execute("call-opaque-encoded", {
+			input: `[${encodedUri}#${encodedTag}]\nPUT 7.=7:\n+- Edited through encoded URI.`,
+		});
+		const editedContent = await Bun.file(notePath).text();
+		expect(editedContent).toContain("- Edited through encoded URI.");
+		expect(editedContent).not.toContain("- Edited through raw URI.");
+	});
+
 	it("rejects knowledge edits through a category symlink that escapes the knowledge root", async () => {
 		const knowledgeRoot = getKnowledgeRoot(tmpDir);
 		const outsidePath = path.join(tmpDir, "outside-topic.md");
@@ -98,11 +122,11 @@ describe("edit tool knowledge:// support", () => {
 		await fs.symlink(path.dirname(outsidePath), escapedCategory, "dir");
 		const before = await fs.readFile(outsidePath, "utf8");
 		const tag = computeFileHash(before);
-		const input = `[knowledge://escaped/${path.basename(outsidePath)}#${tag}]\nSWAP 7.=7:\n+- Must not edit outside knowledge root.`;
+		const input = `[knowledge://escaped/${path.basename(outsidePath)}#${tag}]\nPUT 7.=7:\n+- Must not edit outside knowledge root.`;
 
-		await expect(new EditTool(createSession(tmpDir)).execute("call-escape", { input })).rejects.toThrow(
-			/knowledge:\/\/ URL escapes knowledge root/,
-		);
+		const result = await new EditTool(createSession(tmpDir)).execute("call-escape", { input });
+		expect(result.isError).toBe(true);
+		expect(resultText(result)).toContain("knowledge:// URL escapes knowledge root");
 		expect(await fs.readFile(outsidePath, "utf8")).toBe(before);
 	});
 
@@ -111,7 +135,7 @@ describe("edit tool knowledge:// support", () => {
 		await Bun.write(filePath, "# Plain\n\n- keep me\n");
 		const tool = new EditTool(createSession(tmpDir));
 		const tag = computeFileHash(await Bun.file(filePath).text());
-		const input = `[${filePath}#${tag}]\nSWAP 3.=3:\n+- changed me`;
+		const input = `[${filePath}#${tag}]\nPUT 3.=3:\n+- changed me`;
 
 		const result = await tool.execute("call-3", { input });
 

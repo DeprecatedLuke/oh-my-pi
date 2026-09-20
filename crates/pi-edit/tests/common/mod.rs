@@ -111,6 +111,7 @@ impl Workspace {
 				cwd:                  cwd.clone(),
 				home_dir:             cwd,
 				local_sandbox_root:   None,
+				knowledge_root:        None,
 				vault_roots:          None,
 				plan_active:          false,
 				block_auto_generated: true,

@@ -43,12 +43,16 @@ export function normalizeKnowledgePath(relativePath: string): string | undefined
 	return `${category}/${fileName}`;
 }
 
+function encodeKnowledgeUrlSegment(segment: string): string {
+	return encodeURIComponent(segment).replaceAll("%24", "$").replaceAll("%3A", ":");
+}
+
 export function knowledgeUrlForPath(relativePath: string): string {
 	const normalized = normalizeKnowledgePath(relativePath);
 	if (!normalized) {
 		throw new Error(`Invalid knowledge path: ${relativePath}`);
 	}
-	return `knowledge://${normalized.split("/").map(encodeURIComponent).join("/")}`;
+	return `knowledge://${normalized.split("/").map(encodeKnowledgeUrlSegment).join("/")}`;
 }
 
 async function collectKnowledgeMarkdownFiles(root: string, dir = root, out: string[] = []): Promise<string[]> {

@@ -1337,6 +1337,8 @@ export interface EditPolicy {
   planActive: boolean
   /** Root of the `local://` artifact sandbox; null when the session has none. */
   localSandboxRoot?: string
+  /** Root of the `knowledge://` project knowledge tree; null when unavailable. */
+  knowledgeRoot?: string
   /** Cached vault roots; null when the vault protocol is disabled. */
   vaultRoots?: Array<EditVaultRoot>
   homeDir: string

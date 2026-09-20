@@ -142,6 +142,21 @@ describe("KnowledgeProtocolHandler", () => {
 			expect(category.sourcePath).toBe(path.join(getKnowledgeRoot(dir), "runtime"));
 		});
 	});
+	it("lists and resolves knowledge notes with opaque redaction-token filenames", async () => {
+		await withTempDir(async dir => {
+			const relativePath = "sdk/sdk-gen-$$CDO3CPB981P7:L$$.md";
+			const rawUri = "knowledge://sdk/sdk-gen-$$CDO3CPB981P7:L$$.md";
+			const noteContent = "---\ndescription: sdk generator\n---\n\n# SDK Generator\n\n- Opaque token filename.\n";
+			const notePath = path.join(getKnowledgeRoot(dir), ...relativePath.split("/"));
+			await Bun.write(notePath, noteContent);
+
+			const listing = await InternalUrlRouter.instance().resolve("knowledge://", { cwd: dir });
+			expect(listing.content).toContain(rawUri);
+
+			const note = await InternalUrlRouter.instance().resolve(rawUri, { cwd: dir });
+			expect(note.content).toBe(noteContent);
+		});
+	});
 
 	it("writes knowledge files and normalizes retrieval-tag frontmatter", async () => {
 		await withTempDir(async dir => {
