@@ -32,7 +32,7 @@ export function containsUltrasolve(text: string): boolean {
  * ultrathink's full-spectrum editor treatment.
  */
 export const highlightUltrasolve: KeywordHighlighter = createGradientHighlighter({
-	probe: /ultrasolve/,
+	probe: "ultrasolve",
 	highlight: /(?<!\S)ultrasolve(?!\S)/g,
 	stops: 14,
 	hue: t => t * 330,

@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [18.2.8] - 2026-09-21
+
+### Added
+
+- Added support for text embeddings, document reranking, video generation, image generation across multiple providers, audio speech synthesis, and audio transcription services.
+- Added support for the System One judgment API, including configurable request headers for proxy routing and custom authentication.
+
+### Changed
+
+- Updated API response cost reporting to use aggregate usage totals.
+- Model list responses now optionally include a model kind.
+
+### Fixed
+
+- Fixed detection of Claude usage-limit errors.
+
+## [18.2.7] - 2026-09-21
+
 ### Breaking Changes
 
 - Anthropic streaming and provider request helpers must now be imported from `@oh-my-pi/pi-ai/providers/anthropic` instead of the package root.
@@ -9,7 +27,7 @@
 
 ### Fixed
 
-- Anthropic organization-level OAuth permission errors now rotate to an eligible sibling credential instead of failing permanently.
+- Anthropic organization-level OAuth permission errors now reliably rotate to sibling credentials and persist blocks across usage reports.
 - Fixed error handling for provider responses that do not include token usage information.
 
 ## [18.2.6] - 2026-09-18

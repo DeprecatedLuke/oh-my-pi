@@ -224,6 +224,8 @@ import { stopSharedSpinnerTicker, type ToolExecutionHandle } from "@oh-my-pi/pi-
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import type { LspServerInfo as WelcomeLspServerInfo } from "@oh-my-pi/pi-tui/prompt/welcome";
 import { Composer, PINNED_HUD_TOGGLE_ID, type ComposerStatusSnapshot } from "@oh-my-pi/pi-tui/prompt/composer";
+import { setMagicKeywords } from "@oh-my-pi/pi-tui/prompt/magic-keywords";
+import { MAGIC_KEYWORDS } from "./magic-keywords";
 import { writeComposerStatusCache, writeComposerWelcomeCache } from "@oh-my-pi/pi-tui/prompt/composer-cache";
 import { BtwController } from "./controllers/btw-controller";
 import { CleanseCommandController } from "./controllers/cleanse-command-controller";
@@ -273,6 +275,7 @@ import {
 	onTerminalAppearanceChange,
 	onThemeChange,
 	setMarkdownMermaidRendering,
+	setSymbolPreset,
 	startMacOSAppearanceReprobeFallback,
 	theme,
 } from "@oh-my-pi/pi-tui/theme";
@@ -1171,6 +1174,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			spellingAutocorrect: settings.get("spelling.autocorrect"),
 		};
 		const wasStarted = composer?.started ?? false;
+		setMagicKeywords(MAGIC_KEYWORDS);
 		this.composer =
 			composer ??
 			new Composer({
@@ -1777,6 +1781,19 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.ui.requestRender(true, { clearScrollback: true });
 			}),
 		);
+		// A confirmed Glyph Protocol handshake means omp's own icons render in
+		// this terminal without a Nerd Font, so the default `unicode` preset is
+		// upgraded to `nerd` for this session. The persisted setting is left
+		// alone: it travels to terminals (ssh, tmux) where the upgrade would
+		// show tofu. Explicit `ascii`/`nerd` choices are never touched.
+		this.ui.terminal.onGlyphProtocolReport?.(supported => {
+			if (!supported || settings.get("symbolPreset") !== "unicode" || theme.getSymbolPreset() !== "unicode") return;
+			void setSymbolPreset("nerd").then(() => {
+				this.statusLine.invalidate();
+				this.ui.invalidate();
+				this.ui.requestRender();
+			});
+		});
 
 		// Subscribe to terminal dark/light appearance changes.
 		// The terminal queries background color via OSC 11 at startup and on
@@ -6536,7 +6553,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		if (!this.#sttController) {
-			this.#sttController = new STTController();
+			this.#sttController = new STTController({
+				settings: this.settings,
+				registry: this.session.modelRegistry,
+				getSessionId: () => this.session.sessionId,
+			});
 		}
 		await this.#sttController.toggle(this.editor, {
 			showWarning: (msg: string) => this.showWarning(msg),

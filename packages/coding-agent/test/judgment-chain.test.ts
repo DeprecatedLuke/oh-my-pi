@@ -4,7 +4,8 @@ import * as ai from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { ChainJudge } from "@oh-my-pi/pi-coding-agent/judgment";
+import { ChainJudge, journalJudgmentUsage } from "@oh-my-pi/pi-coding-agent/judgment";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { tinyModelClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 import { asGlobalFetch } from "./helpers/fetch-mock";
@@ -126,7 +127,7 @@ describe("ChainJudge", () => {
 		});
 
 		expect(answer).toBe("high");
-		expect(kinds).toEqual(["typesafe", "local", "online"]);
+		expect(kinds).toEqual(["native", "local", "online"]);
 		expect(localPrompt).toContain("trivial");
 		expect(localPrompt).toContain("moderate");
 		expect(localPrompt).toContain("hard");
@@ -166,6 +167,43 @@ describe("ChainJudge", () => {
 		expect(onUsage).toHaveBeenCalledWith(
 			expect.objectContaining({ role: "typesafe", provider: "typesafe", model: "jev-preview" }),
 		);
+	});
+
+	it("journals judgment usage on the active branch and stops once the session changes", async () => {
+		const settings = Settings.isolated({ modelRoles: { judge: "typesafe/jev-preview" } });
+		const registry = makeRegistry([JEV_PREVIEW], { typesafe: "ts-key" });
+		vi.spyOn(globalThis, "fetch").mockImplementation(
+			asGlobalFetch(async () =>
+				Response.json({
+					model: "jev-1.13.0",
+					answers: {
+						level: { type: "choice", choice: "high", probabilities: { low: 0.1, high: 0.9 }, confidence: 0.8 },
+					},
+					usage: { input_tokens: 8, output_tokens: 2 },
+				}),
+			),
+		);
+		const manager = SessionManager.inMemory();
+		manager.appendMessage({ role: "user", content: "locate the scheduler", timestamp: 1 });
+		const leafBefore = manager.getLeafId();
+		const judge = new ChainJudge({ settings, registry, onUsage: journalJudgmentUsage(manager, "find") });
+		const request = { state: "redesign the scheduler", questions: { level: TIER_QUESTION } };
+
+		await judge.judge(request);
+		const usage = manager.getBranch().filter(entry => entry.type === "model_usage");
+		expect(usage).toHaveLength(1);
+		expect(usage[0]).toMatchObject({
+			parentId: leafBefore,
+			purpose: "find",
+			role: "typesafe",
+			model: "jev-preview",
+			usage: { input: 8, output: 2 },
+		});
+		expect(manager.getLeafId()).toBe(usage[0]!.id);
+
+		await manager.newSession();
+		await judge.judge(request);
+		expect(manager.getBranch().filter(entry => entry.type === "model_usage")).toHaveLength(0);
 	});
 
 	it("skips a candidate whose account rejected the previous judgment instead of re-paying it every call", async () => {
@@ -234,5 +272,55 @@ describe("ChainJudge", () => {
 		// The primary's three entries are its initial completion plus two format
 		// corrections. A duplicated session fallback would add another three.
 		expect(attempted).toEqual([ONLINE.id, ONLINE.id, ONLINE.id, ONLINE_BACKUP.id]);
+	});
+
+	it("resolves and forwards configured headers to native judgment models", async () => {
+		const recordedHeaders: Record<string, string>[] = [];
+		const nativeModel = {
+			...JEV_PREVIEW,
+			id: "jev-custom-headers",
+			api: "openrouter-decisions" as const,
+			provider: "custom-judge",
+			baseUrl: "https://custom.example/v1",
+			resolveHeaders: async () => ({
+				"x-custom-routing": "router-1",
+				"x-custom-tenant": "tenant-abc",
+			}),
+		} as Model<Api>;
+
+		const settings = Settings.isolated({
+			modelRoles: { judge: "custom-judge/jev-custom-headers" },
+		});
+		const registry = makeRegistry([nativeModel], { "custom-judge": "test-key" });
+
+		vi.spyOn(globalThis, "fetch").mockImplementation(
+			asGlobalFetch((_url, init) => {
+				const h = new Headers(init?.headers);
+				recordedHeaders.push({
+					auth: h.get("authorization") ?? "",
+					customRouting: h.get("x-custom-routing") ?? "",
+					customTenant: h.get("x-custom-tenant") ?? "",
+				});
+				return Response.json({
+					model: "typesafe/jev-1.13",
+					answers: { level: { type: "choice", choice: "low" } },
+					usage: { input_tokens: 10, output_tokens: 2 },
+				});
+			}),
+		);
+
+		const result = await new ChainJudge({ settings, registry }).judge({
+			state: "mechanical task",
+			questions: { level: TIER_QUESTION },
+		});
+
+		expect(result.answers.level.choice).toBe("low");
+		expect(recordedHeaders).toEqual([
+			{
+				auth: "Bearer test-key",
+				customRouting: "router-1",
+				customTenant: "tenant-abc",
+			},
+		]);
 	});
 });

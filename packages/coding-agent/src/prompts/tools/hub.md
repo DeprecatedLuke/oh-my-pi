@@ -7,7 +7,7 @@ Use `op: "list"` to discover live peers. Default is running+idle plus running/id
 - **`send`** (with `to`): fire-and-forget, NEVER blocks. Delivery receipts (`delivered`/`failed`) immediate; `failed` → peer gone, don't retry.
   Sending wakes `idle`/`parked` peers. Answering: lead with answer, NEVER quote, set `replyTo`.
 - **Format**: plain prose ONLY. No JSON status objects. Share paths via `local://`/`artifact://` URLs, not pasted blobs.
-- **`wait`**: routes by target: `name` → process wait (see Processes); `from` (no `ids`) → peer-message wait; every other shape (bare, `ids`, or `from`+`ids`) → immediate error: background-job waiting is disabled; results auto-deliver; sole blocker means end turn immediately without prose or tool calls.
+- **`wait`**: routes by target: `name` → process wait (see Processes); `from` (no `ids`) → peer-message wait; every other shape (bare, `ids`, or `from`+`ids`) → immediate error: background-job waiting is disabled; results auto-deliver; sole blocker means end the turn immediately without prose or tool calls.
 - **`inbox`**: drain queued messages without blocking.
 - **`cancel`**: kill background jobs by `ids` when they have hung, stalled, or are no longer needed. Returns immediately.
 - **`jobs`**: status snapshot of every job without waiting — intervention/inspection only, NEVER a polling or delay mechanism. A settled row acknowledges delivery, suppressing duplicate `async-result`. Also names running subagents with no job entry — coordinate with those via `send`.
@@ -30,6 +30,6 @@ Project-scoped long-running processes shared by every omp instance in the same d
   - `persist: true` opts out of last-omp teardown; `detached: true` survives broker shutdown and all omp exits (implies persist, disables PTY input). Omit both unless their survival guarantees are required.
 - **`ps`**, **`logs`**, **`wait`** (with `name`), **`send`** (with `name`), **`stop`**, **`restart`**, and **`describe`** address the stable `name`.
 - **`logs`** defaults to the last 100 lines. `head: true` reads the beginning. `grep` is a JavaScript `RegExp` compiled with the `u` flag (no inline modifiers such as `(?i)`). `follow: true` waits for output after `cursor`; reuse the returned cursor on the next call.
-- **`wait`** with `name` blocks until readiness/exit/`pattern` or `timeout` (seconds). `pattern` is a JavaScript `RegExp` compiled with the `u` flag (no inline modifiers such as `(?i)`).
+- **`wait`** with `name` blocks until readiness/exit/`pattern` or `timeout` (seconds). `pattern` is a JavaScript `RegExp` compiled with the `u` flag (no inline modifiers such as `(?i)`). A `pattern` wait also returns when the process exits without ever printing it — check the reported state before assuming a match.
 - **`send`** with `name`: `text` writes stdin (`enter` defaults true); `keys` supports ENTER, TAB, ESCAPE, CTRL_C, CTRL_D, UP, DOWN, LEFT, RIGHT; `signal` supports SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGKILL. PTY input is serialized; writes share one input stream.
 - **`stop`** performs graceful process-tree termination before hard-kill; NEVER kill an unverified PID through bash. **`restart`** reuses the retained launch spec.

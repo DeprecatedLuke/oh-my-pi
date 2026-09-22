@@ -7,6 +7,7 @@
 import {
 	type AssistantMessage,
 	chatTextBackend,
+	isJudgmentApi,
 	type Judge,
 	type JudgeOptions,
 	type JudgmentRequest,
@@ -22,11 +23,13 @@ import {
 	type Usage,
 } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import { prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
 import { formatModelStringWithRouting, resolveRoleChain, type RoleChainCandidate } from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
 import type { Settings } from "../config/settings";
+import type { SessionManager } from "../session/session-manager";
 import { getTinyLocalModelSpec } from "../tiny/models";
 import localPromptTemplate from "../prompts/system/judgment-local.md" with { type: "text" };
 import { tinyModelClient } from "../tiny/title-client";
@@ -53,6 +56,33 @@ export interface JudgeDeps {
 	onUsage?: (usage: JudgmentUsage) => void;
 }
 
+/** Session journal surface that records off-transcript model cost; journal-only managers omit it. */
+export type JudgmentUsageLedger = Pick<SessionManager, "appendModelUsage" | "getSessionId" | "getLeafId">;
+
+function isUsageLedger(manager: Partial<JudgmentUsageLedger>): manager is JudgmentUsageLedger {
+	return (
+		manager.appendModelUsage !== undefined && manager.getSessionId !== undefined && manager.getLeafId !== undefined
+	);
+}
+
+/**
+ * Build a {@link JudgeDeps.onUsage} that journals every judgment attempt as a
+ * `model_usage` entry under `purpose`, beneath the session leaf at record time,
+ * so `getSessionStats()` counts it in session totals. Attempts that land after
+ * the session changes are dropped by the ledger. Returns `undefined` when the
+ * journal cannot record usage.
+ */
+export function journalJudgmentUsage(
+	manager: Partial<JudgmentUsageLedger> | undefined,
+	purpose: string,
+): JudgeDeps["onUsage"] {
+	if (!manager || !isUsageLedger(manager)) return undefined;
+	const sessionId = manager.getSessionId();
+	return usage => {
+		manager.appendModelUsage({ purpose, ...usage }, { sessionId, parentId: manager.getLeafId() });
+	};
+}
+
 /** One keyword per answer; OpenAI-compatible endpoints reject budgets below 16. */
 const LOCAL_ANSWER_MAX_TOKENS = 16;
 /** On-device reasoning models need room for the keyword after their `<think>` preamble. */
@@ -71,15 +101,15 @@ interface RegistryWithRejections extends ModelRegistry {
 	[kRejections]?: Map<string, number>;
 }
 
-/** Which backend a judge-role candidate routes to. */
-export type JudgeKind = "typesafe" | "local" | "online";
+/** Which backend a judge-role candidate routes to: native System One decisions, on-device keywords, or a chat model. */
+export type JudgeKind = "native" | "local" | "online";
 
 /** Classify a role candidate by model API, never by provider identity. */
 export function kindOf(candidate: RoleChainCandidate): JudgeKind;
 export function kindOf(model: Model): JudgeKind;
 export function kindOf(value: RoleChainCandidate | Model): JudgeKind {
 	const model = "model" in value ? value.model : value;
-	if (model.api === TYPESAFE_PROVIDER) return "typesafe";
+	if (isJudgmentApi(model.api)) return "native";
 	if (model.api === "local-inference") return "local";
 	return "online";
 }
@@ -166,40 +196,39 @@ export class ChainJudge implements Judge {
 
 	async #createJudge(candidate: RoleChainCandidate, signal: AbortSignal | undefined): Promise<Judge | undefined> {
 		const model = candidate.model;
-		switch (kindOf(candidate)) {
-			case "typesafe": {
-				if (!(await this.#deps.registry.getApiKey(model, this.#deps.sessionId, { signal }))) return undefined;
-				const judge = new TypeSafeJudge({
-					apiKey: this.#deps.registry.resolver(model, this.#deps.sessionId),
-					model: model.id,
-					baseUrl: model.baseUrl,
-				});
-				return usageReportingTypeSafeJudge(judge, this.#deps.onUsage);
-			}
-			case "local":
-				return new TextJudge(new LocalTextBackend(model.id));
-			case "online": {
-				if (!(await this.#deps.registry.getApiKey(model, this.#deps.sessionId, { signal }))) return undefined;
-				// Resolve metadata after getApiKey so the session-sticky credential is recorded first.
-				const metadata = this.#deps.metadataResolver?.(model.provider);
-				const backend = chatTextBackend(model, {
-					apiKey: this.#deps.registry.resolver(model, this.#deps.sessionId),
-					sessionId: this.#deps.sessionId,
-					metadata,
-					onAttempt: attempt =>
-						this.#deps.onUsage?.({
-							role: "judge",
-							api: attempt.api,
-							provider: attempt.provider,
-							model: attempt.model,
-							usage: attempt.usage,
-							stopReason: attempt.stopReason,
-							errorMessage: attempt.errorMessage,
-						}),
-				});
-				return new TextJudge(backend);
-			}
+		if (model.api === "local-inference") return new TextJudge(new LocalTextBackend(model.id));
+		if (!(await this.#deps.registry.getApiKey(model, this.#deps.sessionId, { signal }))) return undefined;
+		const apiKey = this.#deps.registry.resolver(model, this.#deps.sessionId);
+		if (isJudgmentApi(model.api)) {
+			const headers = await this.#deps.registry.resolveModelHeaders(model, signal);
+			const judge = new TypeSafeJudge({
+				apiKey,
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				baseUrl: model.baseUrl,
+				headers,
+			});
+			return usageReportingTypeSafeJudge(judge, model, this.#deps.onUsage);
 		}
+		// Resolve metadata after getApiKey so the session-sticky credential is recorded first.
+		const metadata = this.#deps.metadataResolver?.(model.provider);
+		const backend = chatTextBackend(model, {
+			apiKey,
+			sessionId: this.#deps.sessionId,
+			metadata,
+			onAttempt: attempt =>
+				this.#deps.onUsage?.({
+					role: "judge",
+					api: attempt.api,
+					provider: attempt.provider,
+					model: attempt.model,
+					usage: attempt.usage,
+					stopReason: attempt.stopReason,
+					errorMessage: attempt.errorMessage,
+				}),
+		});
+		return new TextJudge(backend);
 	}
 }
 
@@ -232,7 +261,12 @@ class LocalTextBackend implements TextBackend {
 	}
 }
 
-function usageReportingTypeSafeJudge(judge: TypeSafeJudge, onUsage: JudgeDeps["onUsage"]): Judge {
+/**
+ * Report each native judgment's usage. TypeSafe itself reports tokens only, so
+ * a response without a billed amount is priced from the catalog model; a
+ * route that bills (OpenRouter) keeps its reported cost.
+ */
+function usageReportingTypeSafeJudge(judge: TypeSafeJudge, model: Model, onUsage: JudgeDeps["onUsage"]): Judge {
 	return {
 		label: judge.label,
 		async judge<Q extends Questions>(
@@ -240,6 +274,7 @@ function usageReportingTypeSafeJudge(judge: TypeSafeJudge, onUsage: JudgeDeps["o
 			options?: JudgeOptions,
 		): Promise<JudgmentResult<Q>> {
 			const result = await judge.judge(request, options);
+			if (result.usage.cost.total === 0) calculateCost(model, result.usage);
 			onUsage?.({
 				role: TYPESAFE_PROVIDER,
 				api: result.api,

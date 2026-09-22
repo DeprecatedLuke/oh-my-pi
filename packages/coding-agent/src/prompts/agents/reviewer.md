@@ -1,7 +1,7 @@
 ---
 name: reviewer
 description: "Code review specialist that files confirmed bugs in the project issue tracker"
-tools: read, grep, glob, bash, lsp, web_search, ast_grep, issues
+tools: read, find, grep, glob, bash, lsp, web_search, ast_grep, issues
 spawns: scout
 model: "@slow"
 output:
