@@ -1,16 +1,18 @@
 Agent coordination: peer messaging, background-job control, and supervised long-running processes. Main agent is `Main`; subagents inherit task ID.
 Use `op: "list"` to discover live peers. Default is running+idle plus running/idle/parked/shown/truncated counts — never an unbounded parked name dump. Pass `status: "parked"` for parked archaeology; optional `limit` bounds rows (default 32, max 100). Address peers by exact roster ID — NEVER invent names. `send` to a known parked id still revives it; `history://<id>` and `agent://<id>` stay readable.
 
-# Messaging & Job Control
+# Messaging & Jobs
+
+Background jobs auto-deliver when they finish. You NEVER need to poll. `jobs` is a non-consuming summary; `wait` observing a settled job first delivers its result and suppresses duplicate `async-result`.
 
 - **The user is NOT a peer.** `Main` answers the user ONLY in a plain text block; a `send` shows them a tool-card preview (2 lines while collapsed). Thinking is not output either.
 - **`send`** (with `to`): fire-and-forget, NEVER blocks. Delivery receipts (`delivered`/`failed`) immediate; `failed` → peer gone, don't retry.
   Sending wakes `idle`/`parked` peers. Answering: lead with answer, NEVER quote, set `replyTo`.
 - **Format**: plain prose ONLY. No JSON status objects. Share paths via `local://`/`artifact://` URLs, not pasted blobs.
-- **`wait`**: routes by target: `name` → process wait (see Processes); `from` (no `ids`) → peer-message wait; every other shape (bare, `ids`, or `from`+`ids`) → immediate error: background-job waiting is disabled; results auto-deliver; sole blocker means end the turn immediately without prose or tool calls.
+- **`wait`**: routes by target: `name` → process wait (see Processes); bare/`ids` → background-job wait; `from` → peer-message wait, optionally racing watched jobs. Returns on the first matching message, watched job settling, wait window elapsing, or steering interrupt. Job results still auto-deliver; use `wait` only when no independent work remains.
 - **`inbox`**: drain queued messages without blocking.
 - **`cancel`**: kill background jobs by `ids` when they have hung, stalled, or are no longer needed. Returns immediately.
-- **`jobs`**: status snapshot of every job without waiting — intervention/inspection only, NEVER a polling or delay mechanism. A settled row acknowledges delivery, suppressing duplicate `async-result`. Also names running subagents with no job entry — coordinate with those via `send`.
+- **`jobs`**: non-consuming status summary of every job. Use `wait` with an id to recover a settled result before auto-delivery. Also names running subagents with no job entry — coordinate with those via `send`.
 - Job rows are process-local. A row whose result was delivered or recovered by a snapshot expires shortly (~30s) after; unconsumed rows stay inspectable for up to five minutes after settlement. Afterward, use the agent ID with `send`, `agent://<id>`, or `history://<id>`.
 - `completed` means successful yield/job exit, not artifact acceptance. Verify claimed changes.
 - NEVER use shell tools, grep, or read other sessions' files to figure out what a peer is doing. Message them directly.

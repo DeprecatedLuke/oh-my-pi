@@ -1,1 +1,7 @@
-No polling or waiting on jobs. Results auto-deliver; `hub jobs` is an intervention snapshot that acknowledges delivery, suppressing duplicate `async-result`. Job IDs are process-local; a row whose result was delivered or recovered by a snapshot expires shortly (~30s) after, while unconsumed rows stay inspectable for up to ~5min. Afterward, reach by agent ID via `hub send`, `agent://<id>`, or `history://<id>`. `completed` means the subagent yielded, not that artifacts were verified.
+No polling needed.
+
+Settled-job inspection: `hub jobs` summarizes without consuming; `hub wait` delivers the selected result → no duplicate `async-result`.
+
+Job IDs: process memory; delivered/recovered results expire shortly (~30s), unconsumed results within ~5min. Afterward use agent ID: `hub send`, `agent://<id>`, `history://<id>`.
+
+`completed`: subagent yielded successfully; claimed artifacts unverified.
