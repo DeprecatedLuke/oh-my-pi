@@ -2,6 +2,9 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { SessionSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-selector";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { ModelPickerComponent } from "@oh-my-pi/pi-tui/overlays/model-picker";
+
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -113,6 +116,50 @@ describe("SelectorController.showSelector", () => {
 		finish();
 		expect(slot.children).toEqual([askDialog, editor]);
 		expect(setFocus).toHaveBeenLastCalledWith(askDialog);
+	});
+});
+
+describe("SelectorController.showModelSelector", () => {
+	it("mounts the temporary model picker through the overlay host", () => {
+		const editor = new Text("editor", 0, 0);
+		const slot = createEditorSlot(editor);
+		const { ctx } = createCtx(slot, editor);
+		const settings = Settings.isolated({});
+		let mounted: unknown;
+		const showOverlay: typeof ctx.ui.showOverlay = component => {
+			mounted = component;
+			return {
+				hide: () => {},
+				setHidden: (_hidden: boolean) => {},
+				isHidden: () => false,
+			};
+		};
+
+		Object.assign(ctx, {
+			settings,
+			keybindings: {
+				getKeys: () => [],
+				getDisplayString: () => "",
+			},
+			session: {
+				getContextUsage: () => undefined,
+				getRoleModelCycle: () => undefined,
+				model: undefined,
+				modelRegistry: {
+					getError: () => undefined,
+					refresh: async () => {},
+					getAll: () => [],
+					getAvailable: () => [],
+				},
+				scopedModels: [],
+			},
+		});
+		Object.assign(ctx.ui, { showOverlay });
+
+		new SelectorController(ctx).showModelSelector({ temporaryOnly: true });
+
+		expect(mounted).toBeInstanceOf(ModelPickerComponent);
+		expect(ctx.ui.setFocus).toHaveBeenCalledWith(mounted);
 	});
 });
 
