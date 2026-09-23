@@ -827,7 +827,9 @@ export class AdvisorRuntime {
 			logger.debug("advisor context reset", { reason: "delivered-prefix-changed", lastCount: this.#lastCount });
 			this.#resetAdvisorContext(true, true);
 		}
-		const rawMessages = all.slice(this.#lastCount);
+		const rawMessages = all
+			.slice(this.#lastCount)
+			.filter(message => !(message.role === "assistant" && message.stopReason === "error"));
 		for (let i = this.#lastCount; i < all.length; i++) {
 			const message = all[i];
 			if (message === undefined) continue;

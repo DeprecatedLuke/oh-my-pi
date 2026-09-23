@@ -2008,6 +2008,46 @@ describe("advisor", () => {
 			expect(promptText(promptInputs[0])).not.toContain("note");
 		});
 
+		it("omits terminal provider failures while retaining successful assistant context", async () => {
+			const promptInputs: Array<string | AgentMessage[]> = [];
+			const { promise: promptStarted, resolve: startPrompt } = Promise.withResolvers<void>();
+			const agent: AdvisorAgent = {
+				prompt: async input => {
+					promptInputs.push(input);
+					startPrompt();
+				},
+				abort: () => {},
+				reset: () => {},
+				state: { messages: [] },
+			};
+			const failureText = "HTTP 403 provider refusal: CYBER_POLICY_BLOCK_7F31 (blocked by cyber-policy rules)";
+			const retainedText = "The review should preserve this successful assistant update.";
+			const messages: AgentMessage[] = [
+				{
+					role: "assistant",
+					content: [{ type: "text", text: failureText }],
+					stopReason: "error",
+					errorMessage: failureText,
+					timestamp: 1,
+				} as AgentMessage,
+				{
+					role: "assistant",
+					content: [{ type: "text", text: retainedText }],
+					stopReason: "stop",
+					timestamp: 2,
+				} as AgentMessage,
+			];
+			const runtime = new AdvisorRuntime(agent, { snapshotMessages: () => messages });
+
+			runtime.onTurnEnd(messages);
+			await promptStarted;
+
+			const prompt = promptText(promptInputs[0]!);
+			expect(promptInputs).toHaveLength(1);
+			expect(prompt).not.toContain(failureText);
+			expect(prompt).toContain(retainedText);
+		});
+
 		it("obfuscates session updates before prompting the advisor", async () => {
 			const secret = "ADVISOR_SECRET_TOKEN_123";
 			const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
