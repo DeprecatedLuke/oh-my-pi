@@ -93,7 +93,7 @@ describe("AgentSession snapcompact secret obfuscation", () => {
 		});
 		const authStorage = await AuthStorage.create(path.join(tempDir, `auth-${Snowflake.next()}.db`));
 		authStorages.push(authStorage);
-		authStorage.setRuntimeApiKey("anthropic", "test-key");
+		authStorage.keys.setRuntime("anthropic", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
 		// AgentSessionConfig's secret-masking dependency is `obfuscator`; passed by
 		// shorthand so the session's `#convertToLlmForSideRequest` masks for real.

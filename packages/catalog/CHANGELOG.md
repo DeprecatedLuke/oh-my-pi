@@ -9,6 +9,22 @@
 
 - Fixed ClinePass GLM-5.2 catalog metadata advertising the unsupported `max` reasoning effort instead of the gateway's `xhigh` top tier.
 
+### Added
+
+- Added per-account discovery support for Codex cyber access entitlements
+- Added `org-scoped-identity` and `oauth-token-env` rule support for auth providers
+
+## [18.2.11] - 2026-09-23
+
+### Added
+
+- Added built-in StepFun provider support for the step-5-preview model, including live model discovery.
+
+### Fixed
+
+- Fixed cost estimation for OpenAI Codex GPT-6 Sol and Luna models across standard and worker routes.
+- Fixed GitHub Copilot Grok 4.x models failing to make requests.
+
 ## [18.2.10] - 2026-09-22
 
 ### Changed

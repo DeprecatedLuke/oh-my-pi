@@ -40,7 +40,7 @@ interface Harness {
 async function createHarness(threshold: number, options: HarnessOptions = {}): Promise<Harness> {
 	const tempDir = TempDir.createSync("@pi-knowledge-auto-update-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-	authStorage.setRuntimeApiKey("mock", "test-key");
+	authStorage.keys.setRuntime("mock", "test-key");
 	const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 	const model = createMockModel({
 		provider: "mock",

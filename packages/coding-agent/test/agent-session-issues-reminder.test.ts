@@ -41,7 +41,7 @@ function textStop(): MockResponse {
 async function createHarness(settingsOverrides: SettingsOverrides = {}, responseCount = 8): Promise<Harness> {
 	const tempDir = TempDir.createSync("@pi-issues-reminder-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-	authStorage.setRuntimeApiKey("mock", "test-key");
+	authStorage.keys.setRuntime("mock", "test-key");
 
 	const mock = createMockModel({ responses: Array.from({ length: responseCount }, () => textStop()) });
 	const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
