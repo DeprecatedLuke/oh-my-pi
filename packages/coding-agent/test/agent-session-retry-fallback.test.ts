@@ -3624,6 +3624,11 @@ describe("AgentSession retry fallback", () => {
 					stopDetails: { type: "refusal", category: "cyber", explanation: "Declined." },
 					errorMessage: "Refusal (cyber): Declined.",
 				},
+				{
+					stopReason: "error",
+					stopDetails: { type: "refusal", category: "cyber", explanation: "Declined." },
+					errorMessage: "Refusal (cyber): Declined.",
+				},
 				{ content: ["recovered"] },
 			],
 		});
@@ -3662,7 +3667,7 @@ describe("AgentSession retry fallback", () => {
 		// see the settled error instead of a silently successful-looking state.
 		const settled = session.getLastAssistantMessage();
 		expect(settled?.stopReason).toBe("error");
-		expect(settled?.errorMessage).toBe("Refusal (cyber): Declined.");
+		expect(settled?.errorMessage).toBe("Retry budget exhausted after 1 retry: Refusal (cyber): Declined.");
 		expect(settled?.stopDetails).toEqual({ type: "refusal", category: "cyber", explanation: "Declined." });
 
 		await session.prompt("Next prompt supersedes the pruned refusal");
@@ -3779,18 +3784,10 @@ describe("AgentSession retry fallback", () => {
 		});
 	});
 
-	it("emits auto_retry_end when a mid-saga classifier refusal has no fallback to switch to", async () => {
-		// Regression: `#handleRetryableError`'s classifier-refusal branch used to
-		// return `false` without emitting `auto_retry_end` whenever no fallback
-		// model was available to switch to. A saga that already announced
-		// `auto_retry_start` on an earlier (non-refusal) attempt would then never
-		// get a matching `auto_retry_end` — leaving any subscriber tracking
-		// "retry outstanding" state (e.g. suppressing a duplicate error toast)
-		// latched open forever. With `retry.maxRetries: 2` and no fallback chain
-		// configured, the second attempt's classifier refusal hits that branch
-		// while `retryAttempt (2) <= maxRetries (2)`, so it can't fall through
-		// the pre-existing maxRetries-exceeded path (which already emits
-		// `auto_retry_end`) — isolating the branch this regression covers.
+	it("retries a classifier refusal on the same model when no fallback is configured", async () => {
+		// Classifier refusals (e.g. Anthropic's cyber filter) are frequently false
+		// positives; without a fallback chain the turn must auto-continue on the
+		// same model within the retry budget instead of stopping the session.
 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!primaryModel) {
 			throw new Error("Expected bundled test model to exist");
@@ -3819,8 +3816,10 @@ describe("AgentSession retry fallback", () => {
 						stopDetails: { type: "refusal", category: "cyber", explanation: "Classifier declined." },
 						errorMessage: refusalMessage,
 					});
+				} else if (calls === 3) {
+					mock.push({ content: ["recovered"] });
 				} else {
-					throw new Error(`Unexpected model call after the classifier refusal settled: call ${calls}`);
+					throw new Error(`Unexpected model call after recovery: call ${calls}`);
 				}
 				return mock.stream(model, context, options);
 			},
@@ -3841,23 +3840,18 @@ describe("AgentSession retry fallback", () => {
 		});
 		const { retryStartEvents, retryEndEvents } = trackRetryEvents(session);
 
-		await session.prompt("Retry once, then hit a classifier refusal with no fallback");
+		await session.prompt("Retry once, then hit a classifier refusal, then recover");
 		await session.waitForIdle();
 
 		expect(requestedModels).toEqual([
 			`${primaryModel.provider}/${primaryModel.id}`,
 			`${primaryModel.provider}/${primaryModel.id}`,
+			`${primaryModel.provider}/${primaryModel.id}`,
 		]);
-		expect(retryStartEvents).toHaveLength(1);
-		expect(retryStartEvents[0]?.attempt).toBe(1);
-		expect(retryEndEvents).toEqual([
-			{
-				type: "auto_retry_end",
-				success: false,
-				attempt: 1,
-				finalError: refusalMessage,
-			},
-		]);
+		expect(retryStartEvents.map(event => event.attempt)).toEqual([1, 2]);
+		expect(retryEndEvents).toHaveLength(1);
+		expect(retryEndEvents[0]).toMatchObject({ type: "auto_retry_end", success: true });
+		expect(session.getLastAssistantMessage()?.content).toEqual([{ type: "text", text: "recovered" }]);
 	});
 
 	it("uses Google retry hints in quota errors before quota backoff", async () => {

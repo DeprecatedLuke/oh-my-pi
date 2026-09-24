@@ -2428,7 +2428,10 @@ export class TurnRecovery {
 			// same-route budget: every distinct account must be tried first.
 			if (switchedModel) this.#retryAttempt = 1;
 		}
-		if ((classifierRefusal || accountPolicyDenial) && !switchedCredential && !switchedModel) {
+		// Classifier refusals (e.g. Anthropic cyber) are often false positives on
+		// benign turns: with no fallback available, fall through to the normal
+		// backoff retry, bounded by the retry budget above.
+		if (accountPolicyDenial && !switchedCredential && !switchedModel) {
 			// A prior attempt in this saga already announced `auto_retry_start`
 			// (retryAttempt was incremented for each call to this method, so > 1
 			// means at least one earlier attempt started the loop) but this
