@@ -698,11 +698,19 @@ export function obfuscateMessages(obfuscator: SecretObfuscator, messages: Messag
 }
 
 /**
- * Redact outbound provider context. Only conversation messages are rewritten;
- * the static system prompt and tool schemas pass through unchanged.
+ * Redact outbound provider context: conversation messages and system prompt
+ * blocks (which embed knowledge notes, context files, and memories that can
+ * carry secrets). Tool schemas pass through unchanged.
  */
 export function obfuscateProviderContext(obfuscator: SecretObfuscator | undefined, context: Context): Context {
 	if (!obfuscator?.hasSecrets()) return context;
 	const messages = obfuscateMessages(obfuscator, context.messages);
-	return messages === context.messages ? context : { ...context, messages };
+	const original = context.systemPrompt;
+	let systemPrompt = original;
+	if (original) {
+		const next = original.map(block => obfuscator.obfuscate(block));
+		if (next.some((block, index) => block !== original[index])) systemPrompt = next;
+	}
+	if (messages === context.messages && systemPrompt === original) return context;
+	return { ...context, messages, systemPrompt };
 }
