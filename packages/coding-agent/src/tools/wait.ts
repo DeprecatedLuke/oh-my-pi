@@ -110,7 +110,7 @@ function noMessageResult(
 
 /** Whether `session` has the `wait` tool active, so prompts may point blocked callers at it. */
 export function hasWaitTool(session: ToolSession): boolean {
-	return session.isToolActive?.("wait") ?? true;
+	return session.isToolActive?.("wait") ?? false;
 }
 
 export class WaitTool implements AgentTool<typeof waitSchema, CoordinationDetails> {
