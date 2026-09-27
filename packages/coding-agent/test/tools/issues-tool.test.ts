@@ -9,6 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { findIssueById, getIssuesRoot } from "@oh-my-pi/pi-coding-agent/issues";
+import { cfgIssuesEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { IssuesTool, type IssuesToolDetails } from "@oh-my-pi/pi-coding-agent/tools";
 import type { ToolSession } from "../../src/tools";
 
@@ -136,7 +137,7 @@ describe("IssuesTool", () => {
 
 	it("createIf returns null when issues.enabled is false", () => {
 		const session = createSession(tempDir);
-		session.settings.set("issues.enabled", false);
+		cfgIssuesEnabled.set(session.settings, false);
 		expect(IssuesTool.createIf(session)).toBeNull();
 	});
 });

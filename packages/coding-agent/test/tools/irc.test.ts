@@ -3,6 +3,7 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { IrcBus } from "@oh-my-pi/pi-coding-agent/irc/bus";
 import { isIrcEnabled } from "@oh-my-pi/pi-coding-agent/irc/messaging";
+import { cfgTaskMaxRecursionDepth } from "@oh-my-pi/pi-coding-agent/task/settings";
 import { type IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
@@ -529,7 +530,7 @@ describe("IRC", () => {
 		it("isIrcEnabled returns false for a top-level session that cannot spawn tasks", () => {
 			const settings = Settings.isolated();
 			// Depth 0 with spawning gated off: no peers exist or can be created.
-			settings.set("task.maxRecursionDepth", 0);
+			cfgTaskMaxRecursionDepth.set(settings, 0);
 			expect(isIrcEnabled(settings, 0)).toBe(false);
 		});
 
@@ -543,7 +544,7 @@ describe("IRC", () => {
 		it("isIrcEnabled returns true for a subagent even at the recursion-depth cap", () => {
 			const settings = Settings.isolated();
 			// A leaf subagent cannot spawn, but its parent (and siblings) exist.
-			settings.set("task.maxRecursionDepth", 2);
+			cfgTaskMaxRecursionDepth.set(settings, 2);
 			expect(isIrcEnabled(settings, 2)).toBe(true);
 		});
 	});

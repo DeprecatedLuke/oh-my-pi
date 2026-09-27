@@ -103,7 +103,6 @@ describe("capture failure across background and cancellation boundaries", () => 
 		}
 	});
 
-
 	it("delivers an eval background capture failure without failing the completed cell", async () => {
 		await using temp = await TempDir.create("@capture-background-eval-");
 		const deliveries: string[] = [];

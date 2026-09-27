@@ -248,7 +248,15 @@ interface AsyncJobDelivery {
 	 */
 	jobSnapshot?: Pick<
 		AsyncJob,
-		"type" | "status" | "startTime" | "endTime" | "label" | "structured" | "agentId" | "latestDetails" | "lastActivityAt"
+		| "type"
+		| "status"
+		| "startTime"
+		| "endTime"
+		| "label"
+		| "structured"
+		| "agentId"
+		| "latestDetails"
+		| "lastActivityAt"
 	>;
 }
 
@@ -528,7 +536,6 @@ export class AsyncJobManager {
 		if (job.status !== "running") return false;
 		job.status = "cancelled";
 		job.abortController.abort();
-		this.#scheduleEviction(id);
 		this.#emitChange();
 		return true;
 	}

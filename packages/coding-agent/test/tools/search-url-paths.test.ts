@@ -18,7 +18,6 @@ function createSession(testDir: string): ToolSession {
 		getArtifactsDir: () => artifactsDir,
 		getSessionSpawns: () => "*",
 		allocateOutputArtifact: async toolType => {
-			await fs.mkdir(artifactsDir, { recursive: true });
 			const id = String(nextArtifactId++);
 			return { id, path: path.join(artifactsDir, `${id}.${toolType}.log`) };
 		},
@@ -50,7 +49,7 @@ function stubLoadPage(body: string, contentType: string) {
 	}));
 }
 
-describe("grep tools with external URL paths", () => {
+describe("search tools with external URL paths", () => {
 	let testDir: string;
 
 	beforeEach(async () => {
@@ -62,7 +61,7 @@ describe("grep tools with external URL paths", () => {
 		await removeWithRetries(testDir);
 	});
 
-	it("grep fetches a URL and greps the rendered text", async () => {
+	it("search fetches a URL and greps the rendered text", async () => {
 		stubLoadPage("alpha\nremote needle\nomega\n", "text/plain");
 		const tools = await createTools(createSession(testDir));
 		const tool = tools.find(entry => entry.name === "grep");
@@ -70,7 +69,7 @@ describe("grep tools with external URL paths", () => {
 
 		const result = await tool!.execute("search-url", {
 			pattern: "remote needle",
-			paths: ["https://example.com/notes.txt"],
+			path: "https://example.com/notes.txt",
 		});
 
 		const text = resultText(result);
@@ -78,7 +77,7 @@ describe("grep tools with external URL paths", () => {
 		expect(text).not.toContain("Cannot search external URL");
 	});
 
-	it("refetches the same URL before each grep", async () => {
+	it("refetches the same URL before each search", async () => {
 		let body = "first needle\n";
 		const loadPage = vi.spyOn(scrapers, "loadPage").mockImplementation(async requestedUrl => ({
 			ok: true,
@@ -93,12 +92,12 @@ describe("grep tools with external URL paths", () => {
 
 		const first = await tool!.execute("search-url-first", {
 			pattern: "first|second",
-			paths: ["https://example.com/live.txt"],
+			path: "https://example.com/live.txt",
 		});
 		body = "second needle\n";
 		const second = await tool!.execute("search-url-second", {
 			pattern: "first|second",
-			paths: ["https://example.com/live.txt"],
+			path: "https://example.com/live.txt",
 		});
 
 		expect(resultText(first)).toContain("first needle");
@@ -107,7 +106,7 @@ describe("grep tools with external URL paths", () => {
 		expect(loadPage).toHaveBeenCalledTimes(2);
 	});
 
-	it("grep applies URL line-range selectors after materialization", async () => {
+	it("search applies URL line-range selectors after materialization", async () => {
 		stubLoadPage("outside before\nremote needle\noutside after\n", "text/plain");
 		const tools = await createTools(createSession(testDir));
 		const tool = tools.find(entry => entry.name === "grep");
@@ -115,7 +114,7 @@ describe("grep tools with external URL paths", () => {
 
 		const result = await tool!.execute("search-url-range", {
 			pattern: "outside|remote needle",
-			paths: ["https://example.com/notes.txt:2-2"],
+			path: "https://example.com/notes.txt:2-2",
 		});
 
 		const text = resultText(result);
@@ -137,21 +136,24 @@ describe("grep tools with external URL paths", () => {
 			}),
 		).rejects.toThrow("Cannot rewrite external URL");
 	});
-	it("ast_grep rejects external URLs and directs callers to read first", async () => {
+
+	it("ast_grep materializes URL content with the source extension", async () => {
 		stubLoadPage("export function remoteNeedle() {\n\treturn 1;\n}\n", "text/plain");
 		const tools = await createTools(createSession(testDir));
 		const tool = tools.find(entry => entry.name === "ast_grep");
 		expect(tool).toBeDefined();
 
-		await expect(
-			tool!.execute("ast-grep-url", {
-				pat: "remoteNeedle",
-				paths: ["https://example.com/snippet.ts"],
-			}),
-		).rejects.toThrow("Cannot search external URL");
+		const result = await tool!.execute("ast-grep-url", {
+			pat: "remoteNeedle",
+			path: "https://example.com/snippet.ts",
+		});
+
+		const text = resultText(result);
+		expect(text).toContain("remoteNeedle");
+		expect(text).not.toContain("Parse issues");
 	});
 
-	it("grep materializes a scheme-less www. scope like its canonical spelling", async () => {
+	it("search materializes a scheme-less www. scope like its canonical spelling", async () => {
 		const loadPage = stubLoadPage("alpha\nremote needle\nomega\n", "text/plain");
 		const tools = await createTools(createSession(testDir));
 		const tool = tools.find(entry => entry.name === "grep");
@@ -159,14 +161,14 @@ describe("grep tools with external URL paths", () => {
 
 		const result = await tool!.execute("search-url-www", {
 			pattern: "remote needle",
-			paths: ["www.example.com/notes.txt"],
+			path: "www.example.com/notes.txt",
 		});
 
 		expect(resultText(result)).toContain("remote needle");
 		expect(loadPage).toHaveBeenCalledWith("https://www.example.com/notes.txt", expect.anything());
 	});
 
-	it("grep repairs a collapsed https:/ scheme before materializing", async () => {
+	it("search repairs a collapsed https:/ scheme before materializing", async () => {
 		const loadPage = stubLoadPage("alpha\nremote needle\nomega\n", "text/plain");
 		const tools = await createTools(createSession(testDir));
 		const tool = tools.find(entry => entry.name === "grep");
@@ -174,14 +176,14 @@ describe("grep tools with external URL paths", () => {
 
 		const result = await tool!.execute("search-url-collapsed", {
 			pattern: "remote needle",
-			paths: ["https:/example.com/notes.txt"],
+			path: "https:/example.com/notes.txt",
 		});
 
 		expect(resultText(result)).toContain("remote needle");
 		expect(loadPage).toHaveBeenCalledWith("https://example.com/notes.txt", expect.anything());
 	});
 
-	it("grep prefers an existing local directory named like a www. host", async () => {
+	it("search prefers an existing local directory named like a www. host", async () => {
 		const loadPage = stubLoadPage("remote body\n", "text/plain");
 		await fs.mkdir(path.join(testDir, "www.example.com"), { recursive: true });
 		await fs.writeFile(path.join(testDir, "www.example.com", "notes.txt"), "local needle\n");
@@ -191,14 +193,14 @@ describe("grep tools with external URL paths", () => {
 
 		const result = await tool!.execute("search-local-dir", {
 			pattern: "local needle",
-			paths: ["www.example.com"],
+			path: "www.example.com",
 		});
 
 		expect(resultText(result)).toContain("local needle");
 		expect(loadPage).not.toHaveBeenCalled();
 	});
 
-	it("grep leaves plain relative paths untouched by URL materialization", async () => {
+	it("search leaves plain relative paths untouched by URL materialization", async () => {
 		const loadPage = stubLoadPage("remote body\n", "text/plain");
 		await fs.mkdir(path.join(testDir, "src"), { recursive: true });
 		await fs.writeFile(path.join(testDir, "src", "notes.txt"), "local needle\n");
@@ -208,14 +210,14 @@ describe("grep tools with external URL paths", () => {
 
 		const result = await tool!.execute("search-local-rel", {
 			pattern: "local needle",
-			paths: ["src/notes.txt"],
+			path: "src/notes.txt",
 		});
 
 		expect(resultText(result)).toContain("local needle");
 		expect(loadPage).not.toHaveBeenCalled();
 	});
 
-	it("grep rejects unsupported URL schemes explicitly", async () => {
+	it("search rejects unsupported URL schemes explicitly", async () => {
 		stubLoadPage("remote body\n", "text/plain");
 		const tools = await createTools(createSession(testDir));
 		const tool = tools.find(entry => entry.name === "grep");
@@ -224,7 +226,7 @@ describe("grep tools with external URL paths", () => {
 		await expect(
 			tool!.execute("search-url-ftp", {
 				pattern: "needle",
-				paths: ["ftp://example.com/notes.txt"],
+				path: "ftp://example.com/notes.txt",
 			}),
 		).rejects.toThrow("Cannot search external URL");
 	});

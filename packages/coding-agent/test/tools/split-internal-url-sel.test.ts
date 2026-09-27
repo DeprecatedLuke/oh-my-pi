@@ -54,7 +54,7 @@ describe("InternalUrlRouter.split", () => {
 
 	it("preserves opaque knowledge tokens while peeling a true trailing selector", () => {
 		const knowledgePath = "knowledge://sdk/sdk-gen-$$CDO3CPB981P7:L$$.md";
-		expect(splitInternalUrlSel(`${knowledgePath}:raw`)).toEqual({
+		expect(split(`${knowledgePath}:raw`)).toEqual({
 			path: knowledgePath,
 			sel: "raw",
 		});

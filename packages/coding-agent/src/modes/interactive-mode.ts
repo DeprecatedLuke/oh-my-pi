@@ -357,6 +357,7 @@ import {
 	cfgTuiVimModeDisplay,
 } from "./settings";
 import { cfgTasksTodoClearDelay } from "../tools/settings";
+import { cfgSecretsAutoFixRefusal } from "../secrets/settings";
 import { cfgProseOnlyThinking } from "../session/settings";
 import { cfgHideThinkingBlock } from "../session/settings";
 import { cfgCycleOrder, cfgModelRoles } from "../config/model-settings";
@@ -3983,7 +3984,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	async #maybeAutoFixRefusal(event: AgentSessionEvent): Promise<void> {
 		if (event.type !== "agent_end" || event.isTerminal === false) return;
 		if (!this.isInitialized || this.#isShuttingDown) return;
-		if (!this.settings.get("secrets.autoFixRefusal")) return;
+		if (!cfgSecretsAutoFixRefusal.get(this.settings)) return;
 		if (this.#autoFixRefusalInFlight) return;
 		if (this.#isAutoSubmitBlocked()) {
 			if (!this.#autoFixRefusalIdleWait && (this.session.isStreaming || this.session.hasPostPromptWork)) {

@@ -578,7 +578,6 @@ export class SelectorController {
 		this.ctx.session.setThinkingLevel(level);
 	}
 
-
 	showModelSelector(options?: { temporaryOnly?: boolean }): void {
 		if (options?.temporaryOnly) {
 			this.#showModelPicker();

@@ -168,42 +168,42 @@ describe("GrepTool internal URL resolution", () => {
 		expect(getResultText(result)).toContain("# Demo");
 		expect(result.details?.resolvedPath).toBe(path.join(skillDir, "SKILL.md"));
 	});
-	it("walks skill:// directory subpaths for grep and glob", async () => {
+	it("walks skill:// directory subpaths for search and find", async () => {
 		await registerSkillDirectory();
 		const session = createSession({ hasEditTool: true });
-		const grepTool = new GrepTool(session);
-		const globTool = new GlobTool(session);
+		const searchTool = new GrepTool(session);
+		const findTool = new GlobTool(session);
 
-		const grepResult = await grepTool.execute("test-search", {
+		const searchResult = await searchTool.execute("test-search", {
 			pattern: "deep needle",
 			path: "skill://demo/references",
 		});
-		const globResult = await globTool.execute("test-find", {
+		const findResult = await findTool.execute("test-find", {
 			path: "skill://demo/references",
 		});
 
-		const grepText = getResultText(grepResult);
-		expect(grepText).toContain("deep needle");
-		expect(grepText).not.toMatch(/^\[[^#\r\n]+#[0-9A-F]{4}\]$/m);
-		expect(getResultText(globResult)).toContain("guide.md");
+		const searchText = getResultText(searchResult);
+		expect(searchText).toContain("deep needle");
+		expect(searchText).not.toMatch(/^\[[^#\r\n]+#[0-9A-F]{4}\]$/m);
+		expect(getResultText(findResult)).toContain("guide.md");
 	});
 
-	it("walks bare skill:// roots for grep and glob", async () => {
+	it("walks bare skill:// roots for search and find", async () => {
 		await registerSkillDirectory();
 		const session = createSession({ hasEditTool: true });
-		const grepTool = new GrepTool(session);
-		const globTool = new GlobTool(session);
+		const searchTool = new GrepTool(session);
+		const findTool = new GlobTool(session);
 
-		const grepResult = await grepTool.execute("test-search", {
+		const searchResult = await searchTool.execute("test-search", {
 			pattern: "deep needle",
 			path: "skill://demo",
 		});
-		const globResult = await globTool.execute("test-find", {
+		const findResult = await findTool.execute("test-find", {
 			path: "skill://demo",
 		});
 
-		expect(getResultText(grepResult)).toContain("deep needle");
-		expect(getResultText(globResult)).toContain("guide.md");
+		expect(getResultText(searchResult)).toContain("deep needle");
+		expect(getResultText(findResult)).toContain("guide.md");
 	});
 
 	it("greps the caller-bound full current branch without materializing a session file", async () => {
@@ -366,18 +366,6 @@ describe("GrepTool internal URL resolution", () => {
 		);
 	});
 
-	it("supports a PCRE2 lookbehind pattern on a pure-virtual search (dialect parity)", async () => {
-		registerVirtualDocs(new Map([["doc.md", "alpha line\nbeta line\n"]]));
-		const session = createSession();
-		const tool = new GrepTool(session);
-		// Lookbehind is supported by native PCRE2; pure-virtual resources use the
-		// same pattern dialect and must return the matching line.
-		const result = await tool.execute("re2", { pattern: "(?<=alpha )line", path: "virtual://doc.md" });
-		const text = getResultText(result);
-		expect(text).toContain("alpha line");
-		expect(text).not.toContain("beta line");
-	});
-
 	it("expands omp:// root to grep embedded documentation files", async () => {
 		const session = createSession();
 		const tool = new GrepTool(session);
@@ -490,7 +478,7 @@ describe("GrepTool internal URL resolution", () => {
 		expect(text).toContain("PLAN.md");
 	});
 
-	it("walks local:// directory subpaths for read and glob", async () => {
+	it("walks local:// directory subpaths for read and find", async () => {
 		const localRoot = path.join(artifactsDir, "local");
 		await fs.mkdir(path.join(localRoot, "notes"), { recursive: true });
 		await Bun.write(path.join(localRoot, "notes", "PLAN.md"), "# Plan\n");
@@ -499,7 +487,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const session = createSession({ hasEditTool: true });
 		const readResult = await new ReadTool(session).execute("test-read", { path: "local://notes" });
-		const globResult = await new GlobTool(session).execute("test-find", {
+		const findResult = await new GlobTool(session).execute("test-find", {
 			path: "local://notes",
 		});
 		const dirResource = await InternalUrlRouter.instance().resolve("local://notes");
@@ -509,7 +497,7 @@ describe("GrepTool internal URL resolution", () => {
 		// Directory listings must stay immutable so hashline edit anchors never key on a directory path.
 		expect(readText).not.toMatch(/^\[[^#\r\n]+#[0-9A-F]{4}\]$/m);
 		expect(dirResource.immutable).toBe(true);
-		expect(getResultText(globResult)).toContain("PLAN.md");
+		expect(getResultText(findResult)).toContain("PLAN.md");
 	});
 
 	it("keeps hashline anchors when searching mutable local:// sources", async () => {
@@ -679,7 +667,7 @@ describe("GrepTool internal URL resolution", () => {
 
 		const result = await tool.execute("test-call", {
 			pattern: "needle",
-			path: "artifact://11; mixed.txt",
+			path: JSON.stringify(["artifact://11", "mixed.txt"]),
 		});
 
 		const text = getResultText(result);

@@ -210,6 +210,7 @@ import {
 } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { cfgSecretsEnabled } from "../secrets/settings";
+import { cfgIssuesEnabled, cfgIssuesReminders, cfgIssuesRemindersMax } from "../tools/settings";
 import { releaseSharpshooterSession } from "../sharpshooter/backend";
 import { flushSharpshooterExtraction } from "../sharpshooter/extract";
 import { toolReadsSkillUris } from "../system-prompt";
@@ -4148,14 +4149,14 @@ export class AgentSession implements SettingsScope {
 	 * per-prompt cap prevents an unchanged issue from causing an infinite loop.
 	 */
 	async #checkInProgressIssues(): Promise<boolean> {
-		if (this.settings.get("issues.enabled") === false) return false;
-		if (!this.settings.get("issues.reminders")) {
+		if (cfgIssuesEnabled.get(this.settings) === false) return false;
+		if (!cfgIssuesReminders.get(this.settings)) {
 			this.#issuesReminderCount = 0;
 			return false;
 		}
 		if (this.hasPendingBackgroundJobs()) return false;
 
-		const remindersMax = this.settings.get("issues.reminders.max");
+		const remindersMax = cfgIssuesRemindersMax.get(this.settings);
 		if (this.#issuesReminderCount >= remindersMax) {
 			logger.debug("Issues reminder: max reminders reached", { count: this.#issuesReminderCount });
 			return false;

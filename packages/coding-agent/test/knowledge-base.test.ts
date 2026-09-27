@@ -13,6 +13,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/knowledge-base";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { loadKnowledgeSummaries } from "@oh-my-pi/pi-coding-agent/session/knowledge-index";
+import { cfgKnowledgeAutoUpdateThresholdTokens } from "@oh-my-pi/pi-coding-agent/session/knowledge-settings";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
@@ -140,8 +141,8 @@ describe("automatic knowledge-update cadence", () => {
 		const defaults = Settings.isolated();
 		const disabled = Settings.isolated({ "knowledge.autoUpdateThresholdTokens": 0 });
 
-		expect(defaults.get("knowledge.autoUpdateThresholdTokens")).toBe(100_000);
-		expect(disabled.get("knowledge.autoUpdateThresholdTokens")).toBe(0);
+		expect(cfgKnowledgeAutoUpdateThresholdTokens.get(defaults)).toBe(100_000);
+		expect(cfgKnowledgeAutoUpdateThresholdTokens.get(disabled)).toBe(0);
 	});
 
 	it("keeps post-marker session messages in order while counting only positive finite assistant usage", () => {

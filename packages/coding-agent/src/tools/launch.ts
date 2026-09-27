@@ -233,6 +233,7 @@ function readyPendingSummary(daemon: DaemonSnapshot, ready?: LaunchParams["ready
 
 function toolContent(result: DaemonRpcResult, params: LaunchParams): string {
 	switch (result.op) {
+		case "mode":
 		case "ping":
 		case "shutdown":
 			throw new ToolError(`Internal daemon result ${result.op} is not tool-visible`);
@@ -315,6 +316,7 @@ async function toolDetails(result: DaemonRpcResult, params: LaunchParams): Promi
 			return { op: "restart", daemon: result.daemon };
 		case "describe":
 			return { op: "describe", daemon: result.daemon, spec: result.spec };
+		case "mode":
 		case "ping":
 		case "shutdown":
 			throw new ToolError(`Internal daemon result ${result.op} is not tool-visible`);

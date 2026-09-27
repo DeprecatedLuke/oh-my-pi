@@ -24,6 +24,8 @@ import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { canSpawnAtDepth } from "../task/types";
 import { Ellipsis, renderStatusLine, renderTreeList, truncateToWidth } from "@oh-my-pi/pi-tui/render";
 import type { ToolSession } from ".";
+import { cfgTaskMaxRecursionDepth } from "../task/settings";
+import { cfgIrcTimeoutMs } from "./settings";
 import {
 	createCachedComponent,
 	formatBadge,
@@ -46,7 +48,7 @@ export function isIrcEnabled(settings: Settings, taskDepth: number): boolean {
 	if (taskDepth > 0) return true;
 	// Top-level session: peers exist only if it can still spawn subagents — the
 	// same capacity gate the task tool uses, reused here to avoid drift.
-	const maxDepth = settings.get("task.maxRecursionDepth") ?? 2;
+	const maxDepth = cfgTaskMaxRecursionDepth.get(settings) ?? 2;
 	return canSpawnAtDepth(maxDepth, taskDepth);
 }
 
@@ -288,9 +290,12 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 			const suppressRelay = isBroadcast && targets.includes(MAIN_AGENT_ID);
 			const receipts = await Promise.all(
 				targets.map(target =>
-					bus.send({ from: senderId, to: target, body: message, replyTo: params.replyTo }, {
-						suppressRelay: suppressRelay || undefined,
-					}),
+					bus.send(
+						{ from: senderId, to: target, body: message, replyTo: params.replyTo },
+						{
+							suppressRelay: suppressRelay || undefined,
+						},
+					),
 				),
 			);
 
@@ -443,7 +448,7 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 		if (params.timeoutMs !== undefined) {
 			return normalizeIrcTimeoutMs(params.timeoutMs);
 		}
-		return normalizeIrcTimeoutMs(this.session.settings.get("irc.timeoutMs"));
+		return normalizeIrcTimeoutMs(cfgIrcTimeoutMs.get(this.session.settings));
 	}
 }
 

@@ -303,6 +303,7 @@ import {
 	cfgToolsXdevInlineDevices,
 	cfgSessionToolGates,
 } from "./tools/settings";
+import { cfgTodoEager, cfgTodoEnabled } from "./tools/settings";
 import { cfgToolsFormat } from "./session/context-settings";
 import { cfgAutolearnEnabled } from "./autolearn/settings";
 import { cfgBrowserEnabled } from "./tools/browser/settings";
@@ -3835,10 +3836,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 
 		if (discoveryMode === "all") {
 			const forceActive = new Set<string>();
-			if (settings.get("todo.eager") !== "default" && settings.get("todo.enabled") && toolRegistry.has("todo")) {
+			if (cfgTodoEager.get(settings) !== "default" && cfgTodoEnabled.get(settings) && toolRegistry.has("todo")) {
 				forceActive.add("todo");
 			}
-			if (settings.get("task.eager") !== "default" && toolRegistry.has("task")) {
+			if (cfgTaskEager.get(settings) !== "default" && toolRegistry.has("task")) {
 				forceActive.add("task");
 			}
 			initialToolNames = filterInitialToolsForDiscoveryAll(initialToolNames, {

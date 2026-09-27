@@ -103,6 +103,7 @@ import {
 	cfgToolsXdev,
 	cfgWebSearchEnabled,
 } from "./settings";
+import { cfgToolsEssentialOverride } from "./settings";
 import { cfgAutolearnEnabled } from "../autolearn/settings";
 import { cfgBashEnabled } from "../exec/settings";
 import { cfgCompactionExperimentalContextManagement } from "../session/context-settings";
@@ -610,7 +611,7 @@ export const DEFAULT_ESSENTIAL_TOOL_NAMES: readonly string[] = [
 
 /** Resolve the active essential built-in names from the compatibility override. */
 export function computeEssentialBuiltinNames(settings: Settings): string[] {
-	const override = settings.get("tools.essentialOverride") ?? [];
+	const override = cfgToolsEssentialOverride.get(settings) ?? [];
 	const cleaned = normalizeToolNames(override.map(name => name.trim()).filter(Boolean));
 	if (cleaned.length > 0) return cleaned.filter(name => name in BUILTIN_TOOLS);
 	return [...DEFAULT_ESSENTIAL_TOOL_NAMES];

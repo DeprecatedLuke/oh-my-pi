@@ -1304,10 +1304,7 @@ export class EventController {
 	takeDisplaceableComponents(): ToolExecutionHandle[] {
 		const components: ToolExecutionHandle[] = [];
 		if (this.#displaceablePollComponent) components.push(this.#displaceablePollComponent);
-		if (
-			this.#displaceableTodoComponent &&
-			this.#displaceableTodoComponent !== this.#displaceablePollComponent
-		) {
+		if (this.#displaceableTodoComponent && this.#displaceableTodoComponent !== this.#displaceablePollComponent) {
 			components.push(this.#displaceableTodoComponent);
 		}
 		this.#displaceablePollComponent = undefined;

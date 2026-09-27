@@ -447,6 +447,7 @@ function makeAsyncWaitContext() {
 			hasAdmittedSubmission: true,
 			hasPendingAsyncWork: () => pending,
 			settleAsyncWork: () => settled.promise,
+			getAsyncJobSnapshot: () => null,
 		},
 	});
 	const drain = () => {

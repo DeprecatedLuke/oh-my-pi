@@ -246,7 +246,12 @@ async function writeKnowledgeFile(cwd: string, relativePath: string, content: st
 	if (!finalContent.endsWith("\n")) finalContent += "\n";
 	await Bun.write(targetPath, finalContent);
 	return {
-		content: [{ type: "text", text: `Wrote knowledge://${relativePath} (${Buffer.byteLength(finalContent, "utf-8")} bytes).` }],
+		content: [
+			{
+				type: "text",
+				text: `Wrote knowledge://${relativePath} (${Buffer.byteLength(finalContent, "utf-8")} bytes).`,
+			},
+		],
 	};
 }
 

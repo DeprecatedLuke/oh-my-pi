@@ -3,8 +3,9 @@ import * as path from "node:path";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { createMockModel, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { type SettingPath, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { addIssue } from "@oh-my-pi/pi-coding-agent/issues";
+import { cfgIssuesReminders, cfgIssuesRemindersMax } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -29,7 +30,6 @@ type Harness = {
 	tempDir: TempDir;
 	mock: MockModel;
 };
-type SettingsOverrides = Partial<Record<SettingPath, unknown>>;
 
 const activeHarnesses: Harness[] = [];
 
@@ -38,7 +38,7 @@ function textStop(): MockResponse {
 	return { content: ["Done."], stopReason: "stop", usage: { output: 1, cacheRead: 100 } };
 }
 
-async function createHarness(settingsOverrides: SettingsOverrides = {}, responseCount = 8): Promise<Harness> {
+async function createHarness(responseCount = 8): Promise<Harness> {
 	const tempDir = TempDir.createSync("@pi-issues-reminder-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 	authStorage.keys.setRuntime("mock", "test-key");
@@ -54,7 +54,6 @@ async function createHarness(settingsOverrides: SettingsOverrides = {}, response
 		"todo.reminders": false,
 		"issues.enabled": true,
 		"issues.reminders": true,
-		...settingsOverrides,
 	});
 	settings.setModelRole("default", `${mock.provider}/${mock.id}`);
 
@@ -103,7 +102,8 @@ function issueReminders(messages: AgentMessage[]): string[] {
 
 describe("AgentSession in-progress issues reminder", () => {
 	it("reminds and continues when an issue is in-progress and no background jobs run", async () => {
-		const { session, tempDir, mock } = await createHarness({ "issues.reminders.max": 1 });
+		const { session, tempDir, mock } = await createHarness();
+		cfgIssuesRemindersMax.override(session.settings, 1);
 		await addIssue(tempDir.path(), {
 			category: "security",
 			title: "Sanitize the egress path",
@@ -162,7 +162,8 @@ describe("AgentSession in-progress issues reminder", () => {
 	});
 
 	it("stops reminding after issues.reminders.max consecutive turns", async () => {
-		const { session, tempDir, mock } = await createHarness({ "issues.reminders.max": 2 });
+		const { session, tempDir, mock } = await createHarness();
+		cfgIssuesRemindersMax.override(session.settings, 2);
 		await addIssue(tempDir.path(), {
 			category: "security",
 			title: "Stuck in-progress",
@@ -183,7 +184,8 @@ describe("AgentSession in-progress issues reminder", () => {
 	});
 
 	it("is silent when issue reminders are disabled even with an in-progress issue", async () => {
-		const { session, tempDir, mock } = await createHarness({ "issues.reminders": false });
+		const { session, tempDir, mock } = await createHarness();
+		cfgIssuesReminders.override(session.settings, false);
 		await addIssue(tempDir.path(), {
 			category: "security",
 			title: "Disabled reminders",

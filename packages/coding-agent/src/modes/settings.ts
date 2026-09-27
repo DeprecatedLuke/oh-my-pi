@@ -1083,8 +1083,7 @@ export const cfgMagicKeywordsUltrasolve = register({
 		tab: "interaction",
 		group: "Magic Keywords",
 		label: "Ultrasolve Keyword",
-		description:
-			"Let standalone ultrasolve inherit maximum thinking and request a self-contained solver escalation",
+		description: "Let standalone ultrasolve inherit maximum thinking and request a self-contained solver escalation",
 	},
 });
 

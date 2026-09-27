@@ -17,6 +17,7 @@ import {
 	SessionManager,
 	Settings,
 } from "@oh-my-pi/pi-coding-agent";
+import { cfgReadSummarizeEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 
 export type InProcessEventListener = (event: AgentEvent) => void;
 
@@ -125,7 +126,7 @@ export class InProcessClient {
 		// full file content with line numbers on the first read. The structural
 		// summary elides function bodies with `…`, forcing the model to re-read
 		// with a range selector (double-read pattern wastes ~2K-10K tokens on 003 tasks).
-		this.#session.settings.override("read.summarize.enabled", false);
+		cfgReadSummarizeEnabled.override(this.#session.settings, false);
 
 		// Strip irrelevant sections from the read tool's API description to save ~590
 		// tokens/turn. For a local file-edit benchmark, Documents/Images/Archives/SQLite/

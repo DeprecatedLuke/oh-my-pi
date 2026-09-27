@@ -119,6 +119,7 @@ describe("EventController idle compaction teardown", () => {
 		hasPendingAsyncWork: () => boolean = () => false,
 	): InteractiveModeContext {
 		const context = {
+			settings,
 			isInitialized: true,
 			loadingAnimation: undefined,
 			streamingComponent: undefined,

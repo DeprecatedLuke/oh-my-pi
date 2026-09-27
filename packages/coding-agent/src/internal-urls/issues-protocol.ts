@@ -155,7 +155,12 @@ async function writeIssueFile(cwd: string, basename: string, content: string): P
 	if (renamed) notes.push(`renamed → ${saved.filename}`);
 	const suffix = notes.length > 0 ? ` (${notes.join("; ")})` : "";
 	return {
-		content: [{ type: "text", text: `Updated issue #${saved.id}${suffix}. Now at issues://${saved.filename}${saved.archived ? " (archived)" : ""}.` }],
+		content: [
+			{
+				type: "text",
+				text: `Updated issue #${saved.id}${suffix}. Now at issues://${saved.filename}${saved.archived ? " (archived)" : ""}.`,
+			},
+		],
 	};
 }
 

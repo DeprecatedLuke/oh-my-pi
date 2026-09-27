@@ -3,6 +3,7 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { type AsyncJob, AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import { cfgCompletionNotify } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import type {
@@ -87,7 +88,7 @@ function makeContext(manager: AsyncJobManager): {
 		updateEditorTopBorder: vi.fn(),
 		editor: { getText: () => "" },
 		sessionManager: { getSessionName: () => "main session" },
-		settings: { get: () => false },
+		settings,
 		clearPinnedError: vi.fn(),
 		ensureLoadingAnimation: vi.fn(),
 		syncRetryHintRow: vi.fn(),
@@ -139,7 +140,7 @@ describe("EventController completion notification and nested-owner async jobs", 
 	] as const) {
 		it(`defers ${protocolName} completion output until a nested-owner job settles`, async () => {
 			mutableTerminal.notifyProtocol = protocol;
-			settings.override("completion.notify", "on");
+			cfgCompletionNotify.override(settings, "on");
 			const formatted: string[] = [];
 			const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(message => {
 				formatted.push(TERMINAL.formatNotification(message));

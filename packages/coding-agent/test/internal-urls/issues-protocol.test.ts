@@ -10,6 +10,17 @@ import * as path from "node:path";
 import { InternalUrlRouter, parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import { addIssue, archiveIssue, findIssueById } from "@oh-my-pi/pi-coding-agent/issues";
 
+/** Extracts the text blocks of a handler write result (InternalWriteResult.content). */
+function writeResultText(result: void | { content: Array<{ type: string; text?: string }> }): string {
+	if (result === undefined) return "";
+	return result.content
+		.filter(
+			(block): block is { type: "text"; text: string } => block.type === "text" && typeof block.text === "string",
+		)
+		.map(block => block.text)
+		.join("\n");
+}
+
 let tempDir: string;
 
 beforeEach(async () => {
@@ -138,7 +149,7 @@ describe("IssuesProtocolHandler", () => {
 		const result = await handler.write(parseInternalUrl(`issues://${record.filename}`), nextContent, {
 			cwd: tempDir,
 		});
-		expect(result?.text).toContain(`issues://${record.filename}`);
+		expect(writeResultText(result)).toContain(`issues://${record.filename}`);
 
 		const read = await InternalUrlRouter.instance().resolve(`issues://${record.filename}`, { cwd: tempDir });
 		expect(read.content).toContain("Updated body with new details.");
@@ -178,7 +189,7 @@ describe("IssuesProtocolHandler", () => {
 
 		const content = ["---", "title: Closeable", "category: security", "status: fixed", "---", "", "Body."].join("\n");
 		const result = await handler.write(parseInternalUrl(`issues://${record.id}.md`), content, { cwd: tempDir });
-		expect(result?.text).toMatch(/archive/i);
+		expect(writeResultText(result)).toMatch(/archive/i);
 
 		const found = await findIssueById(tempDir, record.id);
 		expect(found?.archived).toBe(true);
@@ -192,7 +203,7 @@ describe("IssuesProtocolHandler", () => {
 
 		const content = ["---", "title: Brand new title", "category: security", "---", "", "Body."].join("\n");
 		const result = await handler.write(parseInternalUrl(`issues://${record.id}.md`), content, { cwd: tempDir });
-		expect(result?.text).toContain(`issues://${record.id}-brand-new-title.md`);
+		expect(writeResultText(result)).toContain(`issues://${record.id}-brand-new-title.md`);
 
 		const found = await findIssueById(tempDir, record.id);
 		expect(found?.filename).toBe(`${record.id}-brand-new-title.md`);

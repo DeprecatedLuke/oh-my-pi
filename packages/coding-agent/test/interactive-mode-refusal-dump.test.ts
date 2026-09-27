@@ -6,6 +6,7 @@ import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mo
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import { cfgSecretsAutoFixRefusal } from "@oh-my-pi/pi-coding-agent/secrets/settings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -62,7 +63,7 @@ describe("InteractiveMode refusal transcript dumps", () => {
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.create(tempDir.path(), path.join(tempDir.path(), "sessions")),
-			settings: Settings.isolated(),
+			settings: Settings.isolated({ "retry.enabled": false }),
 			modelRegistry,
 		});
 		mode = new InteractiveMode(session, "test");
@@ -88,7 +89,7 @@ describe("InteractiveMode refusal transcript dumps", () => {
 	it("saves a refusal transcript and available LLM request sidecar reference with auto-fix disabled", async () => {
 		if (!session || !mode || !tempDir) throw new Error("test fixture not initialized");
 		await mode.init({ suppressWelcomeIntro: true });
-		session.settings.set("secrets.autoFixRefusal", false);
+		cfgSecretsAutoFixRefusal.set(session.settings, false);
 		const sidecarPath = path.join(tempDir.path(), "llm-request.json");
 		vi.spyOn(session, "dumpLlmRequestToTmpDir").mockResolvedValue(sidecarPath);
 		const saved = Promise.withResolvers<void>();
@@ -118,7 +119,7 @@ describe("InteractiveMode refusal transcript dumps", () => {
 	it("does not write a refusal transcript for a non-refusal agent end", async () => {
 		if (!session || !mode) throw new Error("test fixture not initialized");
 		await mode.init({ suppressWelcomeIntro: true });
-		session.settings.set("secrets.autoFixRefusal", false);
+		cfgSecretsAutoFixRefusal.set(session.settings, false);
 
 		await promptWithMockResponse(session, "ordinary request", { content: ["helpful answer"] });
 		await session.waitForIdle();

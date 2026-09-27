@@ -20,6 +20,7 @@ import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import issuesDescription from "../prompts/tools/issues.md" with { type: "text" };
 import { subprocessToolRegistry } from "../task/subprocess-tool-registry";
 import type { ToolSession } from "./index";
+import { cfgIssuesEnabled } from "./settings";
 import type { OutputMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { toolResult } from "./tool-result";
@@ -231,7 +232,7 @@ export class IssuesTool implements AgentTool<typeof issuesSchema, IssuesToolDeta
 	constructor(private readonly session: ToolSession) {}
 
 	static createIf(session: ToolSession): IssuesTool | null {
-		if (session.settings.get("issues.enabled") === false) return null;
+		if (cfgIssuesEnabled.get(session.settings) === false) return null;
 		return new IssuesTool(session);
 	}
 

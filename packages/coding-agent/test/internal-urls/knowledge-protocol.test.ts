@@ -13,6 +13,7 @@ import {
 import { getKnowledgeRoot } from "@oh-my-pi/pi-coding-agent/session/knowledge-index";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
+import { cfgReadSummarizeEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
@@ -26,7 +27,7 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 
 function createReadSession(cwd: string): ToolSession {
 	const settings = Settings.isolated();
-	settings.set("read.summarize.enabled", false);
+	cfgReadSummarizeEnabled.set(settings, false);
 	return {
 		cwd,
 		hasUI: false,
@@ -169,7 +170,7 @@ describe("KnowledgeProtocolHandler", () => {
 				{ cwd: dir },
 			);
 
-			expect(result?.text).toContain("Wrote knowledge://runtime/background-jobs.md");
+			expect(result ? textOutput(result) : undefined).toContain("Wrote knowledge://runtime/background-jobs.md");
 			const written = await Bun.file(path.join(getKnowledgeRoot(dir), "runtime", "background-jobs.md")).text();
 			const { frontmatter } = parseFrontmatter(written, { source: "knowledge://runtime/background-jobs.md" });
 			expect(frontmatter.description).toBe(

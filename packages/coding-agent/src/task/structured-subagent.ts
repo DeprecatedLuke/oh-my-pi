@@ -78,6 +78,7 @@ import {
 	cfgTaskIsolationMerge,
 	cfgTaskMaxRecursionDepth,
 } from "./settings";
+import { cfgTaskIsolationCommits } from "./settings";
 
 /** Final structured completion metadata returned for a schema-bearing run. */
 export type StructuredSubagentSchemaResult = StructuredSubagentOutput;
@@ -625,14 +626,14 @@ async function runNativePatchSubprocess(
 	isolationContext: IsolationContext,
 	id: string,
 ): Promise<NativePatchSubprocessResult> {
-	const preferredBackend = parseIsolationBackend(request.session.settings.get("isolation.backend"));
+	const preferredBackend = parseIsolationBackend(cfgIsolationBackend.get(request.session.settings));
 	const discovered = await detectGitRepos(request.session.cwd);
 	const targets = buildNativePatchTargets(request.session.cwd, isolationContext.repoRoot, discovered?.repos ?? null);
 	const store = defaultPatchStore(request.session.cwd);
 	const description =
 		request.assignment.trim() || trimToUndefined(request.identity?.label) || `changes from isolated task ${id}`;
 	const generateMessage = async (manifest: NativePatchManifest): Promise<string> => {
-		if (request.session.settings.get("task.isolation.commits") === "ai" && request.session.modelRegistry) {
+		if (cfgTaskIsolationCommits.get(request.session.settings) === "ai" && request.session.modelRegistry) {
 			const lines = [
 				`Native patch ${manifest.id}`,
 				manifest.description ? `Description: ${manifest.description}` : undefined,
