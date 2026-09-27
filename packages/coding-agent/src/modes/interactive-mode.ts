@@ -1241,6 +1241,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#observerRegistry: SessionObserverRegistry;
 	/** Click override for the pinned jump-list density; undefined follows `display.pinnedAgents`. */
 	#pinnedHudOverride: boolean | undefined;
+	/** The pinned subagent HUD block; `subagentContainer` also hosts the Background Jobs panel, so rerenders swap only this. */
+	#subagentHud: SubagentHudComponent | undefined;
 	#eventBus?: EventBus;
 	#subagentEventBus?: EventBus;
 	#eventBusUnsubscribers: Array<() => void> = [];
@@ -3575,7 +3577,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * the "active" state.
 	 */
 	#renderSubagentList(): void {
-		this.subagentContainer.clear();
+		if (this.#subagentHud) {
+			this.subagentContainer.removeChild(this.#subagentHud);
+			this.#subagentHud = undefined;
+		}
 		const mode = settings.get("display.pinnedAgents");
 		if (mode === "off") return;
 		const sessions = this.#observerRegistry.getSessions();
@@ -3585,7 +3590,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (lines.length === 0) return;
 		const layout = layoutPinnedHud(running.length, expanded);
 		const order = running.map(session => session.id);
-		this.subagentContainer.addChild(new SubagentHudComponent(lines, order, layout.toggleRow));
+		this.#subagentHud = new SubagentHudComponent(lines, order, layout.toggleRow);
+		this.subagentContainer.addChild(this.#subagentHud);
 	}
 
 	#vibeParentSession(): VibeParentSession {

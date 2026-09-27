@@ -236,6 +236,40 @@ describe("EventController read-group accretion", () => {
 		expect(group!.isTranscriptBlockFinalized()).toBe(true);
 	});
 
+	it("settles a streamed grouped read when its real execution completes", async () => {
+		const { controller, chatContainer } = createFixture();
+		const call = read("settled.ts:1-50");
+
+		await streamCompletion(controller, [call]);
+		const [group] = readGroups(chatContainer);
+		expect(group).toBeDefined();
+		// Still the active run: the block must stay live while the read executes.
+		expect(group!.isTranscriptBlockFinalized()).toBe(false);
+
+		await controller.handleEvent({
+			type: "tool_execution_start",
+			toolCallId: call.type === "toolCall" ? call.id : "",
+			toolName: "read",
+			args: { path: "settled.ts:1-50" },
+		} as AgentSessionEvent);
+		await controller.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: call.type === "toolCall" ? call.id : "",
+			toolName: "read",
+			result: { content: [{ type: "text", text: "file body" }], isError: false },
+			isError: false,
+		} as AgentSessionEvent);
+
+		// A run-breaking completion finalizes the group — but only once its entry
+		// settled: a still-pending entry keeps the block live because its result
+		// is in flight. Regression: a streamed group that missed its pendingTools
+		// registration had its completion dropped at tool_execution_end (the
+		// timeline entry short-circuited the handler), so the entry stayed
+		// pending forever and the transcript frontier pinned behind this block.
+		await streamCompletion(controller, [thinking("done exploring"), read("next.ts:1-40")]);
+		expect(group!.isTranscriptBlockFinalized()).toBe(true);
+	});
+
 	it("retains live read images while hidden so the visibility toggle can reveal them", async () => {
 		Settings.instance.override("terminal.showImages", false);
 		setTerminalImageProtocol(ImageProtocol.Sixel);

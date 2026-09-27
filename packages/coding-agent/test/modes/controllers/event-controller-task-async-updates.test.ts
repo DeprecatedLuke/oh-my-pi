@@ -63,7 +63,7 @@ describe("EventController async update finalization", () => {
 		const ctx = createInteractiveModeContext({
 			pendingTools,
 			session: { isStreaming: true },
-			viewSession: { isStreaming },
+			viewSession: { isStreaming, getAsyncJobSnapshot: () => null },
 		});
 		return { controller: new EventController(ctx), pendingTools, chatContainer: ctx.chatContainer, ctx };
 	}
