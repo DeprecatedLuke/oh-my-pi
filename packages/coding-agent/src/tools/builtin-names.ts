@@ -26,7 +26,6 @@ export const BUILTIN_TOOL_NAMES = [
 	"ssh",
 	"irc",
 	"issues",
-	"wait",
 	"todo",
 	"web_search",
 	"search_tool_bm25",

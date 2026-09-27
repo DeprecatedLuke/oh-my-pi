@@ -81,7 +81,6 @@ import { supportsExternalThinking, ThinkTool } from "./think";
 import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TodoTool } from "./todo";
 import { WriteTool } from "./write";
-import { WaitTool } from "./wait";
 import { isMountableUnderXdev, resolveXdevTool, type XdevState } from "./xdev";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { YieldTool } from "./yield";
@@ -602,7 +601,6 @@ export const DEFAULT_ESSENTIAL_TOOL_NAMES: readonly string[] = [
 	"glob",
 	"eval",
 	"task",
-	"wait",
 	"learn",
 	"manage_skill",
 	"context_notes",
@@ -674,7 +672,6 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	job: s => new JobTool(s),
 	irc: IrcTool.createIf,
 	issues: IssuesTool.createIf,
-	wait: s => new WaitTool(s),
 	todo: s => new TodoTool(s),
 	web_search: s => new WebSearchTool(s),
 	search_tool_bm25: SearchToolBm25Tool.createIf,
@@ -867,13 +864,6 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 				cfgCheckpointEnabled.get(session.settings) &&
 				((session.taskDepth ?? 0) === 0 || requestedTools !== undefined)
 			);
-		if (name === "wait") {
-			return (
-				cfgAsyncEnabled.get(session.settings) ||
-				(session.enableIrc !== false && isIrcEnabled(session.settings, session.taskDepth ?? 0)) ||
-				cfgLaunchEnabled.get(session.settings)
-			);
-		}
 		if (name === "retain" || name === "recall" || name === "reflect") {
 			return ["hindsight", "mnemopi"].includes(cfgMemoryBackend.get(session.settings));
 		}
