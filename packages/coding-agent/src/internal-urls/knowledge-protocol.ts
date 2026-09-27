@@ -13,10 +13,11 @@ import { parseInternalUrl } from "./parse";
 import type {
 	InternalResource,
 	InternalUrl,
+	InternalWriteResult,
 	ProtocolHandler,
 	ResolveContext,
+	SchemeSpec,
 	WriteContext,
-	WriteResult,
 } from "./types";
 
 function ensureWithinRoot(targetPath: string, rootPath: string): void {
@@ -218,7 +219,7 @@ async function readKnowledgeFile(url: InternalUrl, cwd: string, relativePath: st
 	};
 }
 
-async function writeKnowledgeFile(cwd: string, relativePath: string, content: string): Promise<WriteResult> {
+async function writeKnowledgeFile(cwd: string, relativePath: string, content: string): Promise<InternalWriteResult> {
 	if (content.trim().length === 0) {
 		throw new Error("Knowledge content cannot be empty.");
 	}
@@ -245,7 +246,7 @@ async function writeKnowledgeFile(cwd: string, relativePath: string, content: st
 	if (!finalContent.endsWith("\n")) finalContent += "\n";
 	await Bun.write(targetPath, finalContent);
 	return {
-		text: `Wrote knowledge://${relativePath} (${Buffer.byteLength(finalContent, "utf-8")} bytes).`,
+		content: [{ type: "text", text: `Wrote knowledge://${relativePath} (${Buffer.byteLength(finalContent, "utf-8")} bytes).` }],
 	};
 }
 
@@ -259,7 +260,12 @@ async function writeKnowledgeFile(cwd: string, relativePath: string, content: st
  */
 export class KnowledgeProtocolHandler implements ProtocolHandler {
 	readonly scheme = "knowledge";
-	readonly immutable = false;
+	readonly spec: SchemeSpec = {
+		backing: "file",
+		selectors: "lines",
+		immutable: false,
+		write: { via: "handler", payload: "text", scope: "workspace", tier: () => "write" },
+	};
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
 		const cwd = resolveKnowledgeCwd(context);
@@ -270,7 +276,7 @@ export class KnowledgeProtocolHandler implements ProtocolHandler {
 		return readKnowledgeFile(url, cwd, parsed.relativePath);
 	}
 
-	async write(url: InternalUrl, content: string, context?: WriteContext): Promise<WriteResult> {
+	async write(url: InternalUrl, content: string, context?: WriteContext): Promise<InternalWriteResult> {
 		const cwd = resolveKnowledgeCwd(context);
 		const parsed = parseKnowledgeUrlPath(url);
 		if (!parsed.relativePath) {

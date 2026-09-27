@@ -5,7 +5,7 @@
  * viewer ({@link AgentTranscriptViewer}) to render a parked subagent / advisor /
  * collab-guest transcript that has no live session.
  *
- * Unlike the old incremental hub sync, {@link ChatTranscriptBuilder.rebuild}
+ * Unlike incremental transcript sync, {@link ChatTranscriptBuilder.rebuild}
  * always discards prior components and rebuilds the whole transcript from the
  * supplied entries. Re-rendering a growing transcript is therefore O(n) in the
  * entry count, but it cannot duplicate or misorder rows the way incremental
@@ -91,7 +91,7 @@ export class ChatTranscriptBuilder {
 	#lastAssistantUsage: Usage | undefined;
 	#servedModelTracker = new ServedModelTracker();
 	#todoSnapshot: ToolExecutionComponent | null = null;
-	#refreshableHubSnapshot: ToolExecutionComponent | null = null;
+	#waitingPoll: ToolExecutionComponent | null = null;
 	#expandables: Array<{ setExpanded(expanded: boolean): void }> = [];
 	#expanded = false;
 	#entryComponents = new Map<string, Component[]>();
@@ -159,7 +159,7 @@ export class ChatTranscriptBuilder {
 		this.#lastAssistantUsage = undefined;
 		this.#servedModelTracker = new ServedModelTracker();
 		this.#todoSnapshot = null;
-		this.#refreshableHubSnapshot = null;
+		this.#waitingPoll = null;
 		this.#expandables = [];
 		this.#entryComponents.clear();
 		this.container.dispose();
@@ -184,12 +184,12 @@ export class ChatTranscriptBuilder {
 		this.#expandables.push(component);
 	}
 
-	/** An all-running `hub jobs` snapshot is displaced by the next `hub` call. */
-	#resolveRefreshableHubSnapshot(nextToolName?: string): void {
-		const previous = this.#refreshableHubSnapshot;
+	/** A `wait` showing all-running is displaced by the next `wait` call. */
+	#resolveWaitingPoll(nextToolName?: string): void {
+		const previous = this.#waitingPoll;
 		if (!previous) return;
-		this.#refreshableHubSnapshot = null;
-		if (nextToolName === "hub" && previous.isDisplaceableBlock() && this.container.canRemoveBlock(previous)) {
+		this.#waitingPoll = null;
+		if (nextToolName === "wait" && previous.isDisplaceableBlock() && this.container.canRemoveBlock(previous)) {
 			this.container.removeChild(previous);
 		}
 		previous.seal();
@@ -293,8 +293,8 @@ export class ChatTranscriptBuilder {
 					if (message.userInitiated) this.#turnStartedAt = message.timestamp;
 					else this.#turnStartedAt = undefined;
 				}
-				// A user prompt closes the hub-snapshot displacement window, same as the live path.
-				if (message.role === "user") this.#resolveRefreshableHubSnapshot();
+				// A user prompt closes the poll-displacement window, same as the live path.
+				if (message.role === "user") this.#resolveWaitingPoll();
 				// A user prompt closes the todo displacement window, same as the live path.
 				if (message.role === "user") this.#resolveTodoSnapshot();
 				const userText = message.role === "user" ? textContent(message.content) : "";
@@ -310,7 +310,11 @@ export class ChatTranscriptBuilder {
 						this.#trackExpandable(collapsed);
 						this.container.addChild(collapsed);
 					} else {
-						this.container.addChild(new UserMessageComponent(userText));
+						this.container.addChild(
+							new UserMessageComponent(userText, {
+								liveSteered: message.role === "user" && message.liveSteered === true,
+							}),
+						);
 					}
 				}
 				break;
@@ -498,7 +502,7 @@ export class ChatTranscriptBuilder {
 	}
 
 	#appendToolResult(message: Extract<AgentMessage, { role: "toolResult" }>): void {
-		this.#resolveRefreshableHubSnapshot(message.toolName);
+		this.#resolveWaitingPoll(message.toolName);
 		const pending = this.#pendingTools.get(message.toolCallId);
 		const isReadGroupResult = message.toolName === "read" && (!pending || pending instanceof ReadToolGroupComponent);
 		if (isReadGroupResult) {
@@ -517,8 +521,8 @@ export class ChatTranscriptBuilder {
 		if (!pending) return;
 		pending.updateResult(message, false, message.toolCallId);
 		this.#pendingTools.delete(message.toolCallId);
-		if (message.toolName === "hub" && pending instanceof ToolExecutionComponent && pending.isDisplaceableBlock()) {
-			this.#refreshableHubSnapshot = pending;
+		if (message.toolName === "wait" && pending instanceof ToolExecutionComponent && pending.isDisplaceableBlock()) {
+			this.#waitingPoll = pending;
 		} else if (
 			message.toolName === "todo" &&
 			pending instanceof ToolExecutionComponent &&

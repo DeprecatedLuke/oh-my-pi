@@ -17,7 +17,7 @@ import { formatAge, formatDuration, prompt } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { IrcBus } from "../irc/bus";
-import type { IrcDeliveryReceipt, IrcMessage } from "@oh-my-pi/pi-tui/tools/hub";
+import type { IrcDeliveryReceipt, IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import ircDescription from "../prompts/tools/irc.md" with { type: "text" };
 import { type AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
@@ -288,13 +288,9 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 			const suppressRelay = isBroadcast && targets.includes(MAIN_AGENT_ID);
 			const receipts = await Promise.all(
 				targets.map(target =>
-					bus.send(
-						{ from: senderId, to: target, body: message, replyTo: params.replyTo },
-						// Awaited sends mark the sender as blocked on an answer so a
-						// busy recipient that cannot reach a step boundary (async
-						// disabled) auto-replies instead of stranding the sender.
-						{ expectsReply: params.await || undefined, suppressRelay: suppressRelay || undefined },
-					),
+					bus.send({ from: senderId, to: target, body: message, replyTo: params.replyTo }, {
+						suppressRelay: suppressRelay || undefined,
+					}),
 				),
 			);
 
@@ -414,7 +410,13 @@ export class IrcTool implements AgentTool<typeof ircSchema, IrcDetails> {
 	}
 
 	#executeInbox(registry: AgentRegistry, senderId: string, params: IrcParams): AgentToolResult<IrcDetails> {
-		const busMessages = IrcBus.global().inbox(senderId, { peek: params.peek });
+		// Upstream's bus has no batch/peek inbox read: drain destructively via
+		// `take` (one message per call) and merge in the session's pending asides.
+		const bus = IrcBus.global();
+		const busMessages: IrcMessage[] = [];
+		for (let msg = bus.take(senderId); msg; msg = bus.take(senderId)) {
+			busMessages.push(msg);
+		}
 		const session = registry.get(senderId)?.session;
 		const pendingMessages =
 			typeof session?.drainPendingIrcInboxMessages === "function"

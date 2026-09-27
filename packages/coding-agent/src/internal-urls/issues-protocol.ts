@@ -24,11 +24,12 @@ import { AgentRegistry } from "../registry/agent-registry";
 import type {
 	InternalResource,
 	InternalUrl,
+	InternalWriteResult,
 	ProtocolHandler,
 	ResolveContext,
+	SchemeSpec,
 	UrlCompletion,
 	WriteContext,
-	WriteResult,
 } from "./types";
 
 function cwdFromRegistry(): string | undefined {
@@ -132,7 +133,7 @@ async function readIssueFile(url: InternalUrl, cwd: string, basename: string): P
 	};
 }
 
-async function writeIssueFile(cwd: string, basename: string, content: string): Promise<WriteResult> {
+async function writeIssueFile(cwd: string, basename: string, content: string): Promise<InternalWriteResult> {
 	const record = await findIssueByFilename(cwd, basename);
 	if (!record) {
 		throw new Error(
@@ -154,7 +155,7 @@ async function writeIssueFile(cwd: string, basename: string, content: string): P
 	if (renamed) notes.push(`renamed → ${saved.filename}`);
 	const suffix = notes.length > 0 ? ` (${notes.join("; ")})` : "";
 	return {
-		text: `Updated issue #${saved.id}${suffix}. Now at issues://${saved.filename}${saved.archived ? " (archived)" : ""}.`,
+		content: [{ type: "text", text: `Updated issue #${saved.id}${suffix}. Now at issues://${saved.filename}${saved.archived ? " (archived)" : ""}.` }],
 	};
 }
 
@@ -170,7 +171,12 @@ async function writeIssueFile(cwd: string, basename: string, content: string): P
  */
 export class IssuesProtocolHandler implements ProtocolHandler {
 	readonly scheme = "issues";
-	readonly immutable = false;
+	readonly spec: SchemeSpec = {
+		backing: "file",
+		selectors: "lines",
+		immutable: false,
+		write: { via: "handler", payload: "text", scope: "workspace", tier: () => "write" },
+	};
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
 		const cwd = resolveIssuesCwd(context);
@@ -186,7 +192,7 @@ export class IssuesProtocolHandler implements ProtocolHandler {
 		throw new Error(`Unsupported issues:// shape: ${url.href}`);
 	}
 
-	async write(url: InternalUrl, content: string, context?: WriteContext): Promise<WriteResult> {
+	async write(url: InternalUrl, content: string, context?: WriteContext): Promise<InternalWriteResult> {
 		const cwd = resolveIssuesCwd(context);
 		const parsed = parseIssuesUrl(url);
 		if (parsed.kind !== "file" || !parsed.basename) {
@@ -197,10 +203,10 @@ export class IssuesProtocolHandler implements ProtocolHandler {
 		return writeIssueFile(cwd, parsed.basename, content);
 	}
 
-	async complete(query: string): Promise<UrlCompletion[]> {
+	async complete(query?: string): Promise<UrlCompletion[]> {
+		const lower = (query ?? "").toLowerCase();
 		const cwd = cwdFromRegistry();
 		if (!cwd) return [];
-		const lower = query.toLowerCase();
 		const completions: UrlCompletion[] = [];
 
 		if ("archive".startsWith(lower)) {

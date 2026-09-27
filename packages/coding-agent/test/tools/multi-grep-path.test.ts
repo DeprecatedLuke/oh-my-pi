@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { InternalUrlFilesystem } from "@oh-my-pi/pi-coding-agent/internal-urls/url-filesystem";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { resolveExplicitSearchPaths } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
@@ -10,6 +11,7 @@ import { GrepTool } from "../../src/tools/grep";
 
 const testSettings = Settings.isolated();
 const isWindows = process.platform === "win32";
+const filesystem = new InternalUrlFilesystem({ context: {}, tier: "read" });
 
 function createTestSession(cwd: string, overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -36,7 +38,7 @@ describe.skipIf(isWindows)("resolveExplicitSearchPaths cross-tree degeneracy", (
 		// filesystem; the resolver must surface explicit `targets` so callers can
 		// fan out instead.
 		const cwd = os.tmpdir();
-		const resolved = await resolveExplicitSearchPaths(["/tmp", "/usr"], cwd);
+		const resolved = await resolveExplicitSearchPaths(["/tmp", "/usr"], cwd, filesystem);
 
 		expect(resolved).toBeDefined();
 		if (!resolved) throw new Error("expected resolveExplicitSearchPaths to resolve");
@@ -157,7 +159,7 @@ describe.skipIf(isWindows)("resolveExplicitSearchPaths shared non-root ancestor"
 		// scans every unrelated sibling (the real-world case: `.` + `~/.gitconfig`
 		// walks all of `$HOME` until the grep timeout). The resolver must surface
 		// per-path targets so each scan stays bounded to a requested path.
-		const resolved = await resolveExplicitSearchPaths([".", cousinFile], repo);
+		const resolved = await resolveExplicitSearchPaths([".", cousinFile], repo, filesystem);
 		expect(resolved).toBeDefined();
 		if (!resolved) throw new Error("expected resolveExplicitSearchPaths to resolve");
 		const targetBases = (resolved.targets ?? []).map(target => target.basePath).sort();
@@ -168,7 +170,7 @@ describe.skipIf(isWindows)("resolveExplicitSearchPaths shared non-root ancestor"
 		// `ast_edit` consumes the same targets and applies rewrites once per
 		// target; a dir + nested-file input must stay a single walk by default or
 		// overlapping targets would double-apply rewrites to the nested file.
-		const resolved = await resolveExplicitSearchPaths([".", "src/a.ts"], repo);
+		const resolved = await resolveExplicitSearchPaths([".", "src/a.ts"], repo, filesystem);
 		expect(resolved).toBeDefined();
 		if (!resolved) throw new Error("expected resolveExplicitSearchPaths to resolve");
 		expect(resolved.targets).toBeUndefined();
@@ -185,7 +187,7 @@ describe.skipIf(isWindows)("resolveExplicitSearchPaths shared non-root ancestor"
 		// file. A trailing separator and an embedded `..` are distinct shapes a
 		// partial fix could normalize inconsistently, so both must collapse.
 		for (const ancestor of [`${repo}${path.sep}`, `${repo}${path.sep}src${path.sep}..`]) {
-			const resolved = await resolveExplicitSearchPaths([ancestor, "src/a.ts"], repo);
+			const resolved = await resolveExplicitSearchPaths([ancestor, "src/a.ts"], repo, filesystem);
 			expect(resolved).toBeDefined();
 			if (!resolved) throw new Error("expected resolveExplicitSearchPaths to resolve");
 			expect(resolved.targets).toBeUndefined();
@@ -194,7 +196,7 @@ describe.skipIf(isWindows)("resolveExplicitSearchPaths shared non-root ancestor"
 	});
 
 	it("fans out nested plain files when the caller opts in via fanOutFileItems", async () => {
-		const resolved = await resolveExplicitSearchPaths([".", "src/a.ts"], repo, undefined, true);
+		const resolved = await resolveExplicitSearchPaths([".", "src/a.ts"], repo, filesystem, undefined, true);
 		expect(resolved).toBeDefined();
 		if (!resolved) throw new Error("expected resolveExplicitSearchPaths to resolve");
 		const targetBases = (resolved.targets ?? []).map(target => target.basePath).sort();
@@ -213,7 +215,7 @@ describe.skipIf(!isWindows)("resolveExplicitSearchPaths Windows casing", () => {
 				driveLetter === driveLetter.toLowerCase() ? driveLetter.toUpperCase() : driveLetter.toLowerCase();
 			const absoluteAncestor = `${differentlyCasedDrive}${repo.slice(1)}`;
 
-			const resolved = await resolveExplicitSearchPaths([absoluteAncestor, "src/a.ts"], repo);
+			const resolved = await resolveExplicitSearchPaths([absoluteAncestor, "src/a.ts"], repo, filesystem);
 			expect(resolved).toBeDefined();
 			if (!resolved) throw new Error("expected resolveExplicitSearchPaths to resolve");
 			expect(resolved.targets).toBeUndefined();

@@ -13,7 +13,7 @@ import { prompt, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { daemonClientForProject } from "../launch/client";
 import type { DaemonOperation, DaemonRpcResult } from "../launch/protocol";
-import type { DaemonSnapshot, DaemonSpec, DaemonState } from "@oh-my-pi/pi-tui/tools/hub";
+import type { DaemonSnapshot, DaemonSpec, DaemonState } from "@oh-my-pi/pi-tui/tools/daemon";
 import { renderTerminalOutputIsolated } from "../launch/terminal-output-worker-client";
 import type { Theme, ThemeColor } from "@oh-my-pi/pi-tui/theme";
 import launchDescription from "../prompts/tools/launch.md" with { type: "text" };

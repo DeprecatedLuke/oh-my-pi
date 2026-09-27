@@ -11,10 +11,11 @@ import {
 import type {
 	InternalResource,
 	InternalUrl,
+	InternalWriteResult,
 	ProtocolHandler,
 	ResolveContext,
+	SchemeSpec,
 	WriteContext,
-	WriteResult,
 } from "./types";
 
 interface PatchUrlParts {
@@ -137,7 +138,12 @@ function renderPatchManifest(cwd: string, manifest: NativePatchManifest, validat
 
 export class PatchProtocolHandler implements ProtocolHandler {
 	readonly scheme = "patch";
-	readonly immutable = false;
+	readonly spec: SchemeSpec = {
+		backing: "virtual",
+		selectors: "lines",
+		immutable: false,
+		write: { via: "handler", payload: "text", scope: "workspace", tier: () => "write" },
+	};
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
 		const cwd = contextCwd(context);
@@ -181,7 +187,7 @@ export class PatchProtocolHandler implements ProtocolHandler {
 		};
 	}
 
-	async write(url: InternalUrl, content: string, context?: WriteContext): Promise<WriteResult> {
+	async write(url: InternalUrl, content: string, context?: WriteContext): Promise<InternalWriteResult> {
 		const cwd = contextCwd(context);
 		const { patchId, relativePath } = extractPatchUrl(url);
 		const store = await resolveNativePatchStore(cwd, patchId);
@@ -192,6 +198,6 @@ export class PatchProtocolHandler implements ProtocolHandler {
 			cwd,
 			signal: context?.signal,
 		});
-		return { text };
+		return { content: [{ type: "text", text }] };
 	}
 }
