@@ -90,7 +90,6 @@ import {
 	cfgAskEnabled,
 	cfgAstEditEnabled,
 	cfgAstGrepEnabled,
-	cfgAsyncEnabled,
 	cfgCheckpointEnabled,
 	cfgDebugEnabled,
 	cfgGithubEnabled,

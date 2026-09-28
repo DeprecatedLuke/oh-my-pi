@@ -983,6 +983,8 @@ export class AgentSession implements SettingsScope {
 	#pendingRewindReport: string | undefined = undefined;
 	#lastCompletedRewind: CompletedRewindState | undefined = undefined;
 	#rewoundToolResultIds = new Set<string>();
+	/** Tool calls of a skipped classifier-refusal turn; their synthetic results are not persisted either. */
+	#refusedToolCallIds = new Set<string>();
 	#lastSuccessfulYieldToolCallId: string | undefined = undefined;
 	/**
 	 * Sticky across an in-flight prompt run: a successful `yield` makes the run
@@ -3202,7 +3204,12 @@ export class AgentSession implements SettingsScope {
 		if (this.#sessionMessageAlreadyPersisted(message)) return;
 		if (message.role === "assistant") {
 			const assistantMsg = message as AssistantMessage;
-			if (this.#recovery.isClassifierRefusal(assistantMsg)) return;
+			if (this.#recovery.isClassifierRefusal(assistantMsg)) {
+				for (const block of assistantMsg.content) {
+					if (block.type === "toolCall") this.#refusedToolCallIds.add(block.id);
+				}
+				return;
+			}
 			if (isEmptyErrorTurn(assistantMsg)) return;
 			if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
 				assistantMsg.contextSnapshot = {
@@ -3214,6 +3221,7 @@ export class AgentSession implements SettingsScope {
 				};
 			}
 		}
+		if (message.role === "toolResult" && this.#refusedToolCallIds.delete(message.toolCallId)) return;
 		const skipPersistedRewindResult =
 			message.role === "toolResult" &&
 			semanticToolResult(message.toolName, message)?.toolName === "rewind" &&
@@ -4058,7 +4066,7 @@ export class AgentSession implements SettingsScope {
 			// `stopReason === "error"`.
 			if (this.#recovery.isClassifierRefusal(msg)) {
 				this.#prunedTerminalFailure = msg;
-				this.#recovery.removeAssistantMessageFromActiveContext(msg);
+				this.#recovery.removeFailedTurnFromActiveContext(msg, "terminal-refusal");
 			} else if (!AIError.isContextOverflow(msg, this.model?.contextWindow ?? 0)) {
 				// No retry, fallback, or compaction continuation fired: this errored
 				// turn ends the run. #persistSessionMessageIfMissing dropped it as an

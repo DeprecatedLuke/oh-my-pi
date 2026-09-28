@@ -1055,6 +1055,28 @@ export class TurnRecovery {
 	}
 
 	/**
+	 * Remove a failed assistant turn together with the synthetic "not executed"
+	 * results agent-loop appended for its tool calls. Classifier refusals use this
+	 * so the model never sees its refused call or a stream-error result for it —
+	 * otherwise it narrates the refusal back ("the last command got blocked").
+	 */
+	removeFailedTurnFromActiveContext(assistantMessage: AssistantMessage, reason: string): void {
+		const callIds = new Set<string>();
+		for (const block of assistantMessage.content) {
+			if (block.type === "toolCall") callIds.add(block.id);
+		}
+		const messages = this.#host.agent.state.messages;
+		let end = messages.length;
+		while (end > 0) {
+			const candidate = messages[end - 1]!;
+			if (candidate.role !== "toolResult" || !callIds.has(candidate.toolCallId)) break;
+			end--;
+		}
+		if (end < messages.length) this.#host.agent.replaceMessages(messages.slice(0, end));
+		this.removeAssistantMessageFromActiveContext(assistantMessage, reason);
+	}
+
+	/**
 	 * Drop a recoverable assistant turn from the persisted session branch once a
 	 * recovery path (context promotion or compaction) is committed. Waits for the
 	 * in-flight `message_end` persistence slot first so the branch entry exists
@@ -2301,7 +2323,8 @@ export class TurnRecovery {
 		const id = this.#classifyRetryMessage(message);
 		const preserveFailedTurn =
 			options?.preserveFailedTurn === true ||
-			((classifierRefusal || AIError.is(id, AIError.Flag.MalformedFunctionCall) || AIError.retriable(id)) &&
+			(!classifierRefusal &&
+				(AIError.is(id, AIError.Flag.MalformedFunctionCall) || AIError.retriable(id)) &&
 				this.#unexecutedToolCallsReplaySafe(message));
 		const rateLimitReason = parseRateLimitReason(errorMessage);
 		const staleOpenAIResponsesReplayError = AIError.is(id, AIError.Flag.StaleResponsesItem);
@@ -2617,10 +2640,13 @@ export class TurnRecovery {
 			errorId: message.errorId,
 		});
 
-		// Resolved stream-stall tools and proven-unexecuted malformed/refused
-		// calls keep their assistant/result pair. Continuation then sees explicit
-		// synthetic results and cannot repeat a side effect.
-		if (!preserveFailedTurn) {
+		// Resolved stream-stall tools and proven-unexecuted malformed calls keep
+		// their assistant/result pair. Continuation then sees explicit synthetic
+		// results and cannot repeat a side effect. Classifier refusals drop the
+		// whole turn (calls were never executed) so the model never sees it.
+		if (classifierRefusal) {
+			this.removeFailedTurnFromActiveContext(message, "auto-retry-refusal");
+		} else if (!preserveFailedTurn) {
 			this.removeAssistantMessageFromActiveContext(message, "auto-retry");
 		}
 
