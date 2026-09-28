@@ -23,6 +23,7 @@ import type { postmortem } from "@oh-my-pi/pi-utils";
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import type { AsyncJob, AsyncJobDeliveryState, AsyncJobManager } from "../async";
 import type { EffectiveExtensionRoots } from "../capability/types";
+import type { AgentDefinition } from "../task/types";
 import type { ModelRegistry } from "../config/model-registry";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
@@ -166,6 +167,8 @@ export interface AgentSessionConfig {
 	scoutAllowedBySpawnPolicy?: boolean;
 	/** Whether the caller explicitly requested yolo/auto-approve behavior for this session. */
 	autoApprove?: boolean;
+	/** User-authorized model agents inherited from the parent session for nested delegation. */
+	inheritedSessionAgents?: readonly AgentDefinition[];
 	/** Models to cycle through with Ctrl+P (from --models flag). */
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
 	/** Initial session thinking selector. */
@@ -174,6 +177,8 @@ export interface AgentSessionConfig {
 	thinkingLevelCeiling?: Effort;
 	/** Retry chain ownership when startup selected one of its fallback entries. */
 	initialRetryFallback?: InitialRetryFallbackState;
+	/** Skip retry.fallbackChains validation at construction; the host calls `validateRetryFallbackChains()` later. */
+	deferRetryFallbackValidation?: boolean;
 	/** Prewalk from the starting model to a fast/cheap target after implementation begins. */
 	prewalk?: Prewalk;
 	/** Force read-only plan mode at start, auto-approve, then switch to the target. */
@@ -284,8 +289,6 @@ export interface AgentSessionConfig {
 	ttsrManager?: TtsrManager;
 	/** Secret obfuscator for provider and edit content. */
 	obfuscator?: SecretObfuscator;
-	/** Inherited eval executor session id from a parent agent. */
-	parentEvalSessionId?: string;
 	/** Logical owner for retained eval kernels created by this session. */
 	evalKernelOwnerId?: string;
 	/** Async job manager owned and disposed by this session. */
@@ -357,6 +360,17 @@ export interface AgentSessionConfig {
 export interface PromptOptions {
 	/** Whether to expand file-based prompt templates (default: true). */
 	expandPromptTemplates?: boolean;
+	/**
+	 * Whether a leading `/` may run an extension or custom TypeScript command
+	 * locally instead of prompting the agent (default: true). Headless task
+	 * drivers disable it so an assignment is always delivered to the model.
+	 */
+	runCommands?: boolean;
+	/**
+	 * Reject with `PromptDroppedError` when the prompt is dropped before
+	 * reaching the agent, instead of resolving `true` (default: false).
+	 */
+	throwOnDrop?: boolean;
 	/** Image attachments. */
 	images?: ImageContent[];
 	/** Queue behavior while streaming. `"aside"` is non-interrupting — it does not steer/follow-up

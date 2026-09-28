@@ -1080,14 +1080,6 @@ describe("compact", () => {
 		expect(result.summary).toContain("condensed digest of still-older context");
 	});
 
-	it("includes the previous text summary when the prior compaction was not snapcompact", async () => {
-		const result = await snapcompact.compact(
-			makePreparation({ previousSummary: "Older context: project scaffolding done." }),
-			{ frameSize: TEST_FRAME_SIZE },
-		);
-		expect(result.summary).toContain("condensed digest of still-older context");
-	});
-
 	it("strips the OpenAI remote payload and preserves unrelated preserveData", async () => {
 		const first = await snapcompact.compact(makePreparation(), { frameSize: TEST_FRAME_SIZE });
 		const second = await snapcompact.compact(

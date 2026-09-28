@@ -60,7 +60,6 @@ import { GitTool } from "./git";
 import { GlobTool } from "./glob";
 import { GrepTool } from "./grep";
 import { IdaTool } from "./ida";
-import { isIrcEnabled } from "../irc/messaging";
 import { IrcTool } from "./irc";
 import { IssuesTool } from "./issues";
 import { JobTool } from "./job";
@@ -345,7 +344,7 @@ export interface ToolSession {
 	restrictToolNames?: boolean;
 	/** Task recursion depth (0 = top-level, 1 = first child, etc.) */
 	taskDepth?: number;
-	/** Get shared eval executor session ID. Subagents inherit this to share JS/Python state. */
+	/** Get this agent's eval executor session ID; keys its retained JS/Python/Ruby/Julia state. */
 	getEvalSessionId?: () => string | null;
 	/** Get session file */
 	getSessionFile: () => string | null;
@@ -508,6 +507,8 @@ export interface ToolSession {
 	 * a data-less `useLastTurn` finalize that would assemble to an empty result.
 	 */
 	getLastAssistantText?: () => string | undefined;
+	/** Resolve a terminal yield's current or immediately preceding report, bound to its call ID. */
+	getYieldReportText?: (toolCallId: string) => string | undefined;
 	/** Replace the active workpool item contract and refresh its provider-facing prompt. */
 	setWorkPoolYieldItems?: (items: readonly WorkPoolYieldItem[]) => Promise<void>;
 	/** Whether legacy/generic tool discovery is active for this session. */
