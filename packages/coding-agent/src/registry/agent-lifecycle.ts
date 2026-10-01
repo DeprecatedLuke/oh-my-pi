@@ -308,6 +308,20 @@ export class AgentLifecycleManager {
 				if (live !== ref || !live.session || live.session !== session) return;
 				if (this.#adopted.get(id)?.ref !== ref) return;
 
+				// A worker that still owns wake-capable async work (running
+				// auto-backgrounded bash/eval jobs, undelivered results) must not
+				// park: session.dispose() cancels and evicts its owned jobs and
+				// drops queued deliveries, so the promised async-result follow-up
+				// never arrives and a later wake finds the job id gone
+				// ("Background job or service not found"). Defer instead: re-arm
+				// the idle TTL and let the job's delivery idle-flush wake the
+				// session with the result; this park retries once the worker is
+				// actually quiescent.
+				if (session.hasPendingAsyncWork?.() === true) {
+					this.#armTimer(id, adopted);
+					return;
+				}
+
 				// Commit: detach + parked *before* dispose so callers never see a
 				// dying session via ref.session / idle status.
 				park.detached = true;

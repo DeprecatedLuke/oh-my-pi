@@ -13,13 +13,14 @@ interface SessionStub {
 }
 
 /** Minimal session: the lifecycle manager only ever calls dispose() on it. */
-function makeSessionStub(dispose?: () => Promise<void>): SessionStub {
+function makeSessionStub(dispose?: () => Promise<void>, hasPendingAsyncWork?: () => boolean): SessionStub {
 	let calls = 0;
 	const stub = {
 		dispose: async () => {
 			calls++;
 			await dispose?.();
 		},
+		hasPendingAsyncWork: () => hasPendingAsyncWork?.() ?? false,
 	};
 	return { session: stub as unknown as AgentSession, disposeCalls: () => calls };
 }
@@ -135,6 +136,35 @@ describe("AgentLifecycleManager", () => {
 		expect(ref?.session).toBeNull();
 		expect(ref?.sessionFile).toBe("/tmp/1-Sub.jsonl");
 		expect(lifecycle.has("1-Sub")).toBe(true);
+	});
+
+	it("park defers while the session owns pending async work, then parks once quiescent", async () => {
+		// A subagent whose turn ended while an auto-backgrounded job still runs
+		// (the "waiting on bg_N" stall): parking would dispose the session,
+		// cancelling the job and stranding its result — the worker must stay
+		// live until the job settles and its delivery has been consumed, and
+		// only then park.
+		vi.useFakeTimers();
+		let pendingAsyncWork = true;
+		const stub = makeSessionStub(undefined, () => pendingAsyncWork);
+		registerIdleSub("Bg-Sub", stub.session, "/tmp/Bg-Sub.jsonl");
+		lifecycle.adopt("Bg-Sub", { idleTtlMs: TTL });
+
+		vi.advanceTimersByTime(TTL);
+		await flushAsync();
+
+		// Deferred: session stays live so the job keeps running and its
+		// async-result delivery can wake the session (yield-queue idle flush).
+		expect(stub.disposeCalls()).toBe(0);
+		expect(registry.get("Bg-Sub")).toMatchObject({ status: "idle", session: stub.session });
+
+		// The job settles; the next idle-TTL expiry parks normally.
+		pendingAsyncWork = false;
+		vi.advanceTimersByTime(TTL);
+		await flushAsync();
+		expect(stub.disposeCalls()).toBe(1);
+		expect(registry.get("Bg-Sub")).toMatchObject({ status: "parked", session: null });
+		expect(registry.get("Bg-Sub")?.sessionFile).toBe("/tmp/Bg-Sub.jsonl");
 	});
 
 	it("running disarms the timer; returning to idle re-arms a fresh TTL", async () => {

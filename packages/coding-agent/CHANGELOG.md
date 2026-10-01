@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed subagents stalling while "waiting on" a background job: idle subagents are no longer shut down while their background jobs are still running, so the job result wakes them.
 - Restored the anchored Background Jobs panel after detached subagent observer updates, replacing the duplicated Subagents tree and repeated task labels with compact live job rows.
 - Fixed automatic refusal recovery no longer observing completed refusal turns, and restored automatic refusal transcript/request snapshots for later analysis.
 - Restored native `knowledge://`, `issues://`, and `patch://` routing, project knowledge summaries in the system prompt, and reviewer issue filing with duplicate awareness.
