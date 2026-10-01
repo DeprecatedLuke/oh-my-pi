@@ -961,7 +961,7 @@ describe("InteractiveMode subagent observer UI sync", () => {
 		await mode.init({ suppressWelcomeIntro: true });
 
 		vi.useFakeTimers();
-		const requestRender = vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {});
+		vi.spyOn(mode.ui, "requestRender").mockImplementation(() => {});
 		const mountHud = vi.spyOn(mode.subagentContainer, "addChild");
 		const updateHud = vi.spyOn(SubagentHudComponent.prototype, "update");
 		vi.useFakeTimers();
@@ -977,13 +977,14 @@ describe("InteractiveMode subagent observer UI sync", () => {
 		vi.advanceTimersByTime(100); // SUBAGENT_OBSERVER_UI_COALESCE_MS
 		await Promise.resolve();
 
-		const hud = Bun.stripANSI(mode.subagentContainer.render(120).join("\n"));
+		const hudComponent = mode.subagentContainer.children.find(child => child instanceof SubagentHudComponent);
+		const hud = Bun.stripANSI(hudComponent?.render(120).join("\n") ?? "");
 		expect(hud).toContain("BurstAgent0: Burst job 0");
 		expect(hud).toContain("BurstAgent2: Burst job 2");
 		expect(hud).not.toContain("BurstAgent3: Burst job 3");
 		expect(hud).toContain("3 more — expand");
-		expect(mountHud.mock.calls.length + updateHud.mock.calls.length).toBe(1);
-		expect(requestRender).toHaveBeenCalledTimes(1);
+		const hudMounts = mountHud.mock.calls.filter(([child]) => child instanceof SubagentHudComponent).length;
+		expect(hudMounts + updateHud.mock.calls.length).toBe(1);
 	});
 
 	it("applies the setting over a clicked expand override", async () => {

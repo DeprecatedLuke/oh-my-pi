@@ -4156,6 +4156,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#syncTodoHudState(this.#todoPhasesOwner ?? this.session);
 		this.#renderTodoList();
+		this.#renderSubagentList();
 		this.#eventController.refreshBackgroundJobs();
 		this.ui.requestRender();
 	}
