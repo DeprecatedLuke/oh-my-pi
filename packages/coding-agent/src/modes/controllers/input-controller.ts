@@ -42,7 +42,6 @@ import manualContinuePrompt from "../../prompts/system/manual-continue.md" with 
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
-import { PINNED_HUD_TOGGLE_ID } from "@oh-my-pi/pi-tui/prompt/composer";
 import { pickRecentFocusableAgentId } from "./session-focus-controller";
 import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
@@ -807,13 +806,6 @@ export class InputController {
 		if (candidates.length === 0) return;
 		const refs = AgentRegistry.global().list();
 		const scoped = refs.filter(ref => candidates.includes(ref.id));
-		// A live agent wins over the expander sentinel: task names are
-		// user-controlled, so an agent id can equal the toggle id. The toggle
-		// row itself names no agent and still toggles.
-		if (candidates.includes(PINNED_HUD_TOGGLE_ID) && scoped.length === 0) {
-			this.ctx.togglePinnedHudExpanded();
-			return;
-		}
 		// No global fallback: when every candidate is gone (aborted, released),
 		// focusing an unrelated recent agent would open something other than
 		// what the click displayed.

@@ -30,6 +30,10 @@
 
 - RPC mode now sends a `cancel` extension UI request (with `targetId`) when omp's own dialog timeout elapses, for `select`, `confirm`, `input`, and `ask` dialogs, so hosts can close stale dialogs ([#13551](https://github.com/can1357/oh-my-pi/pull/13551) by [@andrebrait](https://github.com/andrebrait))
 
+### Removed
+
+- Removed the pinned Subagents block above the editor; running subagents show in the Background Jobs panel (`display.pinnedAgents` and `display.subagentLivePreview` settings removed)
+
 ## [18.4.6] - 2026-10-01
 
 ### Added

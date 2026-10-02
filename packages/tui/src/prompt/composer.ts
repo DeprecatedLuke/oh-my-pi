@@ -149,8 +149,8 @@ export interface ViewportClickSpan {
 }
 
 /**
- * Row-level click target: maps rendered rows to subagent ids. Implemented by
- * the subagent HUD, whose rows are fixed 1:1 with visible sessions.
+ * Row-level click target: maps rendered rows to subagent ids. Detected
+ * structurally by `rowTargetCandidates`, so implementers stay decoupled.
  */
 export interface ViewportClickRowTarget {
 	getClickAgentAtRow(row: number): string | undefined;
@@ -169,13 +169,6 @@ export function routeViewportClick(spans: readonly ViewportClickSpan[], index: n
 	}
 	return [];
 }
-
-/**
- * Reserved click-candidate id for the pinned HUD expander row. Checked before
- * any registry lookup: its `@…:…` charset cannot collide with generated agent
- * ids (word names, numeric and `-N` suffixes, dotted nesting).
- */
-export const PINNED_HUD_TOGGLE_ID = "@omp:toggle-pinned-hud";
 
 /**
  * Nested background opens inside a hovered row. The band wraps the line, so a
@@ -268,7 +261,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	// they have rendered at since mount. Retirement bills transient roots at
 	// this floor, never their peak, so a dialog or tall editor that later
 	// shrinks never leaves committed transcript rows the live viewport cannot
-	// reclaim (#11007). Persistent roots (loader, todo/subagent HUDs) bill at
+	// reclaim (#11007). Persistent roots (loader, todo HUD, jobs panel) bill at
 	// their current height: they stay up for a whole turn, and billing them at
 	// an idle floor hid the settled rows they displaced until the turn ended.
 	// The floor is terminal-height independent — editor and dialog heights do
@@ -471,9 +464,8 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	 * for its row targets in `after` coordinates.
 	 *
 	 * Row targets usually nest one level down: chrome roots are plain
-	 * containers (the HUD lives inside `subagentContainer`), and
-	 * `Container.render` is a pure concatenation, so child spans tile the root
-	 * span exactly. Render those children once and share the rows for
+	 * containers, and `Container.render` is a pure concatenation, so child
+	 * spans tile the root span exactly. Render those children once and share the rows for
 	 * composition and measurement — a second render per frame would duplicate
 	 * render-time side effects (image placement registration). Roots with a
 	 * custom render keep the composed output as the source of truth and measure

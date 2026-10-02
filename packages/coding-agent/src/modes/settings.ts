@@ -547,37 +547,6 @@ export const cfgDisplayShimmer = register({
 });
 effect(cfgDisplayShimmer, setShimmerMode);
 
-export const cfgDisplayPinnedAgents = register({
-	id: "display.pinnedAgents",
-	type: "enum",
-	values: ["off", "collapsed", "full"] as const,
-	default: "collapsed",
-	ui: {
-		tab: "appearance",
-		group: "Display",
-		label: "Pinned Agents",
-		description:
-			"Pinned live-agent jump list above the editor (off hides it; collapsed shows a few rows with an expander; full lists all)",
-		options: [
-			{ value: "off", label: "Off", description: "Hide the pinned jump list" },
-			{ value: "collapsed", label: "Collapsed", description: "Show a few rows with an expander" },
-			{ value: "full", label: "Full", description: "Always list every live agent" },
-		],
-	},
-});
-
-export const cfgDisplaySubagentLivePreview = register({
-	id: "display.subagentLivePreview",
-	type: "boolean",
-	default: false,
-	ui: {
-		tab: "appearance",
-		group: "Display",
-		label: "Subagent Live Preview",
-		description: "Show each pinned subagent's current (or most recent) tool call beneath its row",
-	},
-});
-
 export const cfgDisplaySmoothStreaming = register({
 	id: "display.smoothStreaming",
 	type: "boolean",
