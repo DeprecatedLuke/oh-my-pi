@@ -1322,14 +1322,47 @@ export class AgentSession implements SettingsScope {
 					);
 					this.#queuedMessageDrainBlocked ||= parkedQueueDrainBlocked;
 				}
-				this.#endInFlight(async () => {
-					try {
-						await finishObservation?.(turnError);
-					} catch (error) {
-						logger.warn("IRC wake turn observer failed to finish", { error: String(error) });
-					}
+				this.#endInFlight(() => {
+					// Detached so a long async settle never holds up the stranded-queue
+					// drain that runs after settle callbacks.
+					void this.#finishIrcWakeObservation(finishObservation, turnError, generation);
 				});
 			});
+	}
+
+	/**
+	 * Close an IRC wake turn's observation once the wake is truly done. A wake
+	 * turn that starts background work and ends with "waiting for the job" is a
+	 * scheduling pause: the job's async-result starts a continuation turn that
+	 * may `yield`. Finishing at the first settle would relay the interim text,
+	 * detach the monitor, and leave the continuation's yield with no wake job,
+	 * so the parent never receives the result. Settle owner async work first
+	 * (the same quiescence barrier the first run uses), bailing on abort.
+	 */
+	async #finishIrcWakeObservation(
+		finishObservation: ((error?: unknown) => void | Promise<void>) | undefined,
+		turnError: unknown,
+		generation: number,
+	): Promise<void> {
+		if (!finishObservation) return;
+		try {
+			while (
+				this.#agentId &&
+				!this.#isDisposed &&
+				this.#promptGeneration === generation &&
+				this.#hasPendingAsyncWake()
+			) {
+				await this.settleAsyncWork();
+				await this.#waitForPostPromptRecovery(generation);
+			}
+		} catch (error) {
+			logger.warn("IRC wake turn async settle failed", { error: String(error) });
+		}
+		try {
+			await finishObservation(turnError);
+		} catch (error) {
+			logger.warn("IRC wake turn observer failed to finish", { error: String(error) });
+		}
 	}
 
 	/** Remove advisor concern/blocker cards from the agent-core steer/follow-up
