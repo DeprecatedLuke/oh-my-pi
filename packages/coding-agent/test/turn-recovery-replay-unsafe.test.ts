@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage, SyntheticToolResultDetails } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
@@ -13,6 +13,7 @@ import {
 	TurnRecovery,
 	type TurnRecoveryHost,
 } from "@oh-my-pi/pi-coding-agent/session/turn-recovery";
+import * as unexpectedStopClassifier from "@oh-my-pi/pi-coding-agent/session/unexpected-stop-classifier";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createProviderErrorMessage } from "../../ai/src/providers/error-message";
 
@@ -48,11 +49,16 @@ function createHost(
 		messages?: readonly AgentMessage[];
 		lastModelChangeRole?: string;
 		modelRoles?: Record<string, string>;
+		hasPendingAsyncWake?: () => boolean;
+		unexpectedStopDetection?: "none" | "mechanical" | "smart";
 	} = {},
 ): TurnRecoveryHost {
 	const settings = Settings.isolated({
 		...(options.fallbackChains ? { "retry.fallbackChains": options.fallbackChains } : {}),
 		...(options.modelRoles ? { modelRoles: options.modelRoles } : {}),
+		...(options.unexpectedStopDetection
+			? { "features.unexpectedStopDetection": options.unexpectedStopDetection }
+			: {}),
 	});
 	if (options.modelRoles) {
 		for (const [role, selector] of Object.entries(options.modelRoles)) {
@@ -89,6 +95,7 @@ function createHost(
 		promptGeneration: () => 0,
 		promptSequence: () => 0,
 		sessionId: () => "test-session",
+		hasPendingAsyncWake: options.hasPendingAsyncWake ?? (() => false),
 		emitSessionEvent: async () => {},
 		scheduleAgentContinue: () => {},
 		waitForSessionMessagePersistence: async () => {},
@@ -1248,5 +1255,77 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 			expect(recovery.handleCommittedTextStreamStall(message)).toBe(false);
 			expect(continues).toEqual([]);
 		});
+	});
+});
+
+describe("TurnRecovery unexpected stop async-wake gate", () => {
+	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+	if (!model) throw new Error("Expected bundled model claude-sonnet-4-5");
+
+	let tempDir: TempDir;
+	let authStorage: AuthStorage;
+	let modelRegistry: ModelRegistry;
+
+	beforeAll(async () => {
+		tempDir = TempDir.createSync("@pi-turn-recovery-replay-");
+		authStorage = await AuthStorage.create(tempDir.join("testauth.db"));
+		authStorage.keys.setRuntime("anthropic", "test-key");
+		modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"), { settings: Settings.isolated() });
+	});
+
+	afterAll(() => {
+		authStorage.close();
+		tempDir.removeSync();
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	function deferralStopTurn(): AssistantMessage {
+		const message = makeMessage([{ type: "text", text: "Results come when the soak test finishes." }], model);
+		message.stopReason = "stop";
+		return message;
+	}
+
+	function smartHost(pendingAsyncWake: boolean, message: AssistantMessage) {
+		const messages: AgentMessage[] = [message];
+		const continues: string[] = [];
+		const host = createHost(model, modelRegistry, {
+			messages,
+			hasPendingAsyncWake: () => pendingAsyncWake,
+			unexpectedStopDetection: "smart",
+		});
+		host.agent = {
+			state: { messages },
+			appendMessage: (appended: AgentMessage) => messages.push(appended),
+		} as never;
+		host.scheduleAgentContinue = options => continues.push(options.source);
+		return { host, messages, continues };
+	}
+
+	it("treats a text deferral as a pause while an async wake is pending", async () => {
+		const classify = vi.spyOn(unexpectedStopClassifier, "classifyUnexpectedStop").mockResolvedValue(true);
+		const message = deferralStopTurn();
+		const { host, messages, continues } = smartHost(true, message);
+		const recovery = new TurnRecovery(host);
+
+		expect(await recovery.handleUnexpectedAssistantStop(message)).toBe(false);
+		expect(classify).not.toHaveBeenCalled();
+		expect(messages).toEqual([message]);
+		expect(continues).toEqual([]);
+	});
+
+	it("classifies a deferral and schedules the retry when no async wake is pending", async () => {
+		const classify = vi.spyOn(unexpectedStopClassifier, "classifyUnexpectedStop").mockResolvedValue(true);
+		const message = deferralStopTurn();
+		const { host, messages, continues } = smartHost(false, message);
+		const recovery = new TurnRecovery(host);
+
+		expect(await recovery.handleUnexpectedAssistantStop(message)).toBe(true);
+		expect(classify).toHaveBeenCalledTimes(1);
+		expect(messages).toHaveLength(2);
+		expect(messages[1]?.role).toBe("developer");
+		expect(continues).toEqual(["unexpected-stop-retry"]);
 	});
 });

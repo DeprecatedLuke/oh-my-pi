@@ -1635,6 +1635,7 @@ export class AgentSession implements SettingsScope {
 			promptGeneration: () => this.#promptGeneration,
 			promptSequence: () => this.#promptSequence,
 			sessionId: () => this.sessionId,
+			hasPendingAsyncWake: () => this.#hasPendingAsyncWake(),
 			emitSessionEvent: event => this.#emitSessionEvent(event),
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			waitForSessionMessagePersistence: message => this.#waitForSessionMessagePersistence(message),

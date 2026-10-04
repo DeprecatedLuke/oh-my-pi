@@ -22,10 +22,10 @@ const UNEXPECTED_STOP_QUESTION: NoulQuestion = {
 	// Wording and bulleted examples measured on lfm2-1.2b / qwen2.5-1.5b: prose
 	// criteria cost ~3 points of recall on the 1.2B model.
 	instructions:
-		"Classify whether this assistant message is an unexpected stop: it says it will act, continue working, or call a tool, then ends without doing so.",
+		"Classify whether this assistant message is an unexpected stop: it says it will act, continue working, call a tool, or deliver a result later (when a timer, window, or process finishes), then ends without doing so.",
 	criteria: {
-		true: 'Unexpected stops:\n- "I should do the same for the JS eval worker. Doing that now."\n- "Let me run the tests next."\n- "I\'ll fix that now."\n- "Should I do that for you?"',
-		false: 'Not an unexpected stop:\n- "I\'ve completed the task."\n- "Is there anything else I can help with?"\n- "The fix is done and tests pass."',
+		true: 'Unexpected stops:\n- "I should do the same for the JS eval worker. Doing that now."\n- "Let me run the tests next."\n- "I\'ll fix that now."\n- "Should I do that for you?"\n- "The summary comes when the run ends, around 14:30Z."\n- "I\'ll report back once the benchmark finishes."',
+		false: 'Not an unexpected stop:\n- "I\'ve completed the task."\n- "Is there anything else I can help with?"\n- "The fix is done and tests pass."\n- "Benchmark finished: GL 41 fps, Vulkan 58 fps; Vulkan wins."',
 	},
 };
 

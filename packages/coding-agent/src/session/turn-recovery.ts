@@ -221,6 +221,8 @@ export interface TurnRecoveryHost {
 	promptGeneration(): number;
 	promptSequence(): number;
 	sessionId(): string;
+	/** True while owner-scoped background work will re-wake this session with its own follow-up. */
+	hasPendingAsyncWake(): boolean;
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
 	scheduleAgentContinue(options: {
 		source: string;
@@ -1058,7 +1060,10 @@ export class TurnRecovery {
 				this.#unexpectedStopRetryCount = 0;
 				return false;
 			}
-		} else if (mode === "mechanical") {
+		} else if (mode === "mechanical" || this.#host.hasPendingAsyncWake()) {
+			// A pending background job re-wakes the loop with its result, so a turn
+			// that defers delivery to it ("results when the job finishes") is a
+			// legitimate pause, not an unexpected stop.
 			this.#unexpectedStopRetryCount = 0;
 			return false;
 		} else {
