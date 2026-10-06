@@ -11,6 +11,7 @@ declare global {
 		getAttribute(qualifiedName: string): string | null;
 		matches(selectors: string): boolean;
 		readonly isConnected: boolean;
+		readonly ownerDocument: unknown;
 	}
 	interface HTMLIFrameElement extends Element {}
 }

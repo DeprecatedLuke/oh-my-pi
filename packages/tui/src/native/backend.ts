@@ -64,6 +64,18 @@ export interface NativeHost {
 	overlays(): readonly NativeOverlay[];
 	/** Component receiving keyboard input. */
 	focused(): Component | null;
+	/**
+	 * The user clicked into a node described by `owners[0]` (then the
+	 * components containing it, innermost first): move keyboard focus there.
+	 * `field` is the outermost owner that takes keys and whose focus target is
+	 * the clicked `editor`/`input`, if any; `sheet` tells the overlays that
+	 * don't hold the keys while the user works beside them.
+	 */
+	focusFromPointer(
+		owners: readonly Component[],
+		field: Component | null,
+		sheet: (overlay: Component) => boolean,
+	): void;
 	requestRender(): void;
 	/** The terminal switched appearance. */
 	appearanceChanged(dark: boolean): void;
@@ -108,6 +120,7 @@ class NativeContext implements DescribeContext {
 	cols: number;
 	reduceMotion: boolean;
 	dark: boolean;
+	hour12: boolean | undefined;
 	#kinds: ReadonlySet<string>;
 	#features: ReadonlySet<string>;
 
@@ -115,6 +128,7 @@ class NativeContext implements DescribeContext {
 		this.cols = cols;
 		this.reduceMotion = hello.reduceMotion === true;
 		this.dark = hello.dark !== false;
+		this.hour12 = hello.hour12;
 		this.#kinds = new Set(hello.kinds);
 		this.#features = new Set(hello.features);
 	}
@@ -386,8 +400,8 @@ export class NativeBackend {
 	 * The terminal's real `hello` reply after an optimistic start: adopt its
 	 * APC limit, credits, cell size, kinds, appearance and motion preference.
 	 * A width the terminal already reported in a `resize` event wins over the
-	 * reply's. A different vocabulary or motion preference re-describes every
-	 * component, so kinds the terminal lacks fall back.
+	 * reply's. A different vocabulary, motion preference or clock re-describes
+	 * every component, so kinds the terminal lacks fall back.
 	 */
 	confirm(hello: TspHello): void {
 		const before = this.#cx;
@@ -399,7 +413,12 @@ export class NativeBackend {
 			this.#sawResize = true;
 		}
 		if (this.#cx.dark !== before.dark) this.#host.appearanceChanged(this.#cx.dark);
-		if (this.#cx.reduceMotion !== before.reduceMotion || !this.#cx.sameVocabulary(before)) this.#host.invalidate();
+		if (
+			this.#cx.reduceMotion !== before.reduceMotion ||
+			this.#cx.hour12 !== before.hour12 ||
+			!this.#cx.sameVocabulary(before)
+		)
+			this.#host.invalidate();
 		this.#host.requestRender();
 	}
 
@@ -659,17 +678,35 @@ export class NativeBackend {
 			case "action":
 			case "change":
 			case "edit":
+			case "undo":
+			case "send":
 				this.#routeUiEvent(event);
 				return;
+			case "focus": {
+				const reconciler = this.#surfaceFor(event.sf)?.reconciler;
+				const owners = reconciler?.owners(event.id) ?? [];
+				if (!reconciler || owners.length === 0) return;
+				const field =
+					owners.findLast(owner => owner.handleInput && reconciler.focusTarget(owner) === event.id) ?? null;
+				this.#host.focusFromPointer(owners, field, overlay => overlay.nativeSheet?.(this.#cx) === true);
+				this.#host.requestRender();
+				return;
+			}
 		}
 	}
 
 	#routeUiEvent(
-		event: Extract<TspEvent, { ev: "toggle" | "select" | "activate" | "action" | "change" | "edit" }>,
+		event: Extract<
+			TspEvent,
+			{ ev: "toggle" | "select" | "activate" | "action" | "change" | "edit" | "undo" | "send" }
+		>,
 	): void {
 		const reconciler = this.#surfaceFor(event.sf)?.reconciler;
 		const target = reconciler?.target(event.id);
 		if (!reconciler || !target?.component.handleNativeEvent) return;
+		// Explicit sends must address the live editor, not a stale or invented
+		// descendant id that merely shares the component's namespace.
+		if (event.ev === "send" && (!this.#live || reconciler.focusTarget(target.component) !== event.id)) return;
 		// A list's items are nodes (`<list>/<key>`, or a component's root id) and
 		// map back to their described key. Data-first kinds (picker, prefs) send
 		// the program's own item ids (model ids, paths), which pass through.
@@ -699,6 +736,12 @@ export class NativeBackend {
 				ui = { type: "edit", key: target.keypath, from, to, text, cursor, len };
 				break;
 			}
+			case "undo":
+				ui = { type: "undo", key: target.keypath };
+				break;
+			case "send":
+				ui = { type: "send", key: target.keypath, text: event.text };
+				break;
 		}
 		target.component.handleNativeEvent(ui);
 		this.#host.requestRender();

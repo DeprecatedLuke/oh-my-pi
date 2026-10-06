@@ -110,6 +110,18 @@ const PREMATURE_STREAM_CLOSE_ERROR_RE =
 const IMMUTABLE_ANTHROPIC_THINKING_ERROR_PATTERN =
 	/messages\.\d+\.content\.\d+.*\b(?:thinking|redacted_thinking)\b.*\blatest assistant message cannot be modified\b/is;
 
+/**
+ * Bare abort sentinels with no provider reason: our own `"Request was aborted"`
+ * plus Node/Bun `AbortError`s (`"The operation was aborted"`) surfaced by
+ * transports when an internal (non-caller) abort fires.
+ */
+const GENERIC_ABORT_MESSAGES: Record<string, true> = {
+	"Request was aborted": true,
+	"Request was aborted.": true,
+	"The operation was aborted": true,
+	"The operation was aborted.": true,
+};
+
 function hasNonWhitespace(value: string): boolean {
 	return NON_WHITESPACE_RE.test(value);
 }
@@ -183,7 +195,6 @@ function toolReplayStart(messages: readonly AgentMessage[]): number | undefined 
 
 /** Result shape shared with automatic maintenance recovery. */
 export interface RecoveryCompactionResult {
-	deferredHandoff: boolean;
 	continuationScheduled: boolean;
 	automaticContinuationBlocked?: boolean;
 	historyRewritten?: boolean;
@@ -250,8 +261,6 @@ export interface TurnRecoveryHost {
 	runAutoCompaction(
 		reason: "overflow" | "threshold" | "idle" | "incomplete",
 		willRetry: boolean,
-		deferred?: boolean,
-		allowDefer?: boolean,
 		options?: {
 			autoContinue?: boolean;
 			triggerContextTokens?: number;
@@ -693,10 +702,9 @@ export class TurnRecovery {
 	runRecoveryCompactionWithRollback(
 		reason: "overflow" | "incomplete",
 		message: AssistantMessage,
-		allowDefer: boolean,
 		options: { autoContinue: boolean; triggerContextTokens?: number; excludeMediaMethods?: boolean },
 	): Promise<RecoveryCompactionResult> {
-		return this.#runRecoveryCompactionWithRollback(reason, message, allowDefer, options);
+		return this.#runRecoveryCompactionWithRollback(reason, message, options);
 	}
 
 	/**
@@ -1210,12 +1218,11 @@ export class TurnRecovery {
 	async #runRecoveryCompactionWithRollback(
 		reason: "overflow" | "incomplete",
 		assistantMessage: AssistantMessage,
-		allowDefer: boolean,
 		options: { autoContinue: boolean; triggerContextTokens?: number; excludeMediaMethods?: boolean },
 	): Promise<RecoveryCompactionResult> {
 		const compactionEntryBefore = getLatestCompactionEntry(this.#host.sessionManager.getBranch());
 		await this.dropPersistedAssistantTurn(assistantMessage);
-		const result = await this.#host.runAutoCompaction(reason, true, false, allowDefer, {
+		const result = await this.#host.runAutoCompaction(reason, true, {
 			autoContinue: options.autoContinue,
 			triggerContextTokens: options.triggerContextTokens,
 			phase: "mid_turn",
@@ -1368,7 +1375,7 @@ export class TurnRecovery {
 	 */
 	#isGenericAbortSentinel(message: AssistantMessage): boolean {
 		const errorMessage = message.errorMessage?.trim().replace(/^Error:\s*/i, "");
-		return errorMessage === "Request was aborted" || errorMessage === "Request was aborted.";
+		return errorMessage !== undefined && Object.hasOwn(GENERIC_ABORT_MESSAGES, errorMessage);
 	}
 
 	isRetryableReasonlessAbort(message: AssistantMessage): boolean {
@@ -1636,6 +1643,29 @@ export class TurnRecovery {
 				message.model === "grok-4.6" &&
 				message.api === "openai-responses" &&
 				/OpenAI responses stream closed before a terminal response event was received/i.test(errorMessage))
+		);
+	}
+	/**
+	 * First-attempt mid-stream socket drop with streamed progress: the transport
+	 * died after the model had already emitted reasoning or tool calls, so the
+	 * failure says nothing about model health — retry the same model once before
+	 * consulting the fallback chain. A drop with no streamed content keeps the
+	 * immediate fallback (a different route may genuinely help), as do later
+	 * attempts. Never applies once the retry budget is spent (e.g.
+	 * `retry.maxRetries: 0`): there is no same-model retry left, so the
+	 * fallback-chain consult is the only recovery. Mirrors the stall handler's
+	 * socket check, extended to turns with tool calls.
+	 */
+	#isFirstAttemptMidStreamSocketDrop(message: AssistantMessage, id: number, retryBudgetExhausted: boolean): boolean {
+		if (this.#retryAttempt !== 1 || retryBudgetExhausted) return false;
+		if (message.stopReason !== "error" || !AIError.retriable(id)) return false;
+		if (this.#host.streamingEditAbortTriggered()) return false;
+		if (!isUnexpectedSocketCloseMessage(message.errorMessage ?? "")) return false;
+		return message.content.some(
+			block =>
+				(block.type === "thinking" && block.thinking.trim().length > 0) ||
+				block.type === "toolCall" ||
+				(block.type === "text" && block.text.trim().length > 0),
 		);
 	}
 
@@ -2387,6 +2417,7 @@ export class TurnRecovery {
 		},
 	): Promise<boolean> {
 		const retrySettings = cfgRetry.get(this.#host.settings);
+		if (this.#host.abortInProgress() || this.#host.isDisposed()) return false;
 		// The Fireworks Fast→base degrade is an intrinsic model-selection safety net,
 		// not a retry loop, so it runs even when the user disabled retries: it switches
 		// the model once and lets the base turn proceed.
@@ -2604,6 +2635,12 @@ export class TurnRecovery {
 		// contents, not model health (issue #8760). Keep it on the same model; the
 		// retry budget still bounds a genuinely stuck stream.
 		const thinkingLoop = AIError.is(id, AIError.Flag.ThinkingLoop);
+		// A Codex steering rejection answers our own `response.steer`, not the
+		// model's health, and the provider already stopped steering the session:
+		// replay on the same model while same-model retries remain. Once the
+		// budget is spent, the chain keeps its last-resort consult.
+		const sameModelSteerReplay =
+			!retryBudgetExhausted && AIError.isCodexSteerRejection({ api: currentModel?.api, errorMessage });
 		const effectiveUsageLimitWaitMs =
 			usageLimitWaitMs ??
 			(siblingAvailabilityWaitMs === undefined
@@ -2632,8 +2669,10 @@ export class TurnRecovery {
 				allowModelFallback &&
 				retrySettings.modelFallback &&
 				!thinkingLoop &&
+				!sameModelSteerReplay &&
 				!waitForSiblingCredential &&
-				!(retryBudgetExhausted && classifierRefusal)
+				!(retryBudgetExhausted && classifierRefusal) &&
+				!this.#isFirstAttemptMidStreamSocketDrop(message, id, retryBudgetExhausted)
 			) {
 				if (!classifierRefusal) {
 					this.noteRetryFallbackCooldown(currentSelector, parsedRetryAfterMs, errorMessage);
@@ -2783,6 +2822,9 @@ export class TurnRecovery {
 			errorMessage,
 			errorId: message.errorId,
 		});
+		if (this.#host.abortInProgress() || this.#host.promptGeneration() !== generation) {
+			return this.#endCancelledRetry();
+		}
 
 		// Resolved stream-stall tools and proven-unexecuted malformed calls keep
 		// their assistant/result pair. Continuation then sees explicit synthetic

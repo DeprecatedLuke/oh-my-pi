@@ -76,7 +76,26 @@ export type CommandMetadataChangedListener = () => void | Promise<void>;
 export type AsyncJobSnapshotItem = Pick<
 	AsyncJob,
 	"id" | "type" | "status" | "label" | "startTime" | "endTime" | "agentType" | "agentId"
->;
+> & {
+	/** Full command line of a job that runs a process; `label` is cut to 120 characters. */
+	command?: string;
+};
+
+/** One async job as a job inspector (the jobs sheet) shows it beyond its snapshot row. */
+export interface AsyncJobInspection {
+	/** Full command line of a job that runs a process. */
+	command?: string;
+	/** Directory that command started in. */
+	cwd?: string;
+	/** Live pids the job's command spawned. */
+	pids: readonly number[];
+	/** Exit status of a settled command. */
+	exitCode?: number;
+	/** Output tail while running; the final result or error text once settled. */
+	output?: string;
+	/** Artifact holding the full output when `output` is cut. */
+	artifactId?: string;
+}
 
 /** Snapshot of running, recent, and pending-delivery asynchronous jobs. */
 export interface AsyncJobSnapshot {
@@ -226,6 +245,14 @@ export interface AgentSessionConfig {
 	createThinkTool?: () => Promise<AgentTool | null>;
 	/** Model registry for API key resolution and model discovery. */
 	modelRegistry: ModelRegistry;
+	/**
+	 * Whether `switchSession` may open a session whose saved models cannot be
+	 * restored, keeping the current model and warning, instead of throwing
+	 * `Could not restore model <provider/id>`. `retry.modelFallback: false`
+	 * still forbids it. `createAgentSession` sets this from `hasUI` and its
+	 * `allowSessionModelFallback` option. Default: false.
+	 */
+	allowSessionModelFallback?: boolean;
 	/** Whether the startup model may be replaced by refreshed same-selector registry metadata. */
 	rebindModelAfterDiscovery?: boolean;
 	/** Tool registry for LSP and settings. */
@@ -552,6 +579,8 @@ export interface EphemeralTurnOptions {
 	onTextDelta?: (delta: string) => void | Promise<void>;
 	signal?: AbortSignal;
 	dedupeReply?: boolean;
+	/** UTF-8 byte cap of the deduped reply (default 4 KiB); `Infinity` keeps a long answer whole. */
+	replyMaxBytes?: number;
 }
 
 /** A side-turn response that is not appended to session history. */
