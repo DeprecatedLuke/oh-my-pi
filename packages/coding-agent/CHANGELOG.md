@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fixed reviewer subagents not seeing already-filed project issues in their system prompt, which let them re-file settled or duplicate findings.
 - Fixed subagents stalling while "waiting on" a background job: idle subagents are no longer shut down while their background jobs are still running, so the job result wakes them.
 - Fixed a subagent revived by a message never reporting back when it waited on a background job: its final result after the job finished was dropped, so the parent agent stopped instead of continuing.
 - Fixed the agent ending its turn after promising a result "when the window ends" (or once some external process finishes) with nothing to wake it; smart unexpected-stop detection now catches these deferrals and prompts the agent to block on the wait, while deferrals backed by a running background job are left alone.

@@ -17,6 +17,7 @@ import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { runSubprocess } from "@oh-my-pi/pi-coding-agent/task/executor";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { createSessionDefaults } from "../helpers/session-defaults";
 
 let tempDir: string;
 
@@ -32,6 +33,7 @@ afterEach(async () => {
 function createMockSession(): AgentSession {
 	const listeners: Array<(event: AgentSessionEvent) => void> = [];
 	const session = {
+		...createSessionDefaults(),
 		state: { messages: [] },
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,
@@ -39,7 +41,6 @@ function createMockSession(): AgentSession {
 		sessionManager: { appendSessionInit: () => {} },
 		getActiveToolNames: () => ["issues", "yield"],
 		getEnabledToolNames: () => ["issues", "yield"],
-		setActiveToolsByName: async (_toolNames: string[]) => {},
 		subscribe: (listener: (event: AgentSessionEvent) => void) => {
 			listeners.push(listener);
 			return () => {
@@ -68,10 +69,6 @@ function createMockSession(): AgentSession {
 				});
 			}
 		},
-		waitForIdle: async () => {},
-		getLastAssistantMessage: () => undefined,
-		abort: async () => {},
-		dispose: async () => {},
 	};
 	return session as unknown as AgentSession;
 }
@@ -135,7 +132,7 @@ describe("runSubprocess existing-issue awareness", () => {
 		expect(reviewer?.tools).toContain("issues");
 		const rendered = await renderedSubagentPrompt(tempDir, { ...reviewer!, model: undefined });
 
-		expect(rendered).toContain("FILED ISSUES");
+		expect(rendered).toContain("§ Filed Issues");
 		expect(rendered).toContain("Open race in scheduler");
 		expect(rendered).toContain("Rejected hardening request");
 		// Settled decisions are flagged so the reviewer skips them.
@@ -146,14 +143,14 @@ describe("runSubprocess existing-issue awareness", () => {
 
 	it("renders an explicit empty marker when no issues are filed yet", async () => {
 		const rendered = await renderedSubagentPrompt(tempDir, reviewerAgent(["read", "issues"]));
-		expect(rendered).toContain("FILED ISSUES");
+		expect(rendered).toContain("§ Filed Issues");
 		expect(rendered).toContain("No issues filed yet");
 	});
 
-	it("omits the FILED ISSUES section for agents without the issues tool", async () => {
+	it("omits the Filed Issues section for agents without the issues tool", async () => {
 		await addIssue(tempDir, { category: "correctness", title: "Some open issue", body: "Body." });
 		const rendered = await renderedSubagentPrompt(tempDir, reviewerAgent(["read", "search"]));
-		expect(rendered).not.toContain("FILED ISSUES");
+		expect(rendered).not.toContain("§ Filed Issues");
 		expect(rendered).not.toContain("Some open issue");
 	});
 });

@@ -6,6 +6,15 @@
 {{context}}
 {{/if}}
 
+{{#if existingIssues}}
+§ Filed Issues
+These issues are already catalogued under `.omp/issues/` (active and archived shown). Treat this as the source of truth for what is already known — re-read any entry in full with its `issues://` URL before acting on it.
+
+{{existingIssues}}
+
+Before filing anything new: an item flagged `[wontfix]` or `[duplicate]`, or any `(archived)` entry, is a settled decision — NEVER re-file it. If a finding restates an open entry, `edit` that issue instead of adding a duplicate. Only `add` a genuinely new finding not represented above.
+{{/if}}
+
 {{#if planReference}}
 § Plan
 This session is executing an approved plan. Your assignment above is one part of it. Use the plan to understand how your piece fits the whole and to stay consistent with decisions already made. Where the plan and your assignment conflict, the assignment wins. The plan's full contents are below — NEVER re-read it from the path.
