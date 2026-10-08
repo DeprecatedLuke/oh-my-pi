@@ -123,7 +123,7 @@ export interface InteractiveModeContext {
 	/** Whether the status/working row rendered lines in the latest frame; the band composer's editor top gap collapses only then. */
 	readonly statusRowOccupied: boolean;
 	todoContainer: Container;
-	subagentContainer: Container;
+	backgroundJobsContainer: Container;
 	btwContainer: Container;
 	omfgContainer: Container;
 	cleanseContainer: Container;
@@ -158,8 +158,8 @@ export interface InteractiveModeContext {
 	invalidatePendingFocus(): void;
 	/** Candidate subagent ids under a mutable-viewport line, for click-to-focus. Empty when the line has no target. */
 	resolveViewportClickCandidates(index: number): string[];
-	/** Flip the pinned jump list between its collapsed few and the full list. */
-	togglePinnedHudExpanded(): void;
+	/** Repaint the anchored Background Jobs panel from the current job snapshot. */
+	refreshBackgroundJobs(): void;
 	/** Point the inline hover band at a click-candidate id (or clear it). */
 	setClickHoverId(id: string | undefined): void;
 	/** Clear loader, transient HUD/pending containers, streaming state, and pending tools. */

@@ -9,6 +9,7 @@
 - Added X post search to xAI web search: Grok can now search X alongside the web; `site:x.com`, `site:x.com/<handle>`, and `from:<handle>` search X only (limited to those authors), `-from:<handle>` leaves authors out, and `after:`/`before:` or `recency` limit the post dates.
 - Added xAI-first routing for X-only searches (`site:x.com`, `from:<handle>`) when xAI credentials exist, even if another engine is the web search model.
 - Added reading X links through Grok's X tools when logged in to xAI: posts with their thread and replies, profiles with recent posts, searches, and hashtags. This replaces the Nitter mirrors, which no longer serve X.
+- Added an anchored Background Jobs panel above the editor (`display.backgroundJobs`, on by default) that lists every live subagent — blocking and background, tagged with their agent type and showing their live action — plus shell and eval jobs, with live ages and completion counts; clicking a subagent row focuses it.
 
 ### Changed
 
@@ -29,6 +30,10 @@
 - Fixed resumed Claude sessions losing earlier thinking context and prompt-cache reuse when extension or MCP tools were registered before the first message; applies to sessions saved with this version or later.
 - Fixed subagent advisors configured with `@advisor` incorrectly using the built-in `slow` model instead of the configured advisor role.
 - Fixed Anthropic idle recaps, `/btw` and `/omfg` replies, and streaming previews displaying raw token markers instead of Nerd Font icons.
+
+### Removed
+
+- Removed the pinned Subagents block above the editor; running subagents show in the Background Jobs panel. `display.pinnedAgents: off` migrates to the new `display.backgroundJobs: false`; `display.subagentLivePreview` is removed
 
 ## [18.8.5] - 2026-10-08
 

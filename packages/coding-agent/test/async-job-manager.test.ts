@@ -33,6 +33,31 @@ describe("AsyncJobManager", () => {
 		vi.restoreAllMocks();
 	});
 
+	test("onChange fires on register, settle, and cancel, even for jobs that never report progress", async () => {
+		const manager = new AsyncJobManager({ onJobComplete: async () => {} });
+		let changes = 0;
+		const unsubscribe = manager.onChange(() => {
+			changes++;
+		});
+		manager.register("task", "quiet", async () => "done");
+		expect(changes).toBe(1);
+		await manager.waitForAll();
+		expect(changes).toBe(2);
+
+		const { promise: hold, resolve } = Promise.withResolvers<string>();
+		const id = manager.register("bash", "held", () => hold);
+		expect(changes).toBe(3);
+		manager.cancel(id);
+		expect(changes).toBe(4);
+		resolve("late");
+		await manager.waitForAll();
+
+		unsubscribe();
+		manager.register("task", "after", async () => "done");
+		await manager.waitForAll();
+		expect(changes).toBe(5);
+	});
+
 	test("forwards progress updates and delivers completion", async () => {
 		const progressEvents: Array<{ text: string; details?: Record<string, unknown> }> = [];
 		const completions: Array<{ jobId: string; text: string }> = [];

@@ -235,6 +235,7 @@ export class SessionFocusController {
 			this.ctx.updatePendingMessagesDisplay();
 			this.ctx.updateEditorBorderColor();
 			this.ctx.ui.requestRender();
+			this.ctx.refreshBackgroundJobs();
 			return true;
 		} catch (error) {
 			if (generation === this.#attachGeneration) {

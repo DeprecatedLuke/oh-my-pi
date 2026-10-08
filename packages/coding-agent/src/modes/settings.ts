@@ -551,7 +551,7 @@ export const cfgTuiMouse = register({
 		label: "Mouse Click-to-Focus",
 		get description() {
 			const shift = formatKeyHint("shift");
-			return `Capture mouse clicks in the main session so live subagent cards and HUD rows focus on click, with a hover highlight on the target. Native text selection becomes ${shift}+drag and wheel scroll becomes ${shift}+wheel while on`;
+			return `Capture mouse clicks in the main session so live subagent cards and Background Jobs task rows focus on click, with a hover highlight on the target. Native text selection becomes ${shift}+drag and wheel scroll becomes ${shift}+wheel while on`;
 		},
 	},
 });
@@ -587,37 +587,6 @@ export const cfgDisplayShimmer = register({
 });
 effect(cfgDisplayShimmer, setShimmerMode);
 
-export const cfgDisplayPinnedAgents = register({
-	id: "display.pinnedAgents",
-	type: "enum",
-	values: ["off", "collapsed", "full"] as const,
-	default: "collapsed",
-	ui: {
-		tab: "appearance",
-		group: "Display",
-		label: "Pinned Agents",
-		description:
-			"Pinned live-agent jump list above the editor (off hides it; collapsed shows a few rows with an expander; full lists all)",
-		options: [
-			{ value: "off", label: "Off", description: "Hide the pinned jump list" },
-			{ value: "collapsed", label: "Collapsed", description: "Show a few rows with an expander" },
-			{ value: "full", label: "Full", description: "Always list every live agent" },
-		],
-	},
-});
-
-export const cfgDisplaySubagentLivePreview = register({
-	id: "display.subagentLivePreview",
-	type: "boolean",
-	default: false,
-	ui: {
-		tab: "appearance",
-		group: "Display",
-		label: "Subagent Live Preview",
-		description: "Show each pinned subagent's current (or most recent) tool call beneath its row",
-	},
-});
-
 export const cfgDisplaySmoothStreaming = register({
 	id: "display.smoothStreaming",
 	type: "boolean",
@@ -627,6 +596,18 @@ export const cfgDisplaySmoothStreaming = register({
 		group: "Display",
 		label: "Smooth Streaming",
 		description: "Reveal assistant text and streamed tool input smoothly while chunks arrive",
+	},
+});
+
+export const cfgDisplayBackgroundJobs = register({
+	id: "display.backgroundJobs",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Background Jobs Panel",
+		description: "Show live subagents and background shell/eval jobs in a panel above the editor",
 	},
 });
 

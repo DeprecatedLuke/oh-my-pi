@@ -285,6 +285,7 @@ export class AsyncJobManager {
 	#deliveryLoop: Promise<void> | undefined;
 	#deliveryQueueChanged = Promise.withResolvers<void>();
 	#disposed = false;
+	readonly #changeListeners = new Set<() => void>();
 
 	#filterJobs(jobs: Iterable<AsyncJob>, filter?: AsyncJobFilter): AsyncJob[] {
 		if (!filter) return Array.from(jobs);
@@ -432,10 +433,36 @@ export class AsyncJobManager {
 			}
 			if (this.#releasedForegroundJobs.has(id)) this.#discardForegroundJob(id);
 			else this.#scheduleEviction(id);
+			this.#emitChange();
 		})();
 
 		this.#jobs.set(id, job);
+		this.#emitChange();
 		return id;
+	}
+
+	/**
+	 * Subscribe to job-set changes: a job registers, or settles (completed,
+	 * failed, cancelled). Fires whether or not the job reports progress, so UI
+	 * surfaces can follow jobs started outside a turn. Returns an unsubscribe.
+	 */
+	onChange(cb: () => void): () => void {
+		this.#changeListeners.add(cb);
+		return () => {
+			this.#changeListeners.delete(cb);
+		};
+	}
+
+	#emitChange(): void {
+		for (const cb of this.#changeListeners) {
+			try {
+				cb();
+			} catch (error) {
+				logger.warn("Async job change listener failed", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
 	}
 
 	/**
@@ -450,6 +477,7 @@ export class AsyncJobManager {
 		if (job.status !== "running") return false;
 		job.status = "cancelled";
 		job.abortController.abort();
+		this.#emitChange();
 		return true;
 	}
 
