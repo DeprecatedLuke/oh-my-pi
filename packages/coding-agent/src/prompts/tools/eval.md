@@ -10,7 +10,7 @@ On error, retry only the failed step; earlier steps may have taken effect.
 display(value)  print(value, ...)  log(message)  phase(title)
 read(path, offset?, limit?)  write(path, content)  env(key?, value?)  output(*ids, format?, query?, offset?, limit?)
 {{#if js}}await {{/if}}tool.<name>(args) — session tool; `args` is its parameter object
-wait(handles, timeout?=None, raise_errors?=True) — agent/completion barrier, ordered results{{#if js}}; JS: wait(handles, { timeout, raiseErrors }){{/if}}; `raise_errors=False` retains failures.
+wait(handles, timeout?=None, raise_errors?=True) — barrier for `agent()`/`completion()` handles this kernel created, ordered results{{#if js}}; JS: wait(handles, { timeout, raiseErrors }){{/if}}; `raise_errors=False` retains failures. NEVER for `task` subagents or background jobs.
 ```
 </prelude>
 
@@ -32,6 +32,7 @@ More globals; `read` the linked docs before first use:
 
 <critical>
 NEVER repeat successful setup. Kernel-loss notice means reload setup.
+NEVER wait on `task`/background-job results in a cell (sleep loops, repeated `agent://`/`proc://` reads): they auto-deliver as a follow-up turn; end the turn instead.
 </critical>
 
 {{#if autoBackgroundEnabled}}Long cells may auto-background and deliver later; the kernel stays busy. `timeout: 0` disables the cell deadline, not the foreground wait.{{/if}}

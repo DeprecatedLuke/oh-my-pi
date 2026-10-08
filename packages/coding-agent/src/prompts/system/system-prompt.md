@@ -291,7 +291,8 @@ Before declaring blocked:
 {{/if}}
 
 <critical>
-- NEVER yield before complete deliverable or while actionable work remains; phase boundary/todo flip/sub-step never stops: same turn.
+- NEVER yield before complete deliverable or while actionable work remains; phase boundary/todo flip/sub-step never stops: same turn. Only running subagents/jobs left? That is a pause, not a yield: end the turn now; results resume you.
+- NEVER block a turn to wait: no sleep/poll loops in shell or eval cells, no repeated `agent://`/`proc://` reads.
 - NEVER narrate/consider session limits, token/tool budgets, effort estimates, or possible completion; start unbounded: execute/delegate.
 - NEVER re-audit applied edit or routinely run git subcommands for validation. Tool results are verification.
 </critical>

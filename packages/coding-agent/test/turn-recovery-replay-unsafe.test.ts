@@ -1299,20 +1299,67 @@ describe("TurnRecovery unexpected stop async-wake gate", () => {
 		return message;
 	}
 
-	function smartHost(pendingAsyncWake: boolean, message: AssistantMessage) {
+	// Signed thinking-only stop: `isUnexpectedStopCandidate` requires a
+	// non-whitespace signature, otherwise the turn falls to the empty-stop path.
+	function thinkingOnlyStopTurn(): AssistantMessage {
+		const message = makeMessage(
+			[
+				{
+					type: "thinking",
+					thinking: "Soak test still running; I will report when it finishes.",
+					thinkingSignature: "sig",
+				},
+			],
+			model,
+		);
+		message.stopReason = "stop";
+		return message;
+	}
+
+	function emptyStopTurn(): AssistantMessage {
+		const message = makeMessage([], model);
+		message.stopReason = "stop";
+		return message;
+	}
+
+	function smartHost(
+		pendingAsyncWake: boolean,
+		message: AssistantMessage,
+		options: { unexpectedStopDetection?: "none" | "mechanical" | "smart" } = {},
+	) {
 		const messages: AgentMessage[] = [message];
 		const continues: string[] = [];
+		const discarded: string[] = [];
 		const host = createHost(model, modelRegistry, {
 			messages,
 			hasPendingAsyncWake: () => pendingAsyncWake,
-			unexpectedStopDetection: "smart",
+			unexpectedStopDetection: options.unexpectedStopDetection ?? "smart",
 		});
 		host.agent = {
 			state: { messages },
 			appendMessage: (appended: AgentMessage) => messages.push(appended),
+			// In-place so the test's `messages` reference stays live after a drop.
+			replaceMessages: (next: AgentMessage[]) => {
+				messages.splice(0, messages.length, ...next);
+			},
 		} as never;
 		host.scheduleAgentContinue = options => continues.push(options.source);
-		return { host, messages, continues };
+		// The durable-drop paths reparent the branch past the assistant entry and
+		// discard it; mirror that with a two-entry branch view and record drops.
+		const branchView = [
+			{ id: "entry-root", parentId: null, type: "custom_message" },
+			{ id: "entry-assistant", parentId: "entry-root", type: "message", message },
+		];
+		host.sessionManager = {
+			...host.sessionManager,
+			getBranchView: () => branchView,
+			branch: () => {},
+			resetLeaf: () => {},
+			discardEntryDurably: async (entryId: string) => {
+				discarded.push(entryId);
+			},
+		} as never;
+		return { host, messages, continues, discarded };
 	}
 
 	it("treats a text deferral as a pause while an async wake is pending", async () => {
@@ -1338,5 +1385,49 @@ describe("TurnRecovery unexpected stop async-wake gate", () => {
 		expect(messages).toHaveLength(2);
 		expect(messages[1]?.role).toBe("developer");
 		expect(continues).toEqual(["unexpected-stop-retry"]);
+	});
+
+	it("pauses a thinking-only stop while an async wake is pending", async () => {
+		const message = thinkingOnlyStopTurn();
+		const { host, messages, continues } = smartHost(true, message, { unexpectedStopDetection: "mechanical" });
+		const recovery = new TurnRecovery(host);
+
+		expect(await recovery.handleUnexpectedAssistantStop(message)).toBe(false);
+		expect(messages).toEqual([message]);
+		expect(continues).toEqual([]);
+	});
+
+	it("still retries a thinking-only stop when no async wake is pending", async () => {
+		const message = thinkingOnlyStopTurn();
+		const { host, messages, continues } = smartHost(false, message, { unexpectedStopDetection: "mechanical" });
+		const recovery = new TurnRecovery(host);
+
+		expect(await recovery.handleUnexpectedAssistantStop(message)).toBe(true);
+		expect(messages).toHaveLength(2);
+		expect(messages[1]?.role).toBe("developer");
+		expect(continues).toEqual(["unexpected-stop-retry"]);
+	});
+
+	it("drops an empty stop turn durably while an async wake is pending", async () => {
+		const message = emptyStopTurn();
+		const { host, messages, continues, discarded } = smartHost(true, message);
+		const recovery = new TurnRecovery(host);
+
+		expect(await recovery.handleEmptyAssistantStop(message)).toBeUndefined();
+		expect(messages).toEqual([]);
+		expect(continues).toEqual([]);
+		expect(discarded).toEqual(["entry-assistant"]);
+	});
+
+	it("still retries an empty stop when no async wake is pending", async () => {
+		const message = emptyStopTurn();
+		const { host, messages, continues, discarded } = smartHost(false, message);
+		const recovery = new TurnRecovery(host);
+
+		expect(await recovery.handleEmptyAssistantStop(message)).toBe("continue");
+		expect(messages).toHaveLength(1);
+		expect(messages[0]?.role).toBe("developer");
+		expect(continues).toEqual(["empty-stop-retry"]);
+		expect(discarded).toEqual(["entry-assistant"]);
 	});
 });

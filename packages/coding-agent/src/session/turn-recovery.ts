@@ -964,6 +964,16 @@ export class TurnRecovery {
 			return undefined;
 		}
 
+		// Ending the turn with no output is the instructed pause while owned
+		// background work runs; its result re-wakes the loop. Drop the empty turn
+		// instead of retrying, which would demand a tool call and drive the agent
+		// into poll loops. Provider empty-output errors still retry.
+		if (!providerEmptyOutput && this.#host.hasPendingAsyncWake()) {
+			this.#emptyStopRetryCount = 0;
+			await this.#dropAssistantTurnDurably(assistantMessage);
+			return undefined;
+		}
+
 		this.#emptyStopRetryCount++;
 		if (this.#emptyStopRetryCount > EMPTY_STOP_MAX_RETRIES) {
 			const attempts = this.#emptyStopRetryCount - 1;
@@ -1045,15 +1055,24 @@ export class TurnRecovery {
 			return false;
 		}
 
+		// A pending background job re-wakes the loop with its result. Ending the
+		// turn — with a deferral, thinking only, or nothing at all — is then the
+		// instructed pause, not an unexpected stop; a retry here demands a tool
+		// call and pushes the agent into poll loops.
+		if (this.#host.hasPendingAsyncWake()) {
+			this.#unexpectedStopRetryCount = 0;
+			return false;
+		}
 		let text = assistantMessage.content
 			.filter((content): content is TextContent => content.type === "text")
 			.map(content => content.text)
 			.join("\n");
 		const hasTextContent = hasNonWhitespace(text);
 
-		// A thinking-only terminal turn has no visible assistant message, so both
-		// mechanical and smart modes retry it directly. Tool-call turns never reach
-		// this path: isUnexpectedStopCandidate excludes them, including forced tools.
+		// A thinking-only terminal turn with no pending wake has no visible
+		// assistant message, so both mechanical and smart modes retry it directly.
+		// Tool-call turns never reach this path: isUnexpectedStopCandidate excludes
+		// them, including forced tools.
 		if (!hasTextContent) {
 			text = assistantMessage.content
 				.filter((content): content is ThinkingContent => content.type === "thinking")
@@ -1063,10 +1082,7 @@ export class TurnRecovery {
 				this.#unexpectedStopRetryCount = 0;
 				return false;
 			}
-		} else if (mode === "mechanical" || this.#host.hasPendingAsyncWake()) {
-			// A pending background job re-wakes the loop with its result, so a turn
-			// that defers delivery to it ("results when the job finishes") is a
-			// legitimate pause, not an unexpected stop.
+		} else if (mode === "mechanical") {
 			this.#unexpectedStopRetryCount = 0;
 			return false;
 		} else {

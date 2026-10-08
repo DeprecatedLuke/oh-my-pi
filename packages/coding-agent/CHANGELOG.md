@@ -5,9 +5,10 @@
 ### Fixed
 
 - Fixed reviewer subagents not seeing already-filed project issues in their system prompt, which let them re-file settled or duplicate findings.
+- Fixed agents polling running subagents or background jobs (sleep loops in eval or shell, repeated `agent://`/`proc://` reads) instead of ending the turn: the system prompt's closing rules no longer forbid ending a turn that is only waiting on auto-delivered results, and an empty or thinking-only turn while background work runs is no longer treated as a stop that needs a retry.
 - Fixed subagents stalling while "waiting on" a background job: idle subagents are no longer shut down while their background jobs are still running, so the job result wakes them.
 - Fixed a subagent revived by a message never reporting back when it waited on a background job: its final result after the job finished was dropped, so the parent agent stopped instead of continuing.
-- Fixed the agent ending its turn after promising a result "when the window ends" (or once some external process finishes) with nothing to wake it; smart unexpected-stop detection now catches these deferrals and prompts the agent to block on the wait, while deferrals backed by a running background job are left alone.
+- Fixed the agent ending its turn after promising a result "when the window ends" (or once some external process finishes) with nothing to wake it; smart unexpected-stop detection now catches these deferrals and prompts the agent to start a background job that wakes it, while deferrals backed by a running background job are left alone.
 - Restored the anchored Background Jobs panel after detached subagent observer updates, replacing the duplicated Subagents tree and repeated task labels with compact live job rows.
 - Fixed automatic refusal recovery no longer observing completed refusal turns, and restored automatic refusal transcript/request snapshots for later analysis.
 - Restored native `knowledge://`, `issues://`, and `patch://` routing, project knowledge summaries in the system prompt, and reviewer issue filing with duplicate awareness.
