@@ -449,7 +449,8 @@ fn is_elidable_kind(language: SupportLang, kind: &str) -> bool {
 			kind,
 			"block"
 				| "dictionary"
-				| "list" | "set"
+				| "list"
+				| "set"
 				| "string"
 				| "tuple"
 				| "argument_list"
@@ -539,8 +540,10 @@ fn is_elidable_kind(language: SupportLang, kind: &str) -> bool {
 				| "method"
 				| "do_block"
 				| "array"
-				| "hash" | "block"
-				| "case" | "heredoc_body"
+				| "hash"
+				| "block"
+				| "case"
+				| "heredoc_body"
 		),
 		SupportLang::Php => matches!(
 			kind,
@@ -628,9 +631,12 @@ fn is_elidable_kind(language: SupportLang, kind: &str) -> bool {
 				| "class"
 				| "instance"
 				| "function"
-				| "do" | "case"
-				| "let" | "local_binds"
-				| "list" | "tuple"
+				| "do"
+				| "case"
+				| "let"
+				| "local_binds"
+				| "list"
+				| "tuple"
 		),
 		SupportLang::Ocaml => matches!(
 			kind,
@@ -652,7 +658,8 @@ fn is_elidable_kind(language: SupportLang, kind: &str) -> bool {
 				| "if_expr"
 				| "receive_expr"
 				| "record_decl"
-				| "list" | "map_expr"
+				| "list"
+				| "map_expr"
 				| "tuple"
 		),
 		SupportLang::EmacsLisp => matches!(
@@ -660,7 +667,8 @@ fn is_elidable_kind(language: SupportLang, kind: &str) -> bool {
 			"function_definition"
 				| "macro_definition"
 				| "special_form"
-				| "list" | "vector"
+				| "list"
+				| "vector"
 				| "hash_table"
 				| "bytecode"
 				| "string_text_properties"

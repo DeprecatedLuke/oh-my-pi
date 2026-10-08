@@ -315,7 +315,7 @@ export class TurnRecovery {
 		targetSelector: string;
 		handle: AnthropicFallbackCreditHandle;
 	};
-	#usageReserveApprovedSelector: string | undefined;
+	#usageReserveApproval: { model: string; sessionId: string } | undefined;
 	#pendingRetryErrors: PendingRetryError[] = [];
 	#usageLimitOutcomes = new WeakMap<AssistantMessage, Promise<UsageLimitOutcome>>();
 	#emptyStopRetryCount = 0;
@@ -857,16 +857,14 @@ export class TurnRecovery {
 		await this.persistTerminalEmptyErrorTurn(message);
 		const persistenceKey = sessionMessagePersistenceKey(message);
 		if (!persistenceKey) return;
-		let branchEntry: SessionEntry | undefined;
-		for (const entry of this.#host.sessionManager.getBranch().slice().reverse()) {
-			if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-			if (sessionMessagePersistenceKey(entry.message) !== persistenceKey) continue;
-			if (!sameMessageContent(entry.message, message) && !this.#isSameAssistantMessage(entry.message, message)) {
-				continue;
-			}
-			branchEntry = entry;
-			break;
-		}
+		const branch = this.#host.sessionManager.getBranchView();
+		const branchEntry = branch.findLast(
+			entry =>
+				entry.type === "message" &&
+				entry.message.role === "assistant" &&
+				sessionMessagePersistenceKey(entry.message) === persistenceKey &&
+				(sameMessageContent(entry.message, message) || this.#isSameAssistantMessage(entry.message, message)),
+		);
 		if (!branchEntry) return;
 		if (this.#pendingRetryErrors.some(error => error.entryId === branchEntry.id)) return;
 		const rateLimited = AIError.is(id, AIError.Flag.UsageLimit);
@@ -885,7 +883,7 @@ export class TurnRecovery {
 		completion: { status: "recovered"; supersedingMessage: AssistantMessage } | { status: "superseded" },
 	): Promise<RetryErrorUpdate[]> {
 		if (this.#pendingRetryErrors.length === 0) return [];
-		const branch = this.#host.sessionManager.getBranch();
+		const branch = this.#host.sessionManager.getBranchView();
 		const branchById = new Map<string, SessionEntry>();
 		for (const entry of branch) {
 			branchById.set(entry.id, entry);
@@ -894,15 +892,12 @@ export class TurnRecovery {
 		for (const pending of this.#pendingRetryErrors) {
 			let entry = branchById.get(pending.entryId);
 			if (entry?.type !== "message" || entry.message.role !== "assistant") {
-				entry = branch
-					.slice()
-					.reverse()
-					.find(
-						candidate =>
-							candidate.type === "message" &&
-							candidate.message.role === "assistant" &&
-							sessionMessagePersistenceKey(candidate.message) === pending.persistenceKey,
-					);
+				entry = branch.findLast(
+					candidate =>
+						candidate.type === "message" &&
+						candidate.message.role === "assistant" &&
+						sessionMessagePersistenceKey(candidate.message) === pending.persistenceKey,
+				);
 			}
 			if (entry?.type !== "message" || entry.message.role !== "assistant") continue;
 			let retryRecovery: AssistantRetryRecovery;
@@ -1248,20 +1243,17 @@ export class TurnRecovery {
 	}
 
 	#discardAcceptedTerminalEmptyStop(assistantMessage: AssistantMessage): void {
-		const branch = this.#host.sessionManager.getBranch();
-		const branchEntry = branch
-			.slice()
-			.reverse()
-			.find(
-				entry =>
-					entry.type === "message" &&
-					entry.message.role === "assistant" &&
-					this.#isSameAssistantMessage(entry.message, assistantMessage),
-			);
+		const branch = this.#host.sessionManager.getBranchView();
+		const branchIndex = branch.findLastIndex(
+			entry =>
+				entry.type === "message" &&
+				entry.message.role === "assistant" &&
+				this.#isSameAssistantMessage(entry.message, assistantMessage),
+		);
+		const branchEntry = branchIndex >= 0 ? branch[branchIndex] : undefined;
+		// A branch entry's parent is the entry before it on the branch.
 		const parentEntry =
-			branchEntry?.parentId === null || branchEntry?.parentId === undefined
-				? undefined
-				: branch.find(entry => entry.id === branchEntry.parentId);
+			branchEntry?.parentId === null || branchEntry?.parentId === undefined ? undefined : branch[branchIndex - 1];
 		const prunePrompt = parentEntry?.type === "custom_message";
 
 		this.removeAssistantMessageFromActiveContext(assistantMessage, "accepted-terminal-empty-stop");
@@ -1291,7 +1283,7 @@ export class TurnRecovery {
 	discardAssistantTurn(assistantMessage: AssistantMessage): string | undefined {
 		this.removeAssistantMessageFromActiveContext(assistantMessage);
 
-		const branch = this.#host.sessionManager.getBranch();
+		const branch = this.#host.sessionManager.getBranchView();
 		const persistedEntryId = this.#host.persistedAssistantEntryId(assistantMessage);
 		const branchEntry =
 			(persistedEntryId === undefined
@@ -1300,15 +1292,12 @@ export class TurnRecovery {
 						entry =>
 							entry.id === persistedEntryId && entry.type === "message" && entry.message.role === "assistant",
 					)) ??
-			branch
-				.slice()
-				.reverse()
-				.find(
-					entry =>
-						entry.type === "message" &&
-						entry.message.role === "assistant" &&
-						this.#isSameAssistantMessage(entry.message as AssistantMessage, assistantMessage),
-				);
+			branch.findLast(
+				entry =>
+					entry.type === "message" &&
+					entry.message.role === "assistant" &&
+					this.#isSameAssistantMessage(entry.message as AssistantMessage, assistantMessage),
+			);
 		if (!branchEntry) {
 			return undefined;
 		}
@@ -1856,6 +1845,7 @@ export class TurnRecovery {
 		if (!cfgRetryUsageAwareFallback.get(this.#host.settings)) return false;
 		const currentModel = this.#host.model();
 		if (!currentModel) return false;
+		const sessionId = this.#host.sessionManager.getSessionId();
 		const currentSelector = formatRetryFallbackSelector(currentModel, this.#host.thinkingLevel());
 		let health: ModelUsageHealth;
 		try {
@@ -1878,7 +1868,8 @@ export class TurnRecovery {
 		if (signal.aborted || !modelsAreEqual(this.#host.model(), currentModel)) return false;
 		const selectedAccount = health.accounts.find(account => account.selected);
 		if (health.state === "healthy") {
-			this.#usageReserveApprovedSelector = undefined;
+			// A healthy sibling does not end the selected account's reserve episode.
+			if (selectedAccount?.state === "healthy") this.#usageReserveApproval = undefined;
 			if (
 				selectedAccount &&
 				selectedAccount.state !== "healthy" &&
@@ -1888,11 +1879,9 @@ export class TurnRecovery {
 			}
 			return false;
 		}
-		if (health.state === "unknown") {
-			this.#usageReserveApprovedSelector = undefined;
-			return false;
-		}
-		if (health.state !== "reserve") this.#usageReserveApprovedSelector = undefined;
+		// Missing quota data is not evidence that the reserve episode ended.
+		if (health.state === "unknown") return false;
+		if (health.state !== "reserve") this.#usageReserveApproval = undefined;
 
 		const reservePolicy = cfgRetryUsageReservePolicy.get(this.#host.settings);
 		if (reservePolicy === "fail-closed") {
@@ -1904,7 +1893,8 @@ export class TurnRecovery {
 		if (
 			reservePolicy === "confirm" &&
 			health.state === "reserve" &&
-			this.#usageReserveApprovedSelector === currentSelector
+			this.#usageReserveApproval?.sessionId === sessionId &&
+			this.#usageReserveApproval.model === formatModelStringWithRouting(currentModel)
 		) {
 			return false;
 		}
@@ -1988,13 +1978,19 @@ export class TurnRecovery {
 				},
 				signal,
 			);
-			if (signal.aborted || !modelsAreEqual(this.#host.model(), currentModel)) return false;
+			if (
+				signal.aborted ||
+				this.#host.sessionManager.getSessionId() !== sessionId ||
+				!modelsAreEqual(this.#host.model(), currentModel)
+			)
+				return false;
 		}
 		if (!shouldFallback) {
-			this.#usageReserveApprovedSelector = currentSelector;
+			// Auto thinking changes effort between turns, not the coding-plan quota.
+			this.#usageReserveApproval = { model: formatModelStringWithRouting(currentModel), sessionId };
 			return false;
 		}
-		this.#usageReserveApprovedSelector = undefined;
+		this.#usageReserveApproval = undefined;
 		return this.applyRetryFallbackCandidate(fallback.role, fallback.selector, currentSelector, {
 			pinFallback: true,
 			apiKey: fallback.apiKey,
@@ -3125,7 +3121,7 @@ export class TurnRecovery {
 			}
 		}
 		const anchor = messages[replayStart - 1] as AssistantMessage;
-		const branch = this.#host.sessionManager.getBranch();
+		const branch = this.#host.sessionManager.getBranchView();
 		const persistedEntryId = this.#host.persistedAssistantEntryId(anchor);
 		const anchorEntry =
 			(persistedEntryId === undefined
@@ -3134,15 +3130,12 @@ export class TurnRecovery {
 						entry =>
 							entry.id === persistedEntryId && entry.type === "message" && entry.message.role === "assistant",
 					)) ??
-			branch
-				.slice()
-				.reverse()
-				.find(
-					entry =>
-						entry.type === "message" &&
-						entry.message.role === "assistant" &&
-						this.#isSameAssistantMessage(entry.message as AssistantMessage, anchor),
-				);
+			branch.findLast(
+				entry =>
+					entry.type === "message" &&
+					entry.message.role === "assistant" &&
+					this.#isSameAssistantMessage(entry.message as AssistantMessage, anchor),
+			);
 		if (anchorEntry) {
 			this.#host.withBashBranchTransition(() => {
 				this.#host.sessionManager.branch(anchorEntry.id);
