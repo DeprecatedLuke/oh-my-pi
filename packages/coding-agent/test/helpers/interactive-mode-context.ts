@@ -125,6 +125,7 @@ export function createSessionStub(
 		getEvalPreludes: () => [],
 		getEnabledToolNames: () => [],
 		getContextUsage: () => undefined,
+		getAsyncJobSnapshot: () => null,
 		getGoalModeState: () => undefined,
 		refreshMCPTools: vi.fn(async () => {}),
 		setMCPPromptCommands: vi.fn(),
@@ -296,6 +297,8 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 		ensureLoadingAnimation: vi.fn(),
 		setWorkingMessage: vi.fn(),
 		syncRetryHintRow: vi.fn(),
+		// Background Jobs panel: repaints are counted until a test needs more.
+		refreshBackgroundJobs: vi.fn(),
 		clearTransientSessionUi: vi.fn(),
 		prepareSessionSwitch: vi.fn(async () => {}),
 		clearOptimisticUserMessage: vi.fn(),

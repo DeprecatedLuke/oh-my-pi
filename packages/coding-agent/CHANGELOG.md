@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Clicking a Background Jobs panel row for a running task now focuses that subagent's session (with `tui.mouse` on); shell and eval rows have no agent to focus.
+
 ### Fixed
 
 - Fixed reviewer subagents not seeing already-filed project issues in their system prompt, which let them re-file settled or duplicate findings.

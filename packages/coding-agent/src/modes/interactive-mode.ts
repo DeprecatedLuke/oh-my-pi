@@ -28,6 +28,8 @@ import {
 	Container,
 	clearRenderCache,
 	getComposerStyle,
+	getPaddingX,
+	getWidthConfigEpoch,
 	Loader,
 	Markdown,
 	Spacer,
@@ -37,6 +39,7 @@ import {
 	Text,
 	type TUI,
 	visibleWidth,
+	wrapTextWithAnsi,
 } from "@oh-my-pi/pi-tui";
 import type { TerminalAppearanceRequestToken } from "@oh-my-pi/pi-tui/terminal";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
@@ -45,6 +48,7 @@ import { sameItems } from "@oh-my-pi/pi-tui/native/memo";
 import { describeSegmentTrack, renderSegmentTrack, type TrackSegment } from "@oh-my-pi/pi-tui/chrome/segment-track";
 import type { WorkingRowSpec } from "@oh-my-pi/pi-tui/components/loader";
 import { formatDoubleTap } from "@oh-my-pi/pi-tui/key-hint-format";
+import { formatTaskId } from "@oh-my-pi/pi-tui/tools/task";
 import { thinkingLevelWord } from "@oh-my-pi/pi-tui/status-line/segments";
 import type { TspChecklistItem, TspChecklistPhase, TspSpan, TspText, TspTreeNode } from "@oh-my-pi/pi-wire";
 import { isInsideTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-capabilities";
@@ -121,6 +125,7 @@ import { sumSubagentTreeCost } from "./agent-hub-runtime";
 import {
 	type AgentSession,
 	type AgentSessionEvent,
+	type AsyncJobSnapshotItem,
 	type DroppedPrompt,
 	type ResolvedRoleModel,
 	SHUTDOWN_CONSOLIDATE_BUDGET_MS,
@@ -808,6 +813,142 @@ const DEFERRED_PREVIEW_VIEWPORT_FRACTION = 0.4;
  *  before it auto-clears, mirroring the todo HUD's auto-clear timer. */
 const MODEL_CYCLE_TRACK_CLEAR_MS = 4000;
 
+const JOB_TYPE_TAG: Record<AsyncJobSnapshotItem["type"], string> = { task: "[task]", bash: "[shell]", eval: "[eval]" };
+
+/** One row in the anchored Background Jobs panel. */
+export interface BackgroundJobRow {
+	type: AsyncJobSnapshotItem["type"];
+	/** Subagent type for task jobs (e.g. "research"); undefined for other types. */
+	agentType?: string;
+	/** Registry id of the subagent a task job runs: the row's click-to-focus target. */
+	agentId?: string;
+	/** Formatted task id for task jobs; empty for shell/eval jobs (the label is the whole row). */
+	id: string;
+	/** A task's live current action, or a shell/eval job's label. */
+	summary: string;
+	ageMs: number;
+}
+
+/**
+ * Background Jobs panel lines, e.g.
+ *
+ * Background Jobs (2 running, 1 completed):
+ *   [task] SomeTask: summarized current action - 1m23s
+ *   [shell] some long command - 1m23s
+ *
+ * Settled counts cover jobs seen running since the panel last cleared.
+ */
+export function renderBackgroundJobsLines(
+	jobs: readonly BackgroundJobRow[],
+	settled: { completed: number; failed: number; cancelled: number },
+	columns: number,
+): string[] {
+	if (jobs.length === 0) return [];
+	const counts = [`${jobs.length} running`];
+	if (settled.completed > 0) counts.push(`${settled.completed} completed`);
+	if (settled.failed > 0) counts.push(`${settled.failed} failed`);
+	if (settled.cancelled > 0) counts.push(`${settled.cancelled} cancelled`);
+	const lines = ["", theme.bold(theme.fg("accent", `Background Jobs (${counts.join(", ")}):`))];
+	for (const job of jobs) {
+		const tag = job.agentType && job.agentType !== "task" ? `[${job.agentType}]` : JOB_TYPE_TAG[job.type];
+		const age = ` - ${formatDuration(Math.max(0, job.ageMs))}`;
+		const summary = replaceTabs(job.summary).replace(/\s+/g, " ").trim();
+		const showSummary = summary.length > 0 && summary !== job.id;
+		const head = job.id ? `  ${tag} ${job.id}${showSummary ? ": " : ""}` : `  ${tag} `;
+		const budget = Math.max(TRUNCATE_LENGTHS.SHORT, columns - visibleWidth(head) - visibleWidth(age));
+		const text = showSummary ? truncateToWidth(summary, budget) : job.id ? "" : "(no label)";
+		const styledHead = job.id
+			? `  ${theme.fg("dim", tag)} ${theme.fg("accent", theme.bold(job.id))}${showSummary ? ": " : ""}`
+			: `  ${theme.fg("dim", tag)} `;
+		lines.push(`${styledHead}${text}${theme.fg("dim", age)}`);
+	}
+	return lines;
+}
+
+/**
+ * Anchored "Background Jobs" panel: the rows from
+ * {@link renderBackgroundJobsLines} mounted in their own container above the
+ * editor, with a row-to-agent map so click-to-focus can route a task row back
+ * to the subagent it runs. Row 0 is the leading blank and row 1 the title, so
+ * neither names an agent; item rows follow in `order`, where undefined marks
+ * a shell/eval row that has no agent to focus. Long rows wrap inside `Text`
+ * (content is two cells narrower than the terminal), so the map is built on the
+ * first click after rendering at a new width or width configuration:
+ * continuation rows belong to the agent whose logical row started them.
+ */
+export class BackgroundJobsView implements Component {
+	readonly #text: Text;
+	#lines: readonly string[];
+	#order: readonly (string | undefined)[];
+	#physicalOwner?: (string | undefined)[];
+	#renderedWidth?: number;
+	#renderedRows = 0;
+	#renderedWidthConfigEpoch?: number;
+	constructor(lines: readonly string[], order: readonly (string | undefined)[]) {
+		this.#text = new Text(lines.join("\n"), 1, 0);
+		this.#lines = lines;
+		this.#order = order;
+	}
+
+	/** Repaint in place with a new view; the click map rebuilds lazily. */
+	update(lines: readonly string[], order: readonly (string | undefined)[]): void {
+		this.#order = order;
+		this.#text.setText(lines.join("\n"));
+		this.#lines = lines;
+		this.#physicalOwner = undefined;
+	}
+	render(width: number): readonly string[] {
+		const rows = this.#text.render(width);
+		const widthConfigEpoch = getWidthConfigEpoch();
+		if (
+			this.#renderedWidth !== width ||
+			this.#renderedRows !== rows.length ||
+			this.#renderedWidthConfigEpoch !== widthConfigEpoch
+		) {
+			this.#physicalOwner = undefined;
+		}
+		this.#renderedWidth = width;
+		this.#renderedRows = rows.length;
+		this.#renderedWidthConfigEpoch = widthConfigEpoch;
+		return rows;
+	}
+
+	/** Native mode renders the jobs pill and the jobs sheet instead. */
+	describe(): NativeNode {
+		return EMPTY_HUD;
+	}
+	getClickAgentAtRow(row: number): string | undefined {
+		if (row < 0 || row >= this.#renderedRows || this.#renderedWidth === undefined) return undefined;
+		if (!this.#physicalOwner) {
+			if (this.#renderedWidthConfigEpoch !== getWidthConfigEpoch()) return undefined;
+			this.#rebuildHitMap(this.#renderedWidth, this.#renderedRows);
+		}
+		return this.#physicalOwner?.[row];
+	}
+	// Native wrap splits paragraphs independently, so per-line wrapped
+	// heights compose exactly to the rendered row count. A length mismatch
+	// means the wrap contract drifted: fall back to one row per line (the
+	// old mapping) rather than misrouting clicks.
+	#rebuildHitMap(width: number, renderedRows: number): void {
+		const contentWidth = Math.max(1, width - getPaddingX(1) * 2);
+		const owner: (string | undefined)[] = [];
+		for (let index = 0; index < this.#lines.length; index++) {
+			const height = wrapTextWithAnsi(replaceTabs(this.#lines[index]!), contentWidth).length;
+			const orderIndex = index - 2;
+			const id = orderIndex >= 0 && orderIndex < this.#order.length ? this.#order[orderIndex] : undefined;
+			for (let row = 0; row < height; row++) owner.push(id);
+		}
+		if (owner.length !== renderedRows) {
+			this.#physicalOwner = this.#lines.map((_line, index) => {
+				const orderIndex = index - 2;
+				return orderIndex >= 0 && orderIndex < this.#order.length ? this.#order[orderIndex] : undefined;
+			});
+			return;
+		}
+		this.#physicalOwner = owner;
+	}
+}
+
 const AUTO_FIX_REFUSAL_MAX_ROUNDS = 2;
 
 const SUBAGENT_OBSERVER_UI_COALESCE_MS = 100;
@@ -837,7 +978,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Whether {@link statusContainer} rendered lines in the latest frame; the band composer's editor top gap collapses only then. */
 	statusRowOccupied = false;
 	todoContainer: Container;
-	subagentContainer: Container;
+	backgroundJobsContainer: Container;
 	btwContainer: Container;
 	omfgContainer: Container;
 	cleanseContainer: Container;
@@ -1221,9 +1362,84 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#eventController;
 	}
 
-	describeSubagentJob(id: string): string | undefined {
-		const progress = this.#observerRegistry.getSessions().find(session => session.id === id)?.progress;
-		return progress?.lastIntent?.trim() || progress?.description?.trim() || progress?.task?.trim() || undefined;
+	/**
+	 * Repaint the anchored Background Jobs panel from the current job snapshot.
+	 * While jobs run, a 1-second tick keeps their ages live; the panel clears and
+	 * the tick stops once nothing runs. A deferred completion notification rides
+	 * the transition to "nothing running": no background job can wake the session
+	 * any more, so this is the last moment it can be delivered.
+	 */
+	refreshBackgroundJobs(): void {
+		if (!this.#renderBackgroundJobs()) {
+			this.#eventController.flushDeferredCompletion();
+			this.#stopBackgroundJobs();
+			return;
+		}
+		this.#backgroundJobsTimer ??= setInterval(() => {
+			if (!this.#renderBackgroundJobs()) {
+				this.#eventController.flushDeferredCompletion();
+				this.#stopBackgroundJobs();
+			}
+			this.ui.requestRender();
+		}, 1000);
+		this.#backgroundJobsTimer.unref?.();
+	}
+
+	/** Stop the live-age tick, drop the settled tally and clear the panel container. */
+	#stopBackgroundJobs(): void {
+		clearInterval(this.#backgroundJobsTimer);
+		this.#backgroundJobsTimer = undefined;
+		this.#backgroundJobsSettled.clear();
+		this.backgroundJobsContainer.clear();
+	}
+
+	/**
+	 * Repaint the panel; false once no job runs and no delivery is pending.
+	 * Hiding while a subagent is focused keeps its own working row authoritative,
+	 * but the tick stays armed so returning to the main view restores the panel.
+	 */
+	#renderBackgroundJobs(): boolean {
+		const snapshot = this.viewSession.getAsyncJobSnapshot();
+		const running = snapshot?.running ?? [];
+		for (const job of running) this.#backgroundJobsSettled.set(job.id, undefined);
+		for (const job of snapshot?.recent ?? []) {
+			if (this.#backgroundJobsSettled.get(job.id) !== undefined || !this.#backgroundJobsSettled.has(job.id))
+				continue;
+			if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
+				this.#backgroundJobsSettled.set(job.id, job.status);
+			}
+		}
+		const delivery = snapshot?.delivery;
+		const pendingDelivery = delivery ? delivery.queued > 0 || delivery.delivering : false;
+		if (running.length === 0 || this.focusedAgentId) {
+			this.backgroundJobsContainer.clear();
+			return this.focusedAgentId !== undefined ? true : pendingDelivery;
+		}
+		const settled = { completed: 0, failed: 0, cancelled: 0 };
+		for (const status of this.#backgroundJobsSettled.values()) if (status) settled[status] += 1;
+		const sessions = this.#observerRegistry.getSessions();
+		const now = Date.now();
+		const rows = running.map((job): BackgroundJobRow => {
+			if (job.type !== "task") return { type: job.type, id: "", summary: job.label, ageMs: now - job.startTime };
+			const agentId = job.agentId ?? job.id;
+			const session = sessions.find(candidate => candidate.id === agentId);
+			const progress = session?.progress;
+			const summary = progress?.lastIntent?.trim() || progress?.description?.trim() || progress?.task?.trim();
+			return {
+				type: job.type,
+				agentType: session?.agent,
+				agentId,
+				id: formatTaskId(agentId),
+				summary: summary || job.label,
+				ageMs: now - job.startTime,
+			};
+		});
+		const lines = renderBackgroundJobsLines(rows, settled, this.ui.terminal.columns);
+		const order = rows.map(row => row.agentId);
+		const view = this.backgroundJobsContainer.children[0];
+		if (view instanceof BackgroundJobsView) view.update(lines, order);
+		else this.backgroundJobsContainer.addChild(new BackgroundJobsView(lines, order));
+		return true;
 	}
 	get eventBus(): EventBus | undefined {
 		return this.#eventBus;
@@ -1327,6 +1543,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	#mouseCapture = false;
 	#observerUiSyncTimer?: NodeJS.Timeout;
 	#observerUiSyncNeedsTodoReconcile = false;
+	/** Live-age tick for the Background Jobs panel; armed only while jobs run. */
+	#backgroundJobsTimer?: NodeJS.Timeout;
+	/** Jobs seen running since the panel last cleared, with their terminal status once settled. */
+	#backgroundJobsSettled = new Map<string, "completed" | "failed" | "cancelled" | undefined>();
 	/** Active subagent descriptions the todo HUD last rendered with (joined); see #flushObserverUiSync. */
 	#todoHudSubagentKey: string | undefined;
 	#runningSubagentCount = 0;
@@ -1455,7 +1675,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#eventBusUnsubscribers.push(onDownloadActivity(activity => this.#downloadActivityHud.update(activity)));
 		this.statusContainer = new StatusHudContainer(this);
 		this.todoContainer = new TodoHudContainer(this);
-		this.subagentContainer = new AnchoredLiveContainer();
+		this.backgroundJobsContainer = new AnchoredLiveContainer();
 		this.btwContainer = new AnchoredLiveContainer();
 		this.omfgContainer = new AnchoredLiveContainer();
 		this.cleanseContainer = new AnchoredLiveContainer();
@@ -1764,7 +1984,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.chatContainer,
 				this.pendingMessagesContainer,
 				this.todoContainer,
-				this.subagentContainer,
+				this.backgroundJobsContainer,
 				this.btwContainer,
 				this.reportContainer,
 				this.omfgContainer,
@@ -1866,7 +2086,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (jobManager) {
 			this.#eventBusUnsubscribers.push(
 				jobManager.onChange(() => {
-					this.#eventController.refreshBackgroundJobs();
+					this.refreshBackgroundJobs();
 					this.ui.requestRender();
 				}),
 			);
@@ -3816,7 +4036,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			// descriptions change.
 			this.#renderTodoList();
 		}
-		this.#eventController.refreshBackgroundJobs();
+		this.refreshBackgroundJobs();
 		this.ui.requestRender();
 	}
 
@@ -3826,6 +4046,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#observerUiSyncTimer = undefined;
 		}
 		this.#observerUiSyncNeedsTodoReconcile = false;
+		this.#stopBackgroundJobs();
 	}
 
 	#renderTodoList(): void {

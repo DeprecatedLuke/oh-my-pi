@@ -92,6 +92,7 @@ function makeContext(manager: AsyncJobManager): {
 		clearPinnedError: vi.fn(),
 		ensureLoadingAnimation: vi.fn(),
 		syncRetryHintRow: vi.fn(),
+		refreshBackgroundJobs: vi.fn(),
 		session,
 		get viewSession() {
 			return session;
@@ -163,6 +164,9 @@ describe("EventController completion notification and nested-owner async jobs", 
 				await controller.handleEvent(makeAgentEndEvent());
 				expect(notify).not.toHaveBeenCalled();
 				expect(formatted).toEqual([]);
+				// agent_end repaints the Background Jobs panel through the mode-owned
+				// refresh while deferring the completion notification.
+				expect(ctx.refreshBackgroundJobs).toHaveBeenCalled();
 				expect(manager.getRunningJobs({ ownerId: NESTED_OWNER_ID }).map(job => job.id)).toEqual([nestedJobId]);
 
 				// Cancellation settles the nested owner without producing a follow-up delivery.
@@ -170,10 +174,10 @@ describe("EventController completion notification and nested-owner async jobs", 
 				nestedGate.resolve("cancelled");
 				await manager.waitForAll();
 
-				// The existing refresh path sees global quiescence, flushes the retained
-				// completion event, and must not emit it again on a later refresh.
-				controller.refreshBackgroundJobs();
-				controller.refreshBackgroundJobs();
+				// Stopping the panel flushes the retained completion event once; a
+				// second flush must not emit it again.
+				controller.flushDeferredCompletion();
+				controller.flushDeferredCompletion();
 				expect(notify).toHaveBeenCalledTimes(1);
 				expect(formatted).toHaveLength(1);
 				if (protocol === NotifyProtocol.Bell) {

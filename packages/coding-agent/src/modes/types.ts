@@ -124,7 +124,7 @@ export interface InteractiveModeContext {
 	readonly statusRowOccupied: boolean;
 	todoContainer: Container;
 	/** Anchored panel above the editor listing the main session's background jobs. */
-	subagentContainer: Container;
+	backgroundJobsContainer: Container;
 	btwContainer: Container;
 	omfgContainer: Container;
 	cleanseContainer: Container;
@@ -163,12 +163,8 @@ export interface InteractiveModeContext {
 	setClickHoverId(id: string | undefined): void;
 	/** Clear loader, transient HUD/pending containers, streaming state, and pending tools. */
 	clearTransientSessionUi(): void;
-	/**
-	 * Live one-line summary of a detached subagent's current action (latest
-	 * intent, else spawn description, else assignment), for the background-jobs
-	 * panel. Undefined when no such subagent is tracked.
-	 */
-	describeSubagentJob(id: string): string | undefined;
+	/** Repaint the anchored Background Jobs panel from the current job snapshot. */
+	refreshBackgroundJobs(): void;
 	settings: Settings;
 	keybindings: KeybindingsManager;
 	agent: AgentSession["agent"];

@@ -755,10 +755,10 @@ export class InputController {
 
 	/**
 	 * Inline click-to-focus (`tui.mouse`): left-clicks on live subagent cards
-	 * and HUD rows focus that agent in one action, and pointer motion lights up
-	 * the hover band on the target under the cursor. Every SGR report is consumed
-	 * while inline tracking owns the terminal so button/wheel bytes never reach
-	 * the editor as typed input; clicks on chrome simply swallow.
+	 * and Background Jobs task rows focus that agent in one action, and pointer
+	 * motion lights up the hover band on the target under the cursor. Every SGR
+	 * report is consumed while inline tracking owns the terminal so button/wheel
+	 * bytes never reach the editor as typed input; clicks on chrome simply swallow.
 	 */
 	#handleInlineMouse(data: string): { consume?: boolean; data?: string } | undefined {
 		if (!data.startsWith("\x1b[<")) return undefined;

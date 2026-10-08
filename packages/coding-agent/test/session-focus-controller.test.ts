@@ -94,6 +94,7 @@ function makeHarness(options: { renderInitialMessages?: () => void | Promise<voi
 		unsubscribe: () => {
 			mainUnsubscribe++;
 		},
+		refreshBackgroundJobs: () => {},
 		eventController: {
 			handleEvent: async (event: unknown) => {
 				handledEvents.push(event);
@@ -102,8 +103,6 @@ function makeHarness(options: { renderInitialMessages?: () => void | Promise<voi
 				resetTranscriptAnchors++;
 			},
 			restorePendingToolResults() {},
-			// #attach refreshes the main-session Background Jobs panel on focus change.
-			refreshBackgroundJobs: () => {},
 		},
 		statusLine: {
 			setSession: (session: AgentSession, focusedAgentId?: string) => {

@@ -235,8 +235,8 @@ export class SessionFocusController {
 			this.ctx.updatePendingMessagesDisplay();
 			this.ctx.updateEditorBorderColor();
 			this.ctx.ui.requestRender();
-			// Restore the process-global background-jobs HUD after switching the view.
-			this.ctx.eventController.refreshBackgroundJobs();
+			// Restore the process-global Background Jobs panel after switching the view.
+			this.ctx.refreshBackgroundJobs();
 			return true;
 		} catch (error) {
 			if (generation === this.#attachGeneration) {

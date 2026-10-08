@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -7,11 +7,11 @@ import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
-import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
@@ -21,6 +21,8 @@ import { cfgTuiMouse } from "@oh-my-pi/pi-coding-agent/modes/settings";
 function plainRows(rows: readonly string[]): string[] {
 	return rows.map(row => Bun.stripANSI(row).trimEnd());
 }
+
+const PANEL_AGENT_ID = "PanelClickAgent";
 
 describe("inline click-to-focus geometry", () => {
 	let tempDir: TempDir;
@@ -36,6 +38,7 @@ describe("inline click-to-focus geometry", () => {
 
 	beforeEach(async () => {
 		resetSettingsForTest();
+		AgentRegistry.resetGlobalForTests();
 		tempDir = TempDir.createSync("@pi-click-focus-e2e-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
@@ -58,6 +61,7 @@ describe("inline click-to-focus geometry", () => {
 		await session?.dispose();
 		authStorage?.close();
 		tempDir?.removeSync();
+		AgentRegistry.resetGlobalForTests();
 		resetSettingsForTest();
 	});
 
@@ -227,43 +231,70 @@ describe("inline click-to-focus geometry", () => {
 		expect(workerBg()).toEqual(before);
 	});
 
-	it("expands and collapses the pinned jump list through SGR clicks", async () => {
+	it("focuses a background-jobs task row through an SGR click and skips non-agent rows", async () => {
 		cfgTuiMouse.set(mode.settings, true);
 		await mode.init({ suppressWelcomeIntro: true });
 		void mode.getUserInput();
 		await term.waitForRender();
 
-		for (let index = 0; index < 5; index++) {
-			eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
-				id: `ToggleAgent${index}`,
-				index,
-				agent: "task",
-				agentSource: "bundled",
-				description: `toggle job ${index}`,
-				status: "started",
-				parentToolCallId: "tool-call",
-				detached: true,
-			});
-		}
-		const clickRow = async (marker: string): Promise<void> => {
-			await term.waitForRender(() => plainRows(term.getViewport()).some(row => row.includes(marker)));
-			const viewport = plainRows(term.getViewport());
-			const screenRow = viewport.findIndex(row => row.includes(marker));
-			expect(screenRow).toBeGreaterThanOrEqual(0);
-			term.sendInput(`\x1b[<0;5;${screenRow + 1}M`);
-		};
+		AgentRegistry.global().register({
+			id: PANEL_AGENT_ID,
+			displayName: "panel worker",
+			kind: "sub",
+			session,
+			sessionFile: null,
+		});
+		vi.spyOn(session, "getAsyncJobSnapshot").mockReturnValue({
+			running: [
+				{
+					id: "panel-job",
+					type: "task",
+					status: "running",
+					label: "panel work",
+					startTime: Date.now() - 5_000,
+					agentId: PANEL_AGENT_ID,
+				},
+				{
+					id: "panel-shell",
+					type: "bash",
+					status: "running",
+					label: "long-running shell job",
+					startTime: Date.now() - 5_000,
+				},
+			],
+			recent: [],
+			delivery: { queued: 0, delivering: false, pendingJobIds: [] },
+		});
+		mode.refreshBackgroundJobs();
 
-		// Collapsed by default: three rows plus the expander.
-		await term.waitForRender(() => plainRows(term.getViewport()).some(row => row.includes("more — expand")));
-		expect(plainRows(term.getViewport()).some(row => row.includes("ToggleAgent3"))).toBe(false);
+		const rows = (): string[] => plainRows(term.getViewport());
+		const rowOf = (marker: string): number => rows().findIndex(row => row.includes(marker));
+		await term.waitForRender(() => rows().some(row => row.includes("Background Jobs (")));
+		const titleRow = rowOf("Background Jobs (");
+		const taskRow = rowOf(PANEL_AGENT_ID);
+		const shellRow = rowOf("long-running shell job");
+		expect(titleRow).toBeGreaterThanOrEqual(0);
+		expect(taskRow).toBeGreaterThan(titleRow);
+		expect(shellRow).toBeGreaterThan(taskRow);
 
-		// Clicking the expander paints the slotted window with a collapse row.
-		await clickRow("more — expand");
-		await term.waitForRender(() => plainRows(term.getViewport()).some(row => row.includes("show less")));
-		expect(plainRows(term.getViewport()).some(row => row.includes("ToggleAgent4"))).toBe(true);
-		// Clicking it again collapses back to a few rows.
-		await clickRow("show less");
-		await term.waitForRender(() => plainRows(term.getViewport()).some(row => row.includes("more — expand")));
-		expect(plainRows(term.getViewport()).some(row => row.includes("ToggleAgent3"))).toBe(false);
+		// The title row and the shell row name no agent: no focus, no status.
+		term.sendInput(`\x1b[<0;5;${titleRow + 1}M`);
+		await term.waitForRender();
+		term.sendInput(`\x1b[<0;5;${shellRow + 1}M`);
+		await term.waitForRender();
+		expect(mode.focusedAgentId).toBeUndefined();
+
+		// The task row routes the click to the agent the job runs.
+		term.sendInput(`\x1b[<0;5;${taskRow + 1}M`);
+		await term.waitForRender(() => mode.focusedAgentId === PANEL_AGENT_ID);
+		expect(mode.focusedAgentId).toBe(PANEL_AGENT_ID);
+
+		// Focusing the agent hides the panel (the focused view is authoritative);
+		// returning to main restores it from the same snapshot.
+		await term.waitForRender(() => !rows().some(row => row.includes("Background Jobs (")));
+		expect(rows().some(row => row.includes("Background Jobs ("))).toBe(false);
+		await mode.unfocusSession();
+		await term.waitForRender(() => rows().some(row => row.includes("Background Jobs (")));
+		expect(rows().some(row => row.includes("Background Jobs ("))).toBe(true);
 	});
 });

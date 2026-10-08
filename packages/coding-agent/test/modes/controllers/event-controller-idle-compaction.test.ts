@@ -136,6 +136,7 @@ describe("EventController idle compaction teardown", () => {
 			statusLine: { invalidate: vi.fn(), markActivityEnd: vi.fn() },
 			updateEditorTopBorder: vi.fn(),
 			syncRetryHintRow: vi.fn(),
+			refreshBackgroundJobs: () => {},
 			editor: { getText: () => "" },
 			sessionManager: { getSessionName: () => undefined },
 			session: {
