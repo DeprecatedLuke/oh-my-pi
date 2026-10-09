@@ -6,7 +6,7 @@
  * covered end to end in `interactive-click-focus.test.ts`.
  */
 import { beforeAll, describe, expect, it } from "bun:test";
-import { visibleWidth } from "@oh-my-pi/pi-tui";
+import * as os from "node:os";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import {
 	type BackgroundJobRow,
@@ -44,19 +44,35 @@ describe("renderBackgroundJobsLines", () => {
 		]);
 	});
 
-	it("clears with no running jobs and keeps long rows within the terminal width", () => {
+	it("fits every row inside the padded view, so no row wraps at any width", () => {
 		expect(renderBackgroundJobsLines([], NO_SETTLED, 120)).toEqual([]);
-		for (const line of renderBackgroundJobsLines(rows("x".repeat(400)), NO_SETTLED, 80)) {
-			expect(visibleWidth(line)).toBeLessThanOrEqual(80);
+		const jobs: BackgroundJobRow[] = [
+			...rows("x".repeat(400)),
+			{ type: "task", agentType: "a".repeat(60), id: "Very.Long.Nested.Agent.Id", summary: "s", ageMs: 1 },
+		];
+		for (const columns of [24, 80, 120]) {
+			const lines = renderBackgroundJobsLines(jobs, { completed: 12, failed: 3, cancelled: 4 }, columns);
+			expect(new BackgroundJobsView(lines, []).render(columns)).toHaveLength(lines.length);
 		}
+	});
+
+	it("strips terminal control sequences and shortens home paths in model-written text", () => {
+		const lines = renderBackgroundJobsLines(
+			[{ type: "bash", id: "", summary: `\x1b[2J\x1b]8;;http://x\x07cat ${os.homedir()}/proj/a.ts`, ageMs: 0 }],
+			NO_SETTLED,
+			120,
+		);
+		expect(lines[2]).not.toContain("\x1b[2J");
+		expect(lines[2]).not.toContain("\x1b]8");
+		expect(Bun.stripANSI(lines[2]!)).toContain("cat ~/proj/a.ts");
 	});
 });
 
 describe("BackgroundJobsView click targets", () => {
-	function view(columns: number, summary?: string): BackgroundJobsView {
+	function view(columns: number, summary?: string, buildColumns = columns): BackgroundJobsView {
 		const jobs = rows(summary);
 		const panel = new BackgroundJobsView(
-			renderBackgroundJobsLines(jobs, NO_SETTLED, columns),
+			renderBackgroundJobsLines(jobs, NO_SETTLED, buildColumns),
 			jobs.map(job => job.agentId),
 		);
 		panel.render(columns);
@@ -75,7 +91,8 @@ describe("BackgroundJobsView click targets", () => {
 	});
 
 	it("keeps wrapped continuation rows with their agent and remaps after a resize", () => {
-		const panel = view(48, "x".repeat(300));
+		// Rows built for a wide terminal wrap once the terminal narrows before the next repaint.
+		const panel = view(48, "x".repeat(300), 400);
 		const shellRow = panel
 			.render(48)
 			.map(row => Bun.stripANSI(row))

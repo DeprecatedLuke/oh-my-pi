@@ -1121,7 +1121,7 @@ describe("AsyncJobManager", () => {
 		await manager.waitForAll();
 	});
 
-	test("onChange fires on register and terminal transition even with no progress", async () => {
+	test("onChange fires on register, settle, and cancel, even for jobs that never report progress", async () => {
 		const manager = new AsyncJobManager({ onJobComplete: async () => {} });
 		let changes = 0;
 		const unsubscribe = manager.onChange(() => {
@@ -1138,8 +1138,20 @@ describe("AsyncJobManager", () => {
 		// The terminal transition (completed) notifies too.
 		expect(changes).toBe(2);
 
+		// Cancel notifies as well, so a hidden panel still re-evaluates once the
+		// last job ends.
+		const { promise: hold, resolve } = Promise.withResolvers<string>();
+		const id = manager.register("bash", "held", () => hold);
+		expect(changes).toBe(3);
+		manager.cancel(id);
+		expect(changes).toBe(4);
+		resolve("late");
+		await manager.waitForAll();
+		// The cancelled job's own settle emits once more.
+		expect(changes).toBe(5);
+
 		unsubscribe();
 		manager.register("task", "Other", async () => "done");
-		expect(changes).toBe(2);
+		expect(changes).toBe(5);
 	});
 });

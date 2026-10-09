@@ -607,7 +607,7 @@ export const cfgDisplayBackgroundJobs = register({
 		tab: "appearance",
 		group: "Display",
 		label: "Background Jobs Panel",
-		description: "Show running background jobs (subagent tasks, shell and eval jobs) in a panel above the editor",
+		description: "Show live subagents and background shell/eval jobs in a panel above the editor",
 	},
 });
 

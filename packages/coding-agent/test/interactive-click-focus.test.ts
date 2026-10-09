@@ -12,6 +12,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
+import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
@@ -23,6 +24,7 @@ function plainRows(rows: readonly string[]): string[] {
 }
 
 const PANEL_AGENT_ID = "PanelClickAgent";
+const SYNC_AGENT_ID = "BlockingClickAgent";
 
 describe("inline click-to-focus geometry", () => {
 	let tempDir: TempDir;
@@ -231,19 +233,15 @@ describe("inline click-to-focus geometry", () => {
 		expect(workerBg()).toEqual(before);
 	});
 
-	it("focuses a background-jobs task row through an SGR click and skips non-agent rows", async () => {
+	it("lists job-backed and blocking subagents, focusing each on click and skipping non-agent rows", async () => {
 		cfgTuiMouse.set(mode.settings, true);
 		await mode.init({ suppressWelcomeIntro: true });
 		void mode.getUserInput();
 		await term.waitForRender();
 
-		AgentRegistry.global().register({
-			id: PANEL_AGENT_ID,
-			displayName: "panel worker",
-			kind: "sub",
-			session,
-			sessionFile: null,
-		});
+		for (const id of [PANEL_AGENT_ID, SYNC_AGENT_ID]) {
+			AgentRegistry.global().register({ id, displayName: id, kind: "sub", session, sessionFile: null });
+		}
 		vi.spyOn(session, "getAsyncJobSnapshot").mockReturnValue({
 			running: [
 				{
@@ -254,6 +252,8 @@ describe("inline click-to-focus geometry", () => {
 					startTime: Date.now() - 5_000,
 					agentId: PANEL_AGENT_ID,
 				},
+				// A workpool aggregate: a task job with no agent behind it.
+				{ id: "pool-job", type: "task", status: "running", label: "pool work", startTime: Date.now() - 5_000 },
 				{
 					id: "panel-shell",
 					type: "bash",
@@ -265,36 +265,42 @@ describe("inline click-to-focus geometry", () => {
 			recent: [],
 			delivery: { queued: 0, delivering: false, pendingJobIds: [] },
 		});
+		// A blocking task spawn: a live subagent with no async job.
+		eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+			id: SYNC_AGENT_ID,
+			index: 0,
+			agent: "task",
+			agentSource: "bundled",
+			description: "blocking work",
+			status: "started",
+			parentToolCallId: "tool-call",
+			detached: false,
+		});
 		mode.refreshBackgroundJobs();
 
 		const rows = (): string[] => plainRows(term.getViewport());
 		const rowOf = (marker: string): number => rows().findIndex(row => row.includes(marker));
-		await term.waitForRender(() => rows().some(row => row.includes("Background Jobs (")));
-		const titleRow = rowOf("Background Jobs (");
-		const taskRow = rowOf(PANEL_AGENT_ID);
-		const shellRow = rowOf("long-running shell job");
-		expect(titleRow).toBeGreaterThanOrEqual(0);
-		expect(taskRow).toBeGreaterThan(titleRow);
-		expect(shellRow).toBeGreaterThan(taskRow);
+		const click = (row: number): void => term.sendInput(`\x1b[<0;5;${row + 1}M`);
+		await term.waitForRender(() => rows().some(row => row.includes(SYNC_AGENT_ID)));
+		expect(rows().some(row => row.includes("Background Jobs (4 running"))).toBe(true);
 
-		// The title row and the shell row name no agent: no focus, no status.
-		term.sendInput(`\x1b[<0;5;${titleRow + 1}M`);
-		await term.waitForRender();
-		term.sendInput(`\x1b[<0;5;${shellRow + 1}M`);
-		await term.waitForRender();
+		// The title, the shell row, and the agentless pool row focus nothing.
+		for (const marker of ["Background Jobs (", "pool work", "long-running shell job"]) {
+			click(rowOf(marker));
+			await term.waitForRender();
+		}
 		expect(mode.focusedAgentId).toBeUndefined();
 
-		// The task row routes the click to the agent the job runs.
-		term.sendInput(`\x1b[<0;5;${taskRow + 1}M`);
-		await term.waitForRender(() => mode.focusedAgentId === PANEL_AGENT_ID);
-		expect(mode.focusedAgentId).toBe(PANEL_AGENT_ID);
-
-		// Focusing the agent hides the panel (the focused view is authoritative);
-		// returning to main restores it from the same snapshot.
+		click(rowOf(SYNC_AGENT_ID));
+		await term.waitForRender(() => mode.focusedAgentId === SYNC_AGENT_ID);
+		// Focusing hides the panel (the focused view is authoritative) with no tick
+		// left armed; returning to main restores it from the same snapshot.
 		await term.waitForRender(() => !rows().some(row => row.includes("Background Jobs (")));
 		expect(rows().some(row => row.includes("Background Jobs ("))).toBe(false);
 		await mode.unfocusSession();
-		await term.waitForRender(() => rows().some(row => row.includes("Background Jobs (")));
-		expect(rows().some(row => row.includes("Background Jobs ("))).toBe(true);
+		await term.waitForRender(() => rows().some(row => row.includes(PANEL_AGENT_ID)));
+		click(rowOf(PANEL_AGENT_ID));
+		await term.waitForRender(() => mode.focusedAgentId === PANEL_AGENT_ID);
+		expect(mode.focusedAgentId).toBe(PANEL_AGENT_ID);
 	});
 });

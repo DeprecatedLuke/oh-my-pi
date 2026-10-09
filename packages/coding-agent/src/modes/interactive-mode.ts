@@ -288,6 +288,7 @@ import {
 	getRunningSubagentBadgeRegistry,
 } from "@oh-my-pi/pi-tui/overlays/running-subagent-badge";
 import {
+	type ObservableSession,
 	type SessionObserverChangeKind,
 	SessionObserverRegistry,
 } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
@@ -846,23 +847,34 @@ export function renderBackgroundJobsLines(
 	columns: number,
 ): string[] {
 	if (jobs.length === 0) return [];
+	// The view's `Text` pads one column each side; rows must fit inside it or they wrap.
+	const contentColumns = Math.max(1, columns - getPaddingX(1) * 2);
+	// Labels, intents and ids carry raw model/command text: strip control and
+	// ANSI bytes, then shorten home paths and fold whitespace to one line.
+	const clean = (text: string): string =>
+		shortenEmbeddedPaths(replaceTabs(sanitizeText(text)))
+			.replace(/\s+/g, " ")
+			.trim();
 	const counts = [`${jobs.length} running`];
 	if (settled.completed > 0) counts.push(`${settled.completed} completed`);
 	if (settled.failed > 0) counts.push(`${settled.failed} failed`);
 	if (settled.cancelled > 0) counts.push(`${settled.cancelled} cancelled`);
-	const lines = ["", theme.bold(theme.fg("accent", `Background Jobs (${counts.join(", ")}):`))];
+	const title = truncateToWidth(`Background Jobs (${counts.join(", ")}):`, contentColumns);
+	const lines = ["", theme.bold(theme.fg("accent", title))];
 	for (const job of jobs) {
-		const tag = job.agentType && job.agentType !== "task" ? `[${job.agentType}]` : JOB_TYPE_TAG[job.type];
+		const tag = job.agentType && job.agentType !== "task" ? `[${clean(job.agentType)}]` : JOB_TYPE_TAG[job.type];
+		const id = clean(job.id);
 		const age = ` - ${formatDuration(Math.max(0, job.ageMs))}`;
-		const summary = replaceTabs(job.summary).replace(/\s+/g, " ").trim();
-		const showSummary = summary.length > 0 && summary !== job.id;
-		const head = job.id ? `  ${tag} ${job.id}${showSummary ? ": " : ""}` : `  ${tag} `;
-		const budget = Math.max(TRUNCATE_LENGTHS.SHORT, columns - visibleWidth(head) - visibleWidth(age));
-		const text = showSummary ? truncateToWidth(summary, budget) : job.id ? "" : "(no label)";
-		const styledHead = job.id
-			? `  ${theme.fg("dim", tag)} ${theme.fg("accent", theme.bold(job.id))}${showSummary ? ": " : ""}`
+		const summary = clean(job.summary);
+		const showSummary = summary.length > 0 && summary !== id;
+		const head = id ? `  ${tag} ${id}${showSummary ? ": " : ""}` : `  ${tag} `;
+		const budget = contentColumns - visibleWidth(head) - visibleWidth(age);
+		const text = showSummary ? (budget > 0 ? truncateToWidth(summary, budget) : "") : id ? "" : "(no label)";
+		const styledHead = id
+			? `  ${theme.fg("dim", tag)} ${theme.fg("accent", theme.bold(id))}${showSummary ? ": " : ""}`
 			: `  ${theme.fg("dim", tag)} `;
-		lines.push(`${styledHead}${text}${theme.fg("dim", age)}`);
+		// A long tag or id alone can still overflow; the final cut keeps one row per job.
+		lines.push(truncateToWidth(`${styledHead}${text}${theme.fg("dim", age)}`, contentColumns));
 	}
 	return lines;
 }
@@ -1366,20 +1378,23 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/**
 	 * Repaint the anchored Background Jobs panel from the current job snapshot.
-	 * While jobs run, a 1-second tick keeps their ages live; the panel clears and
-	 * the tick stops once nothing runs. A deferred completion notification rides
-	 * the transition to "nothing running": no background job can wake the session
-	 * any more, so this is the last moment it can be delivered.
+	 * While the panel shows rows, a 1-second tick keeps their ages live; it stops
+	 * once the panel has nothing to show or cannot show (setting off, subagent
+	 * focused) — the settings handler, focus changes and job-manager changes call
+	 * this again. A deferred completion notification is flushed only when no
+	 * background work is outstanding (no running job, no pending delivery),
+	 * whatever the panel's visibility: hiding the panel must not deliver a
+	 * completion while onJobComplete could still wake the session.
 	 */
 	refreshBackgroundJobs(): void {
 		if (!this.#renderBackgroundJobs()) {
-			this.#eventController.flushDeferredCompletion();
+			if (!this.#backgroundWorkOutstanding()) this.#eventController.flushDeferredCompletion();
 			this.#stopBackgroundJobs();
 			return;
 		}
 		this.#backgroundJobsTimer ??= setInterval(() => {
 			if (!this.#renderBackgroundJobs()) {
-				this.#eventController.flushDeferredCompletion();
+				if (!this.#backgroundWorkOutstanding()) this.#eventController.flushDeferredCompletion();
 				this.#stopBackgroundJobs();
 			}
 			this.ui.requestRender();
@@ -1396,46 +1411,79 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/**
-	 * Repaint the panel; false once no job runs and no delivery is pending.
-	 * Hiding while a subagent is focused keeps its own working row authoritative,
-	 * but the tick stays armed so returning to the main view restores the panel.
+	 * True while a background job runs or a completion delivery is pending,
+	 * whatever the panel's visibility. The tick/panel lifecycle is gated on
+	 * whether there is something to show; the deferred flush is gated on this.
+	 * With the panel hidden and work outstanding, nothing is scheduled — the
+	 * job-manager `onChange` subscription (plus turn, focus, and settings
+	 * refreshes) re-evaluates, so the flush still lands once work ends.
+	 */
+	#backgroundWorkOutstanding(): boolean {
+		const snapshot = this.session.getAsyncJobSnapshot();
+		const delivery = snapshot?.delivery;
+		return (snapshot?.running.length ?? 0) > 0 || (delivery ? delivery.queued > 0 || delivery.delivering : false);
+	}
+
+	/**
+	 * Repaint the panel; false once it has nothing to show or cannot show (setting
+	 * off, subagent focused) so the tick stops — the settings handler, focus
+	 * changes and job-manager changes repaint it again. Rows cover running async
+	 * jobs plus every active subagent without one (blocking task spawns, eval
+	 * `agent()` spawns), so each live subagent keeps a click-to-focus row.
 	 */
 	#renderBackgroundJobs(): boolean {
-		const snapshot = this.viewSession.getAsyncJobSnapshot();
-		const running = snapshot?.running ?? [];
-		for (const job of running) this.#backgroundJobsSettled.set(job.id, undefined);
-		for (const job of snapshot?.recent ?? []) {
-			if (this.#backgroundJobsSettled.get(job.id) !== undefined || !this.#backgroundJobsSettled.has(job.id))
-				continue;
-			if (job.status === "completed" || job.status === "failed" || job.status === "cancelled") {
-				this.#backgroundJobsSettled.set(job.id, job.status);
-			}
+		if (this.focusedAgentId || !cfgDisplayBackgroundJobs.get(this.settings)) return false;
+		const running = this.session.getAsyncJobSnapshot()?.running ?? [];
+		const runningIds = new Set(running.map(job => job.id));
+		// Settle tracked jobs by id: the snapshot's `recent` list is capped and
+		// ordered by start time, so a job that settles late could miss it.
+		for (const [id, status] of this.#backgroundJobsSettled) {
+			if (status || runningIds.has(id)) continue;
+			const job = this.session.asyncJobManager?.getJob(id);
+			if (job && job.status !== "running") this.#backgroundJobsSettled.set(id, job.status);
 		}
-		const delivery = snapshot?.delivery;
-		const pendingDelivery = delivery ? delivery.queued > 0 || delivery.delivering : false;
-		if (running.length === 0 || this.focusedAgentId || !cfgDisplayBackgroundJobs.get(this.settings)) {
-			this.backgroundJobsContainer.clear();
-			return this.focusedAgentId !== undefined || running.length > 0 || pendingDelivery;
-		}
-		const settled = { completed: 0, failed: 0, cancelled: 0 };
-		for (const status of this.#backgroundJobsSettled.values()) if (status) settled[status] += 1;
+		for (const id of runningIds) this.#backgroundJobsSettled.set(id, undefined);
 		const sessions = this.#observerRegistry.getSessions();
 		const now = Date.now();
-		const rows = running.map((job): BackgroundJobRow => {
-			if (job.type !== "task") return { type: job.type, id: "", summary: job.label, ageMs: now - job.startTime };
-			const agentId = job.agentId ?? job.id;
-			const session = sessions.find(candidate => candidate.id === agentId);
-			const progress = session?.progress;
+		const taskRow = (
+			observed: ObservableSession | undefined,
+			agentId: string | undefined,
+			displayId: string,
+			label: string,
+			ageMs: number,
+		): BackgroundJobRow => {
+			const progress = observed?.progress;
 			const summary = progress?.lastIntent?.trim() || progress?.description?.trim() || progress?.task?.trim();
 			return {
-				type: job.type,
-				agentType: session?.agent,
+				type: "task",
+				agentType: observed?.agent,
 				agentId,
-				id: formatTaskId(agentId),
-				summary: summary || job.label,
-				ageMs: now - job.startTime,
+				id: formatTaskId(displayId),
+				summary: summary || label,
+				ageMs,
 			};
-		});
+		};
+		const rows: BackgroundJobRow[] = [];
+		const jobAgentIds = new Set<string>();
+		for (const job of running) {
+			if (job.type !== "task") {
+				rows.push({ type: job.type, id: "", summary: job.label, ageMs: now - job.startTime });
+				continue;
+			}
+			// Only a job naming its agent is focusable: workpool aggregates and
+			// security scans run without one.
+			const observed = job.agentId ? sessions.find(candidate => candidate.id === job.agentId) : undefined;
+			if (job.agentId) jobAgentIds.add(job.agentId);
+			rows.push(taskRow(observed, job.agentId, job.agentId ?? job.id, job.label, now - job.startTime));
+		}
+		for (const observed of sessions) {
+			if (observed.kind !== "subagent" || observed.status !== "active" || jobAgentIds.has(observed.id)) continue;
+			const elapsed = observed.progress ? observed.progress.durationMs + (now - observed.lastUpdate) : 0;
+			rows.push(taskRow(observed, observed.id, observed.id, observed.label, elapsed));
+		}
+		if (rows.length === 0) return false;
+		const settled = { completed: 0, failed: 0, cancelled: 0 };
+		for (const status of this.#backgroundJobsSettled.values()) if (status) settled[status] += 1;
 		const lines = renderBackgroundJobsLines(rows, settled, this.ui.terminal.columns);
 		const order = rows.map(row => row.agentId);
 		const view = this.backgroundJobsContainer.children[0];
