@@ -12,7 +12,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import type { AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
-import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task";
+import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "@oh-my-pi/pi-coding-agent/task";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
@@ -302,5 +302,65 @@ describe("inline click-to-focus geometry", () => {
 		click(rowOf(PANEL_AGENT_ID));
 		await term.waitForRender(() => mode.focusedAgentId === PANEL_AGENT_ID);
 		expect(mode.focusedAgentId).toBe(PANEL_AGENT_ID);
+	});
+
+	it("shows a running call's tool over a stale intent and counts a finished blocking subagent", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		void mode.getUserInput();
+		await term.waitForRender();
+		vi.spyOn(session, "getAsyncJobSnapshot").mockReturnValue({
+			running: [{ id: "keep", type: "bash", status: "running", label: "dev server", startTime: Date.now() }],
+			recent: [],
+			delivery: { queued: 0, delivering: false, pendingJobIds: [] },
+		});
+		const lifecycle = (status: "started" | "completed") =>
+			eventBus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, {
+				id: SYNC_AGENT_ID,
+				index: 0,
+				agent: "task",
+				agentSource: "bundled",
+				description: "blocking work",
+				status,
+				parentToolCallId: "tool-call",
+				detached: false,
+			});
+		lifecycle("started");
+		const progress: AgentProgress = {
+			index: 0,
+			id: SYNC_AGENT_ID,
+			agent: "task",
+			agentSource: "bundled",
+			status: "running",
+			task: "blocking work",
+			lastIntent: "stale intent",
+			currentTool: "mcp_lookup",
+			recentTools: [],
+			recentOutput: [],
+			toolCount: 1,
+			requests: 1,
+			tokens: 0,
+			cost: 0,
+			durationMs: 1_000,
+		};
+		eventBus.emit(TASK_SUBAGENT_PROGRESS_CHANNEL, {
+			index: 0,
+			agent: "task",
+			agentSource: "bundled",
+			task: "blocking work",
+			parentToolCallId: "tool-call",
+			detached: false,
+			progress,
+		});
+		mode.refreshBackgroundJobs();
+
+		const rows = (): string[] => plainRows(term.getViewport());
+		const syncRow = (): string | undefined => rows().find(row => row.includes(SYNC_AGENT_ID));
+		await term.waitForRender(() => syncRow()?.includes("mcp_lookup") === true);
+		expect(syncRow()).not.toContain("stale intent");
+
+		lifecycle("completed");
+		mode.refreshBackgroundJobs();
+		await term.waitForRender(() => rows().some(row => row.includes("Background Jobs (1 running, 1 completed)")));
+		expect(syncRow()).toBeUndefined();
 	});
 });

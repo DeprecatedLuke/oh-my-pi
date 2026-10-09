@@ -816,6 +816,9 @@ const DEFERRED_PREVIEW_VIEWPORT_FRACTION = 0.4;
  *  before it auto-clears, mirroring the todo HUD's auto-clear timer. */
 const MODEL_CYCLE_TRACK_CLEAR_MS = 4000;
 
+/** Settle-tally key prefix for job-less subagent rows, keeping them apart from job ids. */
+const SUBAGENT_ROW_KEY = "subagent:";
+
 const JOB_TYPE_TAG: Record<AsyncJobSnapshotItem["type"], string> = { task: "[task]", bash: "[shell]", eval: "[eval]" };
 
 /** One row in the anchored Background Jobs panel. */
@@ -1435,15 +1438,23 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.focusedAgentId || !cfgDisplayBackgroundJobs.get(this.settings)) return false;
 		const running = this.session.getAsyncJobSnapshot()?.running ?? [];
 		const runningIds = new Set(running.map(job => job.id));
-		// Settle tracked jobs by id: the snapshot's `recent` list is capped and
+		const sessions = this.#observerRegistry.getSessions();
+		// Settle tracked rows by id: the snapshot's `recent` list is capped and
 		// ordered by start time, so a job that settles late could miss it.
-		for (const [id, status] of this.#backgroundJobsSettled) {
-			if (status || runningIds.has(id)) continue;
-			const job = this.session.asyncJobManager?.getJob(id);
-			if (job && job.status !== "running") this.#backgroundJobsSettled.set(id, job.status);
+		// Job-less subagent rows settle from their observer lifecycle.
+		for (const [key, status] of this.#backgroundJobsSettled) {
+			if (status || runningIds.has(key)) continue;
+			if (key.startsWith(SUBAGENT_ROW_KEY)) {
+				const observed = sessions.find(candidate => candidate.id === key.slice(SUBAGENT_ROW_KEY.length));
+				if (observed && observed.status !== "active") {
+					this.#backgroundJobsSettled.set(key, observed.status === "aborted" ? "cancelled" : observed.status);
+				}
+				continue;
+			}
+			const job = this.session.asyncJobManager?.getJob(key);
+			if (job && job.status !== "running") this.#backgroundJobsSettled.set(key, job.status);
 		}
 		for (const id of runningIds) this.#backgroundJobsSettled.set(id, undefined);
-		const sessions = this.#observerRegistry.getSessions();
 		const now = Date.now();
 		const taskRow = (
 			observed: ObservableSession | undefined,
@@ -1453,7 +1464,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			ageMs: number,
 		): BackgroundJobRow => {
 			const progress = observed?.progress;
-			const summary = progress?.lastIntent?.trim() || progress?.description?.trim() || progress?.task?.trim();
+			// The current call's intent (or tool) while one runs; the last intent only between calls.
+			const action = progress?.currentTool
+				? progress.currentToolIntent?.trim() || progress.currentTool
+				: progress?.lastIntent?.trim();
+			const summary = action || progress?.description?.trim() || progress?.task?.trim();
 			return {
 				type: "task",
 				agentType: observed?.agent,
@@ -1480,6 +1495,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (observed.kind !== "subagent" || observed.status !== "active" || jobAgentIds.has(observed.id)) continue;
 			const elapsed = observed.progress ? observed.progress.durationMs + (now - observed.lastUpdate) : 0;
 			rows.push(taskRow(observed, observed.id, observed.id, observed.label, elapsed));
+			this.#backgroundJobsSettled.set(`${SUBAGENT_ROW_KEY}${observed.id}`, undefined);
 		}
 		if (rows.length === 0) return false;
 		const settled = { completed: 0, failed: 0, cancelled: 0 };
