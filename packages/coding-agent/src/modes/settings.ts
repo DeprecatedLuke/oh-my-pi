@@ -599,6 +599,18 @@ export const cfgDisplaySmoothStreaming = register({
 	},
 });
 
+export const cfgDisplayBackgroundJobs = register({
+	id: "display.backgroundJobs",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Background Jobs Panel",
+		description: "Show running background jobs (subagent tasks, shell and eval jobs) in a panel above the editor",
+	},
+});
+
 export const cfgDisplayHideToolActivity = register({
 	id: "display.hideToolActivity",
 	type: "boolean",

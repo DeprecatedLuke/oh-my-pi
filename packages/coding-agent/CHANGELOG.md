@@ -5,6 +5,7 @@
 ### Changed
 
 - Clicking a Background Jobs panel row for a running task now focuses that subagent's session (with `tui.mouse` on); shell and eval rows have no agent to focus.
+- Added `display.backgroundJobs` (on by default) to hide the Background Jobs panel; `display.pinnedAgents: off` from older configs migrates to `false`, and configs still setting `display.pinnedAgents` or `display.subagentLivePreview` load again instead of failing with "Unknown setting".
 
 ### Fixed
 

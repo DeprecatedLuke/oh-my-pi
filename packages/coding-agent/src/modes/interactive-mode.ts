@@ -326,6 +326,7 @@ import {
 	cfgAutocompleteMaxVisible,
 	cfgComposerShape,
 	cfgComposerTokenRate,
+	cfgDisplayBackgroundJobs,
 	cfgDisplayCacheMissMarker,
 	cfgDisplayCollapseCompacted,
 	cfgDisplayHideToolActivity,
@@ -414,6 +415,7 @@ const cfgLiveUiSettings = combine({
 	"recap.idleSeconds": cfgRecapIdleSeconds,
 	"compaction.enabled": cfgCompactionEnabled,
 	"compaction.methodOrder": cfgCompactionMethodOrder,
+	"display.backgroundJobs": cfgDisplayBackgroundJobs,
 	"display.hideToolActivity": cfgDisplayHideToolActivity,
 	"terminal.showImages": cfgTerminalShowImages,
 	hideThinkingBlock: cfgHideThinkingBlock,
@@ -1411,9 +1413,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		const delivery = snapshot?.delivery;
 		const pendingDelivery = delivery ? delivery.queued > 0 || delivery.delivering : false;
-		if (running.length === 0 || this.focusedAgentId) {
+		if (running.length === 0 || this.focusedAgentId || !cfgDisplayBackgroundJobs.get(this.settings)) {
 			this.backgroundJobsContainer.clear();
-			return this.focusedAgentId !== undefined ? true : pendingDelivery;
+			return this.focusedAgentId !== undefined || running.length > 0 || pendingDelivery;
 		}
 		const settled = { completed: 0, failed: 0, cancelled: 0 };
 		for (const status of this.#backgroundJobsSettled.values()) if (status) settled[status] += 1;
@@ -3338,6 +3340,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#eventController.refreshIdleCompactionTimer();
 		}
 		if (any("recap.enabled", "recap.idleSeconds")) this.#eventController.refreshIdleRecapTimer();
+		if (any("display.backgroundJobs")) {
+			this.refreshBackgroundJobs();
+			this.ui.requestRender();
+		}
 		if (any("compaction.enabled", "compaction.methodOrder")) {
 			this.statusLine.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 			this.ui.requestRender();

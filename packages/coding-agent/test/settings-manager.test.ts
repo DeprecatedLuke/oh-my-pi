@@ -25,6 +25,7 @@ import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 import {
 	cfgSymbolPreset,
+	cfgDisplayBackgroundJobs,
 	cfgDisplayShowTokenUsage,
 	cfgAskTimeout,
 	cfgThemeDark,
@@ -2247,19 +2248,28 @@ describe("Settings", () => {
 			expect((await readSettings()).exa).toBeUndefined();
 		});
 
-		it("drops the retired pinned-agents settings instead of rejecting the config", async () => {
-			await writeSettings({
-				display: { pinnedAgents: "full", subagentLivePreview: true },
-				"display.pinnedAgents": "off",
-			});
-
+		it("migrates pinnedAgents off to a hidden Background Jobs panel and drops the retired keys", async () => {
+			await writeSettings({ display: { pinnedAgents: "off", subagentLivePreview: true } });
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
-
+			expect(cfgDisplayBackgroundJobs.get(settings)).toBe(false);
 			cfgDisplayShowTokenUsage.set(settings, true);
 			await settings.flush();
+			expect((await readSettings()).display).toEqual({ backgroundJobs: false, showTokenUsage: true });
+		});
+
+		it("keeps the panel shown for collapsed/full and lets an explicit backgroundJobs win", async () => {
+			await writeSettings({ display: { pinnedAgents: "full" }, "display.pinnedAgents": "off" });
+			const shown = await Settings.init({ cwd: projectDir, agentDir });
+			expect(cfgDisplayBackgroundJobs.get(shown)).toBe(true);
+			cfgDisplayShowTokenUsage.set(shown, true);
+			await shown.flush();
 			const saved = await readSettings();
 			expect(saved.display).toEqual({ showTokenUsage: true });
 			expect(saved["display.pinnedAgents"]).toBeUndefined();
+
+			resetSettingsForTest();
+			await writeSettings({ display: { pinnedAgents: "off", backgroundJobs: true } });
+			expect(cfgDisplayBackgroundJobs.get(await Settings.init({ cwd: projectDir, agentDir }))).toBe(true);
 		});
 
 		it("removes the retired computer backend setting", async () => {
