@@ -3492,6 +3492,17 @@ export class Settings {
 
 		delete raw["hindsight.mentalModelRefreshIntervalMs"];
 
+		// The pinned Subagents jump list was replaced by the Background Jobs
+		// panel; its density and live-preview settings have no successor.
+		const displayObj = isRecord(raw.display) ? raw.display : undefined;
+		if (displayObj) {
+			delete displayObj.pinnedAgents;
+			delete displayObj.subagentLivePreview;
+			if (Object.keys(displayObj).length === 0) delete raw.display;
+		}
+		delete raw["display.pinnedAgents"];
+		delete raw["display.subagentLivePreview"];
+
 		return raw;
 	}
 

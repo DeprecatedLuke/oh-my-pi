@@ -2247,6 +2247,21 @@ describe("Settings", () => {
 			expect((await readSettings()).exa).toBeUndefined();
 		});
 
+		it("drops the retired pinned-agents settings instead of rejecting the config", async () => {
+			await writeSettings({
+				display: { pinnedAgents: "full", subagentLivePreview: true },
+				"display.pinnedAgents": "off",
+			});
+
+			const settings = await Settings.init({ cwd: projectDir, agentDir });
+
+			cfgDisplayShowTokenUsage.set(settings, true);
+			await settings.flush();
+			const saved = await readSettings();
+			expect(saved.display).toEqual({ showTokenUsage: true });
+			expect(saved["display.pinnedAgents"]).toBeUndefined();
+		});
+
 		it("removes the retired computer backend setting", async () => {
 			await writeSettings({ computer: { backend: "auto", enabled: true }, "computer.backend": "native" });
 
