@@ -2,8 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- `/login opencode-go` and `/login opencode-zen` now sign in to OpenCode Console with a device code instead of asking for an API key (Console no longer issues personal keys); Console sign-ins are routed through the Console inference gateway, while `OPENCODE_API_KEY` and existing stored keys keep working, and OpenCode Go usage limits are reported for Console sign-ins too.
+
 ### Fixed
 
+- Fixed device-code logins showing a broken link when the server returns a relative verification URL.
 - Fixed `omp -p` and other short-lived auth-broker clients missing from `omp usage clients`: usage still waiting for the 10-second report batch is now sent to the broker before the process exits ([#14899](https://github.com/can1357/oh-my-pi/pull/14899) by [@will-bogusz](https://github.com/will-bogusz))
 
 ## [18.8.4] - 2026-10-08

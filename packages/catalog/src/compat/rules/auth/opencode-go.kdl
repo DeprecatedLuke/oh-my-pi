@@ -1,10 +1,35 @@
 auth "opencode-go" {
 	name "OpenCode Go"
-	login "api-key" {
-		// Go keys are minted from the same Zen console after subscribing to Go,
-		// so the URL is identical for both OpenCode subscription providers.
-		auth-url "https://opencode.ai/auth"
-		instructions "Log in to the OpenCode Zen console and copy your OpenCode Go API key"
-		prompt "Paste your OpenCode Go API key" placeholder="sk-..."
+	// OpenCode Console sign-in (RFC 8628). Self-serve Go API keys are gone;
+	// Console user tokens are bound to the workspace picked during approval
+	// (`supports_org_scope`) and authenticate only on the Console inference
+	// gateway, so the credential pins that gateway root as `apiEndpoint`.
+	// Plain keys (OPENCODE_API_KEY, service-account keys) keep the Zen URLs.
+	// https://opencode.ai/docs/console/api#device-flow
+	api-key-format "structured"
+	org-scoped-identity #true
+	login "device-code" {
+		client-id "omp"
+		device url="https://opencode.ai/console/auth/device/code" {
+			params {
+				supports_org_scope "true"
+			}
+			headers {
+				Accept "application/json"
+			}
+		}
+		token url="https://opencode.ai/console/auth/device/token" {
+			headers {
+				Accept "application/json"
+			}
+		}
+		response user-code="user_code" device-code="device_code" verification-uri="verification_uri" verification-uri-complete="verification_uri_complete" interval="interval" expires-in="expires_in"
+		instructions "Sign in to OpenCode Console, pick the workspace with your Go subscription, and confirm code {user_code}"
+		credential {
+			org-id "org_id"
+			api-endpoint literal="https://opencode.ai/inference/go"
+		}
+		userinfo url="https://opencode.ai/console/api/user" email="email" account-id="id"
 	}
+	refresh {}
 }

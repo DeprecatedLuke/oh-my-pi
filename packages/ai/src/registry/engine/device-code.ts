@@ -32,6 +32,19 @@ function numberAt(body: unknown, path: string | undefined): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+/**
+ * Absolute verification URL. Some servers (OpenCode Console) return a path
+ * such as `/console/device?user_code=…`; resolve it against the device
+ * authorization endpoint's origin.
+ */
+function resolveVerificationUri(uri: string, deviceUrl: string): string {
+	try {
+		return new URL(uri, deviceUrl).href;
+	} catch {
+		return uri;
+	}
+}
+
 /** Builds the login function for one `login "device-code"` rule. */
 export function createDeviceCodeLogin(
 	rule: CompiledDeviceCodeLogin,
@@ -49,7 +62,15 @@ export function createDeviceCodeLogin(
 		const vars: TemplateVars = { client_id: clientId, scope, base };
 
 		ctrl.onProgress?.("Requesting device authorization...");
-		const device = await postTokenRequest(rule.device, { client_id: clientId, scope }, vars, context, "device-auth");
+		// Resolve once: the request and relative verification URIs share it.
+		const deviceUrl = template(await resolveValue(rule.device.url, signal), vars);
+		const device = await postTokenRequest(
+			{ ...rule.device, url: { value: deviceUrl } },
+			{ client_id: clientId, scope },
+			vars,
+			context,
+			"device-auth",
+		);
 		if (!device.response.ok) {
 			throw new AIError.OAuthError(
 				`${provider} device authorization failed: ${device.response.status} ${typeof device.body === "string" ? device.body : JSON.stringify(device.body)}`,
@@ -68,7 +89,7 @@ export function createDeviceCodeLogin(
 			});
 		}
 		ctrl.onAuth?.({
-			url: verificationUriComplete ?? verificationUri,
+			url: resolveVerificationUri(verificationUriComplete ?? verificationUri, deviceUrl),
 			instructions: template(rule.instructions, { user_code: userCode }),
 		});
 		ctrl.onProgress?.("Waiting for device authorization...");

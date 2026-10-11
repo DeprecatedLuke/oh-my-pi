@@ -8,6 +8,7 @@ import { mapEffortToAnthropicAdaptiveEffort } from "@oh-my-pi/pi-catalog/model-t
 import { calculateCost, getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { isAnthropicOAuthToken } from "@oh-my-pi/pi-catalog/utils";
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
+import { parseOpenCodeConsoleCredential, resolveOpenCodeConsoleBaseUrl } from "@oh-my-pi/pi-catalog/wire/opencode";
 import {
 	$env,
 	isEnoent,
@@ -1160,6 +1161,14 @@ function foundryTlsOptionsCacheKey(): string {
 function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: string): string | undefined {
 	if (model.provider === "github-copilot") {
 		return normalizeAnthropicBaseUrl(resolveGitHubCopilotBaseUrl(model.baseUrl, apiKey) ?? model.baseUrl);
+	}
+	if (model.provider === "opencode-go" || model.provider === "opencode-zen") {
+		// Console device-flow credentials route to the Console inference gateway.
+		const credential = parseOpenCodeConsoleCredential(apiKey);
+		const consoleBaseUrl = credential
+			? resolveOpenCodeConsoleBaseUrl("anthropic-messages", credential.apiEndpoint)
+			: undefined;
+		if (consoleBaseUrl) return consoleBaseUrl;
 	}
 	if (model.provider === "anthropic") return resolveDirectAnthropicBaseUrl(model);
 	return normalizeAnthropicBaseUrl(model.baseUrl);
@@ -3644,7 +3653,14 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 				(isAnthropicSigningProxyUrl(baseUrl) || (compat.signingEndpoint && !compat.officialEndpoint)) &&
 				!isVertexRawPredictUrl(baseUrl ?? "") &&
 				!hostMatchesUrl(baseUrl, "githubCopilot")));
-	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
+	const consoleCredential =
+		model.provider === "opencode-go" || model.provider === "opencode-zen"
+			? parseOpenCodeConsoleCredential(apiKey)
+			: null;
+	// Console bearer tokens authenticate on the OpenCode gateway; never treat the
+	// structured key (or the token inside it) as Anthropic OAuth.
+	const requestApiKey = consoleCredential ? consoleCredential.token : apiKey;
+	const oauthToken = isOAuth ?? (!consoleCredential && isAnthropicOAuthToken(apiKey));
 	const supportsEagerToolInputStreaming = resolveEagerToolInputStreamingSupport(model, baseUrl);
 	const needsFineGrainedToolStreamingBeta =
 		hasTools && isOfficialAnthropicApiUrl(baseUrl) && !supportsEagerToolInputStreaming;
@@ -3718,7 +3734,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		dynamicHeaders,
 	);
 	const defaultHeaders = buildAnthropicHeaders({
-		apiKey,
+		apiKey: requestApiKey,
 		baseUrl,
 		isOAuth: oauthToken,
 		extraBetas: betaFeatures,
@@ -3747,6 +3763,23 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 			isOAuthToken: false,
 			apiKey: null,
 			authToken: null,
+			baseURL: baseUrl,
+			maxRetries: 5,
+			maxRetryDelayMs,
+			defaultHeaders,
+			fetch: cchFetch,
+			fetchOptions,
+		};
+	}
+
+	// OpenCode Console device-flow credentials are bearer tokens on the Console
+	// gateway: keep the built `Authorization`, emit no `X-Api-Key`, and never
+	// let the structured key reach a header.
+	if (consoleCredential) {
+		return {
+			isOAuthToken: false,
+			apiKey: null,
+			authToken: consoleCredential.token,
 			baseURL: baseUrl,
 			maxRetries: 5,
 			maxRetryDelayMs,

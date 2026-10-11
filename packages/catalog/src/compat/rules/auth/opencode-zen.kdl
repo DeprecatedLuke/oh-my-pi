@@ -1,9 +1,32 @@
 auth "opencode-zen" {
 	name "OpenCode Zen"
-	login "api-key" {
-		// Both subscription services issue keys from the same Zen console.
-		auth-url "https://opencode.ai/auth"
-		instructions "Log in to the OpenCode Zen console and copy your OpenCode Zen API key"
-		prompt "Paste your OpenCode Zen API key" placeholder="sk-..."
+	// OpenCode Console sign-in (RFC 8628); see opencode-go.kdl. Zen is now the
+	// Console's pay-as-you-go tier, served from the gateway root below.
+	// https://opencode.ai/docs/console/api#device-flow
+	api-key-format "structured"
+	org-scoped-identity #true
+	login "device-code" {
+		client-id "omp"
+		device url="https://opencode.ai/console/auth/device/code" {
+			params {
+				supports_org_scope "true"
+			}
+			headers {
+				Accept "application/json"
+			}
+		}
+		token url="https://opencode.ai/console/auth/device/token" {
+			headers {
+				Accept "application/json"
+			}
+		}
+		response user-code="user_code" device-code="device_code" verification-uri="verification_uri" verification-uri-complete="verification_uri_complete" interval="interval" expires-in="expires_in"
+		instructions "Sign in to OpenCode Console, pick the workspace with your credits, and confirm code {user_code}"
+		credential {
+			org-id "org_id"
+			api-endpoint literal="https://opencode.ai/inference"
+		}
+		userinfo url="https://opencode.ai/console/api/user" email="email" account-id="id"
 	}
+	refresh {}
 }

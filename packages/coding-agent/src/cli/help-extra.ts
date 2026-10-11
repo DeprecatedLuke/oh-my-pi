@@ -31,7 +31,7 @@ export function getExtraHelpText(): string {
   ABLITERATION_API_KEY       - Abliteration uncensored GLM models
   UMANS_WEBSEARCH_PROVIDER    - Umans gateway web search backend (native or exa)
   MINIMAX_API_KEY            - MiniMax models
-  OPENCODE_API_KEY           - OpenCode Zen/OpenCode Go models
+  OPENCODE_API_KEY           - OpenCode Zen/Go key (or /login opencode-go|opencode-zen)
   CURSOR_ACCESS_TOKEN        - Cursor AI models
   CLINE_API_KEY              - ClinePass subscription models
   COMMAND_CODE_API_KEY       - Command Code Provider API models

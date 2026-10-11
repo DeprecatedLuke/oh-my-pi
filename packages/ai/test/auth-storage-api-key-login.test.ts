@@ -225,17 +225,17 @@ describe("AuthStorage api-key login upsert", () => {
 		expect(await authStorage.keys.get("deepseek", "session-deepseek-relogin")).toBe("same-deepseek-key");
 	});
 
-	it("uses a fresh OpenCode Go login over an existing env fallback", async () => {
+	it("uses a fresh Kagi login over an existing env fallback", async () => {
 		if (!authStorage) throw new Error("test setup failed");
 
-		getEnvApiKeySpy.mockImplementation(provider => (provider === "opencode-go" ? "old-opencode-key" : undefined));
+		getEnvApiKeySpy.mockImplementation(provider => (provider === "kagi" ? "old-kagi-key" : undefined));
 
-		await authStorage.oauth.login("opencode-go", {
+		await authStorage.oauth.login("kagi", {
 			onAuth: () => {},
-			onPrompt: async () => "new-opencode-key",
+			onPrompt: async () => "new-kagi-key",
 		});
 
-		expect(await authStorage.keys.get("opencode-go", "session-opencode-go-login")).toBe("new-opencode-key");
-		expect(await authStorage.keys.peek("opencode-go")).toBe("new-opencode-key");
+		expect(await authStorage.keys.get("kagi", "session-kagi-login")).toBe("new-kagi-key");
+		expect(await authStorage.keys.peek("kagi")).toBe("new-kagi-key");
 	});
 });

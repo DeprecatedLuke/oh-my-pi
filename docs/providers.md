@@ -173,7 +173,7 @@ The variables below supply credentials after runtime/config overrides and stored
 | `sakana`                         | `SAKANA_API_KEY`, then `FUGU_API_KEY`                                         |
 | `aimlapi`                        | `AIMLAPI_API_KEY`                                                             |
 | `gitlab-duo`, `gitlab-duo-agent` | `GITLAB_TOKEN`                                                                |
-| `opencode-zen`, `opencode-go`    | `OPENCODE_API_KEY`                                                            |
+| `opencode-zen`, `opencode-go`    | `OPENCODE_API_KEY` (key or Console service-account key), or `/login`          |
 | `cline-pass`                     | `CLINE_API_KEY`                                                               |
 | `factory-droid`                  | none — use `/login factory-droid`                                             |
 | `firepass`                       | `FIREPASS_API_KEY`                                                            |
@@ -199,6 +199,8 @@ For `xai-oauth`, `XAI_API_KEY` is accepted for an explicit request but does not 
 `/login cloudflare-ai-gateway` prompts for the gateway token, Cloudflare account ID, and gateway ID, then stores all three together. To use environment variables, set all three values listed above. OMP selects the Anthropic, OpenAI, or Workers AI gateway route for each model; you do not need a `models.yml` base URL override.
 
 `/login snowflake` prompts for your Snowflake account identifier or account URL, then signs in through the browser with Snowflake's built-in local-application OAuth integration and stores the account with the token. To use environment variables instead, set both `SNOWFLAKE_PAT` and `SNOWFLAKE_ACCOUNT`.
+
+`/login opencode-go` and `/login opencode-zen` sign in to OpenCode Console with a device code: open the shown link, pick the workspace (the one holding your Go subscription or pay-as-you-go credits), and confirm the code. Console sign-ins are routed through the Console inference gateway (`https://opencode.ai/inference`); `OPENCODE_API_KEY` and previously stored keys keep using the Zen endpoints. Console no longer issues personal API keys — workspace owners/admins can create service-account keys under **Keys** for headless use.
 
 `charm-hyper` is Charm's OpenAI-compatible inference gateway for coding agents. Issue or manage a key at `https://hyper.charm.land/`; the model list is discovered live from the provider's public `/v1/models` endpoint, and `HYPER_API_KEY` is accepted as a fallback alias for `CHARM_HYPER_API_KEY`.
 

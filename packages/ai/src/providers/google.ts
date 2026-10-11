@@ -1,3 +1,4 @@
+import { parseOpenCodeConsoleCredential, resolveOpenCodeConsoleBaseUrl } from "@oh-my-pi/pi-catalog/wire/opencode";
 import * as AIError from "../error";
 import { getEnvApiKey } from "../env-api-key";
 import type { Context, Model, StreamFunction } from "../types";
@@ -27,6 +28,11 @@ export const streamGoogle: StreamFunction<"google-generative-ai"> = (
 		);
 	}
 
+	const consoleCredential =
+		model.provider === "opencode-go" || model.provider === "opencode-zen"
+			? parseOpenCodeConsoleCredential(apiKey)
+			: null;
+
 	return streamGoogleGenAI({
 		model,
 		options,
@@ -35,10 +41,17 @@ export const streamGoogle: StreamFunction<"google-generative-ai"> = (
 			const params = buildGoogleGenerateContentParams(model, context, options ?? {});
 			// `model.baseUrl` already includes the API version segment when set (mirrors the
 			// `apiVersion: ""` reset that the SDK relied on for custom base URLs).
-			const base = model.baseUrl?.trim() || DEFAULT_GENERATIVE_LANGUAGE_BASE;
+			const consoleBaseUrl = consoleCredential
+				? resolveOpenCodeConsoleBaseUrl("google-generative-ai", consoleCredential.apiEndpoint)
+				: undefined;
+			const base = consoleBaseUrl ?? (model.baseUrl?.trim() || DEFAULT_GENERATIVE_LANGUAGE_BASE);
 			const url = `${base}/models/${model.id}:streamGenerateContent?alt=sse`;
 			const headers: Record<string, string> = {
-				"x-goog-api-key": apiKey,
+				// Console device-flow credentials authenticate as `Bearer`; the
+				// structured key never goes on the wire.
+				...(consoleCredential
+					? { Authorization: `Bearer ${consoleCredential.token}` }
+					: { "x-goog-api-key": apiKey }),
 				...model.headers,
 				...options?.headers,
 			};

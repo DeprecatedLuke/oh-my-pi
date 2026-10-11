@@ -21,6 +21,7 @@ import {
 	removeBlankCoreWeaveProjectHeaders,
 } from "@oh-my-pi/pi-catalog/wire/coreweave";
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
+import { parseOpenCodeConsoleCredential, resolveOpenCodeConsoleBaseUrl } from "@oh-my-pi/pi-catalog/wire/opencode";
 import {
 	$env,
 	classifyJsonPrefix,
@@ -146,6 +147,8 @@ export interface OpenAIStrictToolsState {
 }
 
 export interface OpenAIRequestSetupModel extends OpenAIModelIdentity {
+	/** Wire API of the model when known; Console-credential endpoint routing keys off it. */
+	api?: Model["api"];
 	headers?: Record<string, string>;
 	premiumMultiplier?: number;
 	compat?: Pick<ResolvedOpenAISharedCompat, "promptCacheSessionHeader">;
@@ -308,6 +311,16 @@ export function resolveOpenAIRequestSetup(
 			}
 		} catch {
 			// Not JSON — use raw apiKey and catalog baseUrl.
+		}
+	}
+
+	if (model.provider === "opencode-go" || model.provider === "opencode-zen") {
+		// Console device-flow credentials are structured keys; send the token as
+		// a bearer to the Console gateway. Plain keys keep the bundled Zen/Go URLs.
+		const credential = parseOpenCodeConsoleCredential(rawApiKey);
+		if (credential) {
+			apiKey = credential.token;
+			baseUrl = resolveOpenCodeConsoleBaseUrl(model.api ?? "openai-completions", credential.apiEndpoint) ?? baseUrl;
 		}
 	}
 

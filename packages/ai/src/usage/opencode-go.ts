@@ -15,10 +15,11 @@ import { DAY_MS, HOUR_MS } from "./shared";
 
 const OPENCODE_GO_PROVIDER = "opencode-go";
 const DEFAULT_ENDPOINT = "https://opencode.ai/zen/go";
+const DEFAULT_CONSOLE_ENDPOINT = "https://opencode.ai/inference/go";
 const USAGE_PATH = "/v1/usage";
 
 /**
- * `GET /zen/go/v1/usage` response windows. The route is first-party but
+ * `GET /zen/go/v1/usage` (API keys) / `/inference/go/v1/usage` (Console sign-ins) response windows. The route is first-party but
  * undocumented (`anomalyco/opencode` `packages/console/app/src/routes/zen/go/v1/usage.ts`)
  * and its shape changed once on merge day, so each window is decoded
  * defensively and malformed windows are skipped rather than failing the report.
@@ -100,15 +101,27 @@ async function readUpstreamErrorMessage(response: Response): Promise<string | un
 async function fetchOpenCodeGoUsage(params: UsageFetchParams, ctx: UsageFetchContext): Promise<UsageReport | null> {
 	if (params.provider !== OPENCODE_GO_PROVIDER) return null;
 	const credential = params.credential;
-	if (credential.type !== "api_key" || !credential.apiKey) return null;
+	let token: string;
+	let url: string;
+	if (credential.type === "oauth") {
+		// Console device-flow token: usage is served by the Console gateway.
+		if (!credential.accessToken) return null;
+		token = credential.accessToken;
+		url = `${(credential.apiEndpoint ?? DEFAULT_CONSOLE_ENDPOINT).replace(/\/+$/, "")}${USAGE_PATH}`;
+	} else if (credential.type === "api_key") {
+		if (!credential.apiKey) return null;
+		token = credential.apiKey;
+		url = `${normalizeBaseUrl(params.baseUrl)}${USAGE_PATH}`;
+	} else {
+		return null;
+	}
 
-	const url = `${normalizeBaseUrl(params.baseUrl)}${USAGE_PATH}`;
 	let payload: unknown;
 	try {
 		const response = await ctx.fetch(url, {
 			headers: {
 				accept: "application/json",
-				authorization: `Bearer ${credential.apiKey}`,
+				authorization: `Bearer ${token}`,
 				// Background poll outside any conversation: attribute with the
 				// stable install id so OpenCode can optimize/service the
 				// request (x-opencode-session required from 09/06). Peers
@@ -184,7 +197,11 @@ export const opencodeGoUsageProvider: UsageProvider = {
 	// endpoint; the 24h last-good retention would otherwise keep serving them.
 	cacheVersion: 2,
 	fetchUsage: fetchOpenCodeGoUsage,
-	supports: params => params.provider === OPENCODE_GO_PROVIDER && params.credential.type === "api_key",
+	// Console OAuth credentials report usage from the inference gateway alongside
+	// plain keys, which keep the bundled Zen/Go endpoint.
+	supports: params =>
+		params.provider === OPENCODE_GO_PROVIDER &&
+		(params.credential.type === "api_key" || Boolean(params.credential.accessToken)),
 	validatesCredentials: true,
 };
 
