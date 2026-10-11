@@ -322,6 +322,19 @@ export class AgentLifecycleManager {
 					return;
 				}
 
+				// Preserve cost before detaching the only live source. The session usage
+				// index includes off-transcript model calls; remove completed task-result
+				// billing so child rows remain the sole owners of nested spend.
+				try {
+					const usage = session.sessionManager.getUsageStatistics();
+					const directCost = usage.cost - usage.subagentCost;
+					if (Number.isFinite(directCost) && directCost >= 0) {
+						this.#registry.setHistory(id, { directCost }, ref.sessionFile ?? undefined);
+					}
+				} catch (error) {
+					logger.debug("AgentLifecycleManager.park: cost snapshot failed", { id, error: String(error) });
+				}
+
 				// Commit: detach + parked *before* dispose so callers never see a
 				// dying session via ref.session / idle status.
 				park.detached = true;

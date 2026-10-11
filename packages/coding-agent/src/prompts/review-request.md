@@ -37,9 +37,9 @@ Group files by locality, e.g.:
 Reviewer MUST:
 1. Focus ONLY on assigned files
 2. {{#if skipDiff}}{{#if diffInstruction}}{{diffInstruction}}{{else}}MUST run `git diff`/`git show` for assigned files{{/if}}{{else}}MUST use diff hunks below (NEVER re-run git diff){{/if}}
-3. {{#if contextInstruction}}{{contextInstruction}}{{else}}MAY read full file context as needed via `read`{{/if}}
+3. {{#if suppliedPatch}}NEVER read local workspace files for file context; the supplied diff may not match the checkout{{else}}{{#if contextInstruction}}{{contextInstruction}}{{else}}MAY read full file context as needed via `read`{{/if}}{{/if}}
 4. Call `issues` with `op: add` for each finding (persisted under `.omp/issues/`)
-5. Call `yield` with verdict when done
+5. Record verdict fields with incremental `yield` sections when done; NEVER repeat filed findings in `yield`
 
 {{#if skipDiff}}
 ### Diff Previews
