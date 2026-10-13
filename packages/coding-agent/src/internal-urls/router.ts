@@ -160,12 +160,13 @@ export class InternalUrlRouter {
 				`${scheme}:// handler has write() but spec.write.via is ${via === undefined ? "absent" : `"${via}"`}`,
 			);
 		}
-		if (via === "file") {
+		if (via === "file" || spec.write?.fileEdits) {
+			const field = via === "file" ? 'spec.write.via "file"' : "spec.write.fileEdits";
 			if (spec.backing !== "file") {
-				throw new Error(`${scheme}:// spec.write.via "file" requires backing "file", not "${spec.backing}"`);
+				throw new Error(`${scheme}:// ${field} requires backing "file", not "${spec.backing}"`);
 			}
-			if (!handler.locate) throw new Error(`${scheme}:// spec.write.via "file" requires a locate() hook`);
-			if (spec.immutable) throw new Error(`${scheme}:// spec.write.via "file" contradicts spec.immutable`);
+			if (!handler.locate) throw new Error(`${scheme}:// ${field} requires a locate() hook`);
+			if (spec.immutable) throw new Error(`${scheme}:// ${field} contradicts spec.immutable`);
 		}
 		if (spec.write?.scope === "sandbox" && (!spec.linkable || !handler.locateSync)) {
 			throw new Error(`${scheme}:// spec.write.scope "sandbox" requires spec.linkable and a locateSync() hook`);
@@ -395,11 +396,12 @@ export class InternalUrlRouter {
 
 	/**
 	 * Whether file-editing tools (`edit`, `ast_edit`) may write the file `input` locates: its
-	 * scheme is mutable and tools own its writes (`spec.write.via === "file"`).
+	 * scheme is mutable and tools own its writes (`spec.write.via === "file"`) or patch its
+	 * files in place (`spec.write.fileEdits`).
 	 */
 	fileWritable(input: string): boolean {
 		const spec = this.#registered(input)?.handler.spec;
-		return spec?.write?.via === "file" && !spec.immutable;
+		return (spec?.write?.via === "file" || spec?.write?.fileEdits === true) && !spec.immutable;
 	}
 
 	/**

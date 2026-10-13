@@ -36,6 +36,7 @@
 
 - Added support for `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` on the `anthropic` provider: when set, requests omit pre-release fields (`context_management`, beta tool fields such as `strict` and `defer_loading`, task budgets, structured-output format, `thinking.block_binding`, and Anthropic server compaction) along with their beta headers, so `ANTHROPIC_BASE_URL` gateways that reject them keep working ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
 
+- Fixed OpenCode Go Console sign-ins showing as an extra anonymous account plus a "no usage data" row in `omp usage` instead of one row with their usage.
 ## [18.9.2] - 2026-10-11
 
 ### Breaking Changes

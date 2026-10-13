@@ -110,6 +110,22 @@ describe("opencode-go usage provider", () => {
 		}
 	});
 
+	it("stamps an OAuth credential's email and accountId onto the report metadata", async () => {
+		const report = await opencodeGoUsageProvider.fetchUsage(
+			{
+				provider: "opencode-go",
+				credential: { type: "oauth", accessToken: "tok", email: "a@example.com", accountId: "acc_1", orgId: "org_1" },
+			},
+			{ fetch: fakeFetch(usagePayload()) },
+		);
+		expect(report).not.toBeNull();
+		// Console sign-ins share an org per workspace, so the report must carry
+		// the login's own identity for account attribution (otherwise the
+		// account renders twice in usage output).
+		expect(report?.metadata?.email).toBe("a@example.com");
+		expect(report?.metadata?.accountId).toBe("acc_1");
+	});
+
 	it("throws on 401 with the upstream error message so checkCredentials flags the key", async () => {
 		await expect(
 			opencodeGoUsageProvider.fetchUsage(

@@ -11,7 +11,6 @@ import {
 	DEFAULT_ESSENTIAL_TOOL_NAMES,
 	filterInitialToolsForDiscoveryAll,
 	GithubTool,
-	GitTool,
 	IdaTool,
 	IrcTool,
 	JobTool,
@@ -70,10 +69,6 @@ async function getToolMetadata(): Promise<Map<string, { loadMode?: string; summa
 		new SshTool(toolSession, [], new Map(), ""),
 		new JobTool(toolSession),
 		new IrcTool(toolSession),
-		// `git` is a createIf tool gated on a detected repo; the bare /tmp/test
-		// session has none, so createTools drops it. Instantiate it directly to
-		// assert its loadMode like the other special-construction tools above.
-		new GitTool(toolSession),
 		// `ida` is a createIf tool gated on detected IDA availability.
 		new IdaTool(toolSession),
 	]) {

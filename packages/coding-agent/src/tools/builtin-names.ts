@@ -14,7 +14,6 @@ export const BUILTIN_TOOL_NAMES = [
 	"grep",
 	"find",
 	"lsp",
-	"git",
 	"patch",
 	"checkpoint",
 	"rewind",

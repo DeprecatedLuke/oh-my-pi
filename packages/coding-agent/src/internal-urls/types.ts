@@ -81,9 +81,16 @@ export interface SchemeWritePolicy {
 	 * - `file`: tools (`write`, `edit`, `ast_edit`) write the file {@link ProtocolHandler.locate}
 	 *   returns with `{ create: true }`; the handler has no `write` hook.
 	 * - `handler`: {@link ProtocolHandler.write} performs it (messages, stdin, settings, remote
-	 *   hosts, devices); file-editing tools refuse the URL even when it locates a backing file.
+	 *   hosts, devices); file-editing tools refuse the URL even when it locates a backing file,
+	 *   unless {@link SchemeWritePolicy.fileEdits} opts in.
 	 */
 	via: "file" | "handler";
+	/**
+	 * With `via: "handler"`: whole-content `write` still goes through the handler (validation,
+	 * normalization), but `edit`/`ast_edit` patch the file {@link ProtocolHandler.locate} returns
+	 * (knowledge://). Requires a mutable file-backed spec with `locate()`.
+	 */
+	fileEdits?: true;
 	/**
 	 * `text`: model-authored text; `write` strips copied hashline display prefixes and, unless the
 	 * scheme is a `device`, rejects content that ends with a read-truncation notice.

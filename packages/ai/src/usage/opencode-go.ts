@@ -185,6 +185,11 @@ async function fetchOpenCodeGoUsage(params: UsageFetchParams, ctx: UsageFetchCon
 		metadata: {
 			planType: "OpenCode Go",
 			endpoint: url,
+			// Console sign-ins share an org per workspace; without the login's own
+			// identity the report can't be attributed to its account, so the
+			// account renders twice (anonymous report + "no usage data").
+			...(credential.email ? { email: credential.email } : {}),
+			...(credential.accountId ? { accountId: credential.accountId } : {}),
 		},
 		raw: payload,
 	};
@@ -195,7 +200,8 @@ export const opencodeGoUsageProvider: UsageProvider = {
 	// v2: retires cached reports from the OMP-observed spend estimator (dollar
 	// units) now that limits come from the upstream percent-based `/usage`
 	// endpoint; the 24h last-good retention would otherwise keep serving them.
-	cacheVersion: 2,
+	// v3: retires reports cached without the Console sign-in's email/accountId.
+	cacheVersion: 3,
 	fetchUsage: fetchOpenCodeGoUsage,
 	// Console OAuth credentials report usage from the inference gateway alongside
 	// plain keys, which keep the bundled Zen/Go endpoint.

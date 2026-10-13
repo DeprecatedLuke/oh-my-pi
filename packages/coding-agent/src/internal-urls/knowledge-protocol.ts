@@ -9,11 +9,12 @@ import {
 	loadKnowledgeSummaries,
 	normalizeKnowledgePath,
 } from "../session/knowledge-index";
-import { parseInternalUrl } from "./parse";
+import { containedRealPath, ensureCreatableWithinRoot } from "./filesystem-resource";
 import type {
 	InternalResource,
 	InternalUrl,
 	InternalWriteResult,
+	LocateOptions,
 	ProtocolHandler,
 	ResolveContext,
 	SchemeSpec,
@@ -97,48 +98,6 @@ function parseKnowledgeUrlPath(url: InternalUrl): ParsedKnowledgeUrlPath {
 		throw new Error("knowledge:// path must be <category>/<topic>.md");
 	}
 	return { category: normalizedCategory, relativePath: normalized };
-}
-
-/**
- * Resolve an existing knowledge URL for direct filesystem editing while
- * preserving the protocol handler's symlink-containment boundary.
- */
-export function resolveKnowledgeUrlToPath(input: string | InternalUrl, cwd: string): string {
-	const url = typeof input === "string" ? parseInternalUrl(input) : input;
-	const root = path.resolve(getKnowledgeRoot(cwd));
-	const parsed = parseKnowledgeUrlPath(url);
-	let realRoot: string;
-	try {
-		realRoot = fs.realpathSync.native(root);
-	} catch (error) {
-		if (isEnoent(error)) throw new Error(`Knowledge file not found: ${url.href}`);
-		throw error;
-	}
-
-	const targetPath = parsed.relativePath
-		? path.resolve(realRoot, ...parsed.relativePath.split("/"))
-		: parsed.category
-			? path.resolve(realRoot, parsed.category)
-			: realRoot;
-	ensureWithinRoot(targetPath, realRoot);
-	if (targetPath === realRoot) return realRoot;
-
-	try {
-		const realParent = fs.realpathSync.native(path.dirname(targetPath));
-		ensureWithinRoot(realParent, realRoot);
-	} catch (error) {
-		if (isEnoent(error)) throw new Error(`Knowledge file not found: ${url.href}`);
-		throw error;
-	}
-
-	try {
-		const realTarget = fs.realpathSync.native(targetPath);
-		ensureWithinRoot(realTarget, realRoot);
-		return realTarget;
-	} catch (error) {
-		if (isEnoent(error)) throw new Error(`Knowledge file not found: ${url.href}`);
-		throw error;
-	}
 }
 
 async function buildListing(url: InternalUrl, cwd: string, category?: string): Promise<InternalResource> {
@@ -265,11 +224,12 @@ async function writeKnowledgeFile(cwd: string, relativePath: string, content: st
  */
 export class KnowledgeProtocolHandler implements ProtocolHandler {
 	readonly scheme = "knowledge";
+	/** `write` validates and normalizes frontmatter; `edit`/`ast_edit` patch the located note in place. */
 	readonly spec: SchemeSpec = {
 		backing: "file",
 		selectors: "lines",
 		immutable: false,
-		write: { via: "handler", payload: "text", scope: "workspace", tier: () => "write" },
+		write: { via: "handler", fileEdits: true, payload: "text", scope: "workspace", tier: () => "write" },
 	};
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
@@ -288,5 +248,34 @@ export class KnowledgeProtocolHandler implements ProtocolHandler {
 			throw new Error("knowledge:// write requires a file path: knowledge://<category>/<topic>.md");
 		}
 		return writeKnowledgeFile(cwd, parsed.relativePath, content);
+	}
+
+	/**
+	 * Note file backing `<category>/<topic>.md`; null for listings and, without `create`,
+	 * missing notes. Symlinks may not lead outside the knowledge root.
+	 */
+	async locate(url: InternalUrl, context?: ResolveContext, options?: LocateOptions): Promise<string | null> {
+		const parsed = parseKnowledgeUrlPath(url);
+		if (!parsed.relativePath) return null;
+		const root = path.resolve(getKnowledgeRoot(resolveKnowledgeCwd(context)));
+		let realRoot: string;
+		try {
+			realRoot = await fs.promises.realpath(root);
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			if (!options?.create) return null;
+			realRoot = root;
+		}
+		const targetPath = path.resolve(realRoot, ...parsed.relativePath.split("/"));
+		const realTargetPath = await containedRealPath(targetPath, realRoot, "knowledge", url.href);
+		if (realTargetPath !== undefined) {
+			if ((await fs.promises.stat(realTargetPath)).isDirectory()) {
+				throw new Error(`knowledge:// URL must resolve to a file: ${url.href}`);
+			}
+			return realTargetPath;
+		}
+		if (!options?.create) return null;
+		await ensureCreatableWithinRoot(targetPath, realRoot, "knowledge", url.href);
+		return targetPath;
 	}
 }

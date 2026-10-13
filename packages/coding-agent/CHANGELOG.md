@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed the agent `git` tool (`op: "checkpoint"`/`"status"`); checkpoints now live on the `git` command: `omp git checkpoint` lists the dirty repos and `omp git checkpoint <repo>...` commits only the named ones, so an agent commits just the repos it is responsible for.
+
+### Added
+
+- Added `/git checkpoint`, which commits every dirty repo (root plus unlinked nested repos) with generated messages in one step.
+
 ### Changed
 
 - Clicking a Background Jobs panel row for a running task now focuses that subagent's session (with `tui.mouse` on); shell and eval rows have no agent to focus.
@@ -11,6 +19,7 @@
 
 - Fixed `omp auth-gateway check --strict` probing OAuth credentials of structured-key providers (e.g. OpenCode Console sign-ins) with a raw token instead of the credential shape live requests send, which could mark good credentials as failed.
 - Fixed reviewer subagents not seeing already-filed project issues in their system prompt, which let them re-file settled or duplicate findings.
+- Fixed `edit` refusing every `knowledge://` note with "is written through `write`, not edited"; knowledge notes can be patched in place again while `write` still normalizes their frontmatter.
 - Fixed agents polling running subagents or background jobs (sleep loops in eval or shell, repeated `agent://`/`proc://` reads) instead of ending the turn: the system prompt's closing rules no longer forbid ending a turn that is only waiting on auto-delivered results, and an empty or thinking-only turn while background work runs is no longer treated as a stop that needs a retry.
 - Fixed subagents stalling while "waiting on" a background job: idle subagents are no longer shut down while their background jobs are still running, so the job result wakes them.
 - Fixed a subagent revived by a message never reporting back when it waited on a background job: its final result after the job finished was dropped, so the parent agent stopped instead of continuing.
