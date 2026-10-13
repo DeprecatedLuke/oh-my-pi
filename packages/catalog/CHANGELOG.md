@@ -10,6 +10,70 @@
 
 - Fixed ClinePass GLM-5.2 catalog metadata advertising the unsupported `max` reasoning effort instead of the gateway's `xhigh` top tier.
 
+### Added
+
+- Added Muse Code's subscription-only Muse Wonder Full and Wonder contributor tiers with the `max` effort, recording API-equivalent cost instead of $0: Wonder Full at Muse Wonder's $4 input / $0.20 cached / $20 output per 1M tokens, contributor tiers at the measured $1.60 / $0.08 / $8 ([#15522](https://github.com/can1357/oh-my-pi/pull/15522) by [@eggpeat](https://github.com/eggpeat))
+- Added the `classifier-cot-extraction` rule axis, set for Claude, marking models whose classifier refuses earlier reasoning quoted back into their input ([#15436](https://github.com/can1357/oh-my-pi/pull/15436) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Changed
+
+- Devin models with a long-context price tier (GPT-5.4 through 5.6 standard lanes, GPT-6 through 6.1, Gemini Pro, and Grok 4.5 through 4.7) now default to a 272K or 200K context window, where that pricing starts; run `/extended-context on` to use the full window at long-context rates ([#14891](https://github.com/can1357/oh-my-pi/pull/14891) by [@eggpeat](https://github.com/eggpeat)).
+- Devin SWE-2, SWE-1.7, and GLM-5.2 fallback pricing no longer charges cache writes at the input rate, since Devin publishes no cache-write rate for them ([#14891](https://github.com/can1357/oh-my-pi/pull/14891) by [@eggpeat](https://github.com/eggpeat)).
+
+### Fixed
+
+- Fixed Devin Claude and GPT-5.6 through GPT-6 models pricing prompt-cache writes at $0; they now use Devin's published rate of 1.25x input, and Adaptive uses its input rate ([#14891](https://github.com/can1357/oh-my-pi/pull/14891) by [@eggpeat](https://github.com/eggpeat)).
+- Fixed Devin GPT-5.4 through GPT-6.1, Gemini Pro, and Grok 4.5 through 4.7 models missing the long-context price tiers Devin publishes above 272K and 200K prompt tokens ([#14891](https://github.com/can1357/oh-my-pi/pull/14891) by [@eggpeat](https://github.com/eggpeat)).
+- Fixed Devin Fusion pairings ignoring their lead model's rules, including its cache-write rate and long-context tier ([#14891](https://github.com/can1357/oh-my-pi/pull/14891) by [@eggpeat](https://github.com/eggpeat)).
+
+### Removed
+
+- Removed the Codex `toolMode` model field (`code_mode_only`); Codex discovery no longer maps `tool_mode`
+
+## [18.10.3] - 2026-10-12
+
+### Breaking Changes
+
+- `resolveInlineImageByteBudget(model, officialEndpoint)` and `resolveImageCountBudget(model, officialEndpoint)` take whether the request reaches the official endpoint instead of reading `compat.officialEndpoint`, which misses request-time reroutes such as `ANTHROPIC_BASE_URL`; pass pi-ai's `reachesOfficialEndpoint(model)` ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Added
+
+- Added Muse Wonder (`muse-wonder-1.0`) to Meta and Muse Code with its `minimal`–`max` effort ladder and pricing
+- Added the `thinking-unverified` rule axis: on hosts whose model list carries no capability metadata (Meta, Muse Code), unrecognized models now offer an opt-in thinking ladder (`ThinkingConfig.unverified`) instead of none
+- Added `thinking-unverified` axis for offering reasoning ladders on unclassified model IDs
+- Added `Muse Wonder 1.0` model definition to Meta provider
+- Added the opt-in `snapcompact-image-reads` axis: snapcompact images a fresh `read` result only for readers whose rule sets it; Claude Opus 5.5 and later opt in ([#14249](https://github.com/can1357/oh-my-pi/pull/14249) by [@will-bogusz](https://github.com/will-bogusz))
+- Added the `image-count-budget` rule for how many images one request may carry (Anthropic 90, Codex 200, other hosts unchanged) and the `official-image-count-budget` override that applies only on the official endpoint: Anthropic 600 (100 on 200k-window Claude models), Codex 2,000 ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+- Added a 24 MB inline-image byte budget for the Codex backend, which now counts as its official endpoint at its default URL and at paths under it such as `/codex/responses` ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+- Added `isOfficialCodexApiUrl` to `wire/codex`, moved from pi-ai ([#15434](https://github.com/can1357/oh-my-pi/pull/15434) by [@will-bogusz](https://github.com/will-bogusz))
+- Added `verified` to `image-tokenization` rules, marking the Claude 4.7+ high-res tier and the GPT-5.5 to 6.1 and gpt-6-astra rules as matching measured provider billing ([#15442](https://github.com/can1357/oh-my-pi/pull/15442) by [@will-bogusz](https://github.com/will-bogusz))
+- Added the `image-max-edge` axis and `resolveImageMaxEdge()` for hosts that shrink images before the model reads them; Cursor's Claude and GPT models and its `default` (Auto) route fit 1024×1024 ([#15448](https://github.com/can1357/oh-my-pi/pull/15448) by [@will-bogusz](https://github.com/will-bogusz))
+- Added the `thinking-replay-tokens` axis; Claude lines set it to `output` on every host, since a replayed signed thinking block bills the turn's full reasoning, not the signature's bytes ([#15446](https://github.com/can1357/oh-my-pi/pull/15446) by [@will-bogusz](https://github.com/will-bogusz))
+- Added a KDL opt-in for sibling subagent prompt-cache sharing, enabled for Muse Code's Spark 1.3, Wonder 1.0, and Wonder Full 1.0 variants over the Responses API ([#15467](https://github.com/can1357/oh-my-pi/pull/15467) by [@iliaal](https://github.com/iliaal))
+
+### Changed
+
+- Updated model definitions and compatibility rules for provider metadata
+- Google Antigravity, xAI and Cursor requests keep up to 60 images, 20 for Claude on Antigravity and Cursor, up from 5; this counts snapcompact frames and live screenshots together ([#15449](https://github.com/can1357/oh-my-pi/pull/15449) by [@will-bogusz](https://github.com/will-bogusz))
+- Snapcompact sizes archives at the frame prices measured for Antigravity Gemini (a fixed 1,089 tokens), Grok 4.6 to 4.20, and Claude Sonnet 4.6's standard tier ([#15449](https://github.com/can1357/oh-my-pi/pull/15449) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Fixed
+
+- Applied `max-image-dimension` and `max-image-payload-bytes` to Google API models, and declared the 5 MiB per-image limit of Claude on Google Antigravity ([#15444](https://github.com/can1357/oh-my-pi/pull/15444) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed local token counts for OpenAI GPT-5 and later models (Codex, OpenAI, Azure, OpenRouter, Copilot and other hosts) reading about 12% low: their text is now counted with o200k_base instead of a bytes/4 estimate ([#15447](https://github.com/can1357/oh-my-pi/pull/15447) by [@will-bogusz](https://github.com/will-bogusz))
+
+## [18.10.2] - 2026-10-12
+
+### Added
+
+- Added the `honors-claude-code-beta-kill-switch` axis (`compat.honorsClaudeCodeBetaKillSwitch`), on for the `anthropic` provider, so a rule or `models.yml` override decides which providers honor `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` ([#15458](https://github.com/can1357/oh-my-pi/pull/15458) by [@H4vC](https://github.com/H4vC))
+
+## [18.10.0] - 2026-10-12
+
+### Changed
+
+- Raised the default context window for `openai-codex/gpt-6.1-sol` and `gpt-6.1-sol-wm` from 272K to 500K, matching OpenAI's new Codex default; extended context still opens 922K ([#15421](https://github.com/can1357/oh-my-pi/issues/15421))
+
 ## [18.9.2] - 2026-10-11
 
 ### Removed
