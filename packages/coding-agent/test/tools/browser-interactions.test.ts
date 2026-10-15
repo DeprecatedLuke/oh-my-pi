@@ -15,6 +15,7 @@ import { acquireBrowser, releaseBrowser } from "@oh-my-pi/pi-coding-agent/tools/
 import { releaseAllTabs } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 import { TERN_KIT_SOURCE } from "@oh-my-pi/pi-coding-agent/tools/browser/tern/page-kit";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
+import type { ElementHandle } from "puppeteer-core";
 import { chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
@@ -979,7 +980,7 @@ document.getElementById("menu-item").addEventListener("pointerdown", event => {
 	root.innerHTML = "<button>Closed</button>";
 	return root.querySelector("button");
 })()`);
-			const closedButton = closed.asElement();
+			const closedButton = closed.asElement() as unknown as ElementHandle | null;
 			if (!closedButton) throw new Error("Expected the closed-root button");
 			await page.evaluate("document.querySelector('dialog').close()");
 			expect(await clickElement(closedButton, "click closed").then(() => "clicked")).toBe("clicked");

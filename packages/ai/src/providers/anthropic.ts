@@ -1129,7 +1129,6 @@ export interface AnthropicOptions extends StreamOptions {
 	 * including SDK clients such as `AnthropicVertex`.
 	 */
 	client?: AnthropicMessagesClientLike;
-
 }
 
 export type AnthropicClientOptionsArgs = {

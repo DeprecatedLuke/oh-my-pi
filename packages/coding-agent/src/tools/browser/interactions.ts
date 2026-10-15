@@ -559,11 +559,15 @@ async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal
 	let owned = false;
 	try {
 		const proxy = await untilAborted(signal, () =>
-			handle.evaluateHandle(el =>
-				(el as Element).closest('a,button,[role="button"],[role="link"],input[type="button"],input[type="submit"]'),
-			),
+			handle.evaluateHandle(el => {
+				const pageElement = el as unknown as PageElement;
+				return pageElement.closest(
+					'a,button,[role="button"],[role="link"],input[type="button"],input[type="submit"]',
+				);
+			}),
 		);
-		const element = proxy.asElement();
+		// `closest` returns a DOM element when it does not return null.
+		const element = proxy.asElement() as unknown as ElementHandle | null;
 		if (element) {
 			candidate = element;
 			owned = candidate !== handle;

@@ -115,7 +115,13 @@ describe("opencode-go usage provider", () => {
 		const report = await opencodeGoUsageProvider.fetchUsage(
 			{
 				provider: "opencode-go",
-				credential: { type: "oauth", accessToken: "tok", email: "a@example.com", accountId: "acc_1", orgId: "org_1" },
+				credential: {
+					type: "oauth",
+					accessToken: "tok",
+					email: "a@example.com",
+					accountId: "acc_1",
+					orgId: "org_1",
+				},
 			},
 			{ fetch: fakeFetch(usagePayload()) },
 		);
