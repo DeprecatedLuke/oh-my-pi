@@ -35,7 +35,7 @@ import writeDeviceOnlyDescription from "../prompts/tools/write-device-only.md" w
 import type { ToolSession } from "../sdk";
 
 import { routeWriteThroughBridge, shouldRouteWriteThroughBridge } from "./acp-bridge";
-import { type ApprovalDetailsOptions, truncateApprovalDetail, truncateForPrompt } from "./approval";
+import { truncateForPrompt } from "./approval";
 import { assertEditableFile } from "./auto-generated-guard";
 
 import { isReadTruncationNotice } from "@oh-my-pi/pi-tui/tools/hashline-format";
@@ -355,7 +355,7 @@ function emitWriteProgress(
 }
 
 /**
- * If `content` begins with a `#!` shebang, ensure the file is executable.
+ * If `content` begins with an interpreter shebang (not a Rust inner attribute), ensure the file is executable.
  *
  * Mirrors `chmod a+x` (adds user/group/other execute bits to existing mode).
  * Errors are swallowed: chmod failure (e.g. Windows ACL, read-only mount)
@@ -364,7 +364,7 @@ function emitWriteProgress(
  * since Windows (and some mounts) accept it while keeping no execute bits.
  */
 async function maybeMarkExecutableForShebang(absolutePath: string, content: string): Promise<boolean> {
-	if (!content.startsWith("#!")) return false;
+	if (!content.startsWith("#!") || content.startsWith("#![")) return false;
 	try {
 		const stat = await fs.stat(absolutePath);
 		const currentMode = stat.mode & 0o7777;
@@ -470,11 +470,11 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			this.session,
 		);
 	};
-	readonly formatApprovalDetails = (args: unknown, options?: ApprovalDetailsOptions): string[] => {
+	readonly formatApprovalDetails = (args: unknown): string[] => {
 		const params = args as Partial<WriteParams>;
 		const targetPath = typeof params.path === "string" ? params.path : "(missing)";
 		const content = typeof params.content === "string" ? params.content : "";
-		return [`Path: ${truncateForPrompt(targetPath)}`, `Content:\n${truncateApprovalDetail(content, options)}`];
+		return [`Path: ${truncateForPrompt(targetPath)}`, `Content:\n${truncateForPrompt(content)}`];
 	};
 	readonly label = "Write";
 	get description(): string {
