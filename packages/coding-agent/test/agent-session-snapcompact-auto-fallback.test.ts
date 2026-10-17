@@ -351,7 +351,7 @@ describe("AgentSession auto-snapcompact local-blocker fallback", () => {
 			tokensBefore: preparation.tokensBefore,
 			details: { readFiles: [], modifiedFiles: [] },
 		}));
-		const dropImagesSpy = vi.spyOn(session, "dropImages").mockResolvedValue({ removed: 1 });
+		const dropImagesSpy = vi.spyOn(session, "dropImages").mockResolvedValue({ removed: 1, tokensFreed: 0 });
 
 		harness.triggerThreshold();
 		const result = await harness.awaitCompactionEnd();
@@ -372,7 +372,7 @@ describe("AgentSession auto-snapcompact local-blocker fallback", () => {
 			methodOrder: ["soft"],
 		});
 		session = harness.session;
-		const dropImagesSpy = vi.spyOn(session, "dropImages").mockResolvedValue({ removed: 1 });
+		const dropImagesSpy = vi.spyOn(session, "dropImages").mockResolvedValue({ removed: 1, tokensFreed: 0 });
 
 		harness.triggerThreshold();
 		const result = await harness.awaitCompactionEnd();

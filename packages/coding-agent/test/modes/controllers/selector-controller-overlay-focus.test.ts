@@ -148,6 +148,7 @@ describe("SelectorController.showModelSelector", () => {
 				modelRegistry: {
 					getError: () => undefined,
 					refresh: async () => {},
+					refreshIfStale: async () => false,
 					getAll: () => [],
 					getAvailable: () => [],
 				},
