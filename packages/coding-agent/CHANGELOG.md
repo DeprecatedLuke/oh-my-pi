@@ -4,10 +4,11 @@
 
 ### Breaking Changes
 
-- Removed the agent `git` tool (`op: "checkpoint"`/`"status"`); checkpoints now live on the `git` command: `omp git checkpoint` lists the dirty repos and `omp git checkpoint <repo>...` commits only the named ones, so an agent commits just the repos it is responsible for.
+- Removed the agent `git` tool (`op: "checkpoint"`/`"status"`); checkpoints now live on the `git` command: `omp git checkpoint` lists the dirty repos and `omp git checkpoint <repo>...` commits only the named ones, so an agent commits just the repos it is responsible for. Agents use the new `git_checkpoint` tool for the same flow.
 
 ### Added
 
+- Added the `git_checkpoint` agent tool: a bare call lists the dirty repos without committing, and a call naming only those repos commits them as local WIP checkpoints. It shares one implementation with `omp git checkpoint`, so matching rules, listing output, and failure isolation cannot drift between the CLI and the tool.
 - Added `/git checkpoint`, which commits every dirty repo (root plus unlinked nested repos) with generated messages in one step.
 
 ### Changed

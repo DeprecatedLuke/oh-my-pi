@@ -1,7 +1,8 @@
 import * as path from "node:path";
-import type { ModelRegistry } from "../config/model-registry";
+import { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import { detectGitRepos, discoverNestedGitRepos, formatRepoLabel } from "../patches";
+import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import * as git from "../utils/git";
 
@@ -30,6 +31,19 @@ export interface CheckpointCommitOptions {
 	settings: Settings;
 	sessionId?: string;
 }
+
+/** Model access for the commit stage, acquired only once a selection is about to commit. */
+export interface CheckpointCommitDeps extends Omit<CheckpointCommitOptions, "cwd"> {
+	/** Release resources acquired for the commit (e.g. a standalone auth storage). */
+	release?: () => void;
+}
+
+/** Outcome of one {@link runCheckpointStage} call. */
+export type CheckpointStageResult =
+	| { stage: "clean" }
+	| { stage: "listed"; dirty: DirtyRepo[] }
+	| { stage: "unmatched"; unmatched: string[]; dirty: DirtyRepo[] }
+	| { stage: "committed"; dirty: DirtyRepo[]; entries: CheckpointRepoEntry[] };
 
 /**
  * Build git pathspecs that exclude nested repositories from a parent repo's
@@ -133,6 +147,49 @@ export async function commitCheckpointRepos(
 		}
 	}
 	return entries;
+}
+
+/**
+ * Two-stage checkpoint shared by `omp git checkpoint` and the `git_checkpoint` tool.
+ * Without names, list the dirty repos and commit nothing, so the caller must name
+ * exactly the repos it is responsible for. With names, every name must match a dirty
+ * repo before anything is committed. `acquireCommitDeps` runs only for the commit stage;
+ * its `release` runs once committing finishes.
+ */
+export async function runCheckpointStage(
+	cwd: string,
+	names: readonly string[],
+	acquireCommitDeps: () => Promise<CheckpointCommitDeps>,
+): Promise<CheckpointStageResult> {
+	const dirty = await dirtyRepos(cwd);
+	if (dirty.length === 0) return { stage: "clean" };
+	if (names.length === 0) return { stage: "listed", dirty };
+	const { selected, unmatched } = selectDirtyRepos(cwd, dirty, names);
+	if (unmatched.length > 0) return { stage: "unmatched", unmatched, dirty };
+	const { release, ...deps } = await acquireCommitDeps();
+	try {
+		return { stage: "committed", dirty, entries: await commitCheckpointRepos(selected, { cwd, ...deps }) };
+	} finally {
+		release?.();
+	}
+}
+
+/**
+ * Build a standalone model registry for checkpoint commits outside a live session
+ * (the CLI, or a tool session without a registry). The returned `release` closes the
+ * auth storage it opened.
+ */
+export async function createStandaloneCommitDeps(cwd: string, settings: Settings): Promise<CheckpointCommitDeps> {
+	const authStorage = await discoverAuthStorage(undefined, { settings });
+	try {
+		const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
+		await modelRegistry.refresh();
+		await loadCliExtensionProviders(modelRegistry, settings, cwd);
+		return { modelRegistry, settings, release: () => authStorage.close() };
+	} catch (error) {
+		authStorage.close();
+		throw error;
+	}
 }
 
 async function commitSingleRepo(repo: DirtyRepo, options: CheckpointCommitOptions): Promise<CheckpointRepoEntry> {

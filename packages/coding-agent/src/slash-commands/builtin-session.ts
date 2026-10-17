@@ -591,7 +591,8 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			// Operator-invoked: the user owns every dirty repo, so commit them all in one
-			// step. Agents go through the two-stage `omp git checkpoint [repo...]` CLI instead.
+			// step. Agents go through the `git_checkpoint` tool (or the equivalent
+			// two-stage `omp git checkpoint [repo...]` CLI) instead.
 			const { ctx } = runtime;
 			try {
 				const cwd = ctx.sessionManager.getCwd();

@@ -3,7 +3,9 @@
  * staging sidebar, and generated or manual commit composer.
  *
  * `omp git checkpoint` is the non-interactive, two-stage WIP commit flow:
- * bare it lists the dirty repos; with repo names it commits only those.
+ * bare it lists the dirty repos; with repo names it commits only those. The
+ * `git_checkpoint` agent tool runs the same stages through the shared
+ * `runCheckpointStage`, so neither surface can drift from the other.
  */
 
 import * as path from "node:path";
@@ -12,16 +14,13 @@ import { Args, Command, Flags } from "@oh-my-pi/pi-utils/cli";
 import { gitHelp as commandHelp } from "../cli/command-help";
 import { runGitTui } from "../cli/git-tui";
 import {
-	commitCheckpointRepos,
-	dirtyRepos,
+	createStandaloneCommitDeps,
 	formatCheckpointResult,
 	formatDirtyRepoList,
-	selectDirtyRepos,
+	runCheckpointStage,
 } from "../commit/checkpoint";
-import { ModelRegistry } from "../config/model-registry";
 import { Settings, settings } from "../config/settings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
 
 import { cfgColorBlindMode, cfgSymbolPreset, cfgThemeDark, cfgThemeLight } from "../modes/settings";
 
@@ -86,35 +85,26 @@ export default class Git extends Command {
  * match a dirty repo before anything is committed.
  */
 async function runCheckpoint(cwd: string, names: readonly string[]): Promise<number> {
-	const dirty = await dirtyRepos(cwd);
-	if (dirty.length === 0) {
-		process.stdout.write("Nothing to commit — all repos are clean.\n");
-		return 0;
-	}
-	if (names.length === 0) {
-		process.stdout.write(
-			`Detected repos with changes:\n${formatDirtyRepoList(dirty)}\n\nCommit only the repos you are responsible for: omp git checkpoint <repo>...\n`,
-		);
-		return 0;
-	}
-	const { selected, unmatched } = selectDirtyRepos(cwd, dirty, names);
-	if (unmatched.length > 0) {
-		process.stderr.write(
-			`No dirty repo matches: ${unmatched.join(", ")}\nDetected repos with changes:\n${formatDirtyRepoList(dirty)}\n`,
-		);
-		return 1;
-	}
-
-	const settingsInstance = await Settings.init({ cwd });
-	const authStorage = await discoverAuthStorage(undefined, { settings: settingsInstance });
-	try {
-		const modelRegistry = new ModelRegistry(authStorage, undefined, { settings: settingsInstance });
-		await modelRegistry.refresh();
-		await loadCliExtensionProviders(modelRegistry, settingsInstance, cwd);
-		const entries = await commitCheckpointRepos(selected, { cwd, modelRegistry, settings: settingsInstance });
-		process.stdout.write(`${formatCheckpointResult(entries)}\n`);
-		return entries.some(entry => entry.status === "failed") ? 1 : 0;
-	} finally {
-		authStorage.close();
+	const result = await runCheckpointStage(cwd, names, async () => {
+		const settingsInstance = await Settings.init({ cwd });
+		return createStandaloneCommitDeps(cwd, settingsInstance);
+	});
+	switch (result.stage) {
+		case "clean":
+			process.stdout.write("Nothing to commit — all repos are clean.\n");
+			return 0;
+		case "listed":
+			process.stdout.write(
+				`Detected repos with changes:\n${formatDirtyRepoList(result.dirty)}\n\nCommit only the repos you are responsible for: omp git checkpoint <repo>...\n`,
+			);
+			return 0;
+		case "unmatched":
+			process.stderr.write(
+				`No dirty repo matches: ${result.unmatched.join(", ")}\nDetected repos with changes:\n${formatDirtyRepoList(result.dirty)}\n`,
+			);
+			return 1;
+		case "committed":
+			process.stdout.write(`${formatCheckpointResult(result.entries)}\n`);
+			return result.entries.some(entry => entry.status === "failed") ? 1 : 0;
 	}
 }

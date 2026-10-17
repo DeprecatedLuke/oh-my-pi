@@ -56,6 +56,7 @@ import { cfgIdaAvailable } from "../ida/install";
 import { EvalTool } from "./eval";
 import { resolveEvalBackends } from "./eval-backends";
 import { GithubTool } from "./gh";
+import { GitCheckpointTool } from "./git-checkpoint";
 import { GlobTool } from "./glob";
 import { GrepTool } from "./grep";
 import { IdaTool } from "./ida";
@@ -139,6 +140,7 @@ export * from "./eval-backends";
 export * from "./file-mutation-queue";
 export * from "./file-write-fallback";
 export * from "./gh";
+export * from "./git-checkpoint";
 export * from "./glob";
 export * from "./grep";
 export * from "./jfind";
@@ -648,6 +650,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	ida: IdaTool.createIf,
 	eval: s => new EvalTool(s),
 	github: GithubTool.createIf,
+	git_checkpoint: GitCheckpointTool.createIf,
 	glob: s => new GlobTool(s, { rootPathAlias: true }),
 	grep: s => new GrepTool(s),
 	find: s => new FindTool(s),

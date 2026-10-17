@@ -10,6 +10,7 @@ export const BUILTIN_TOOL_NAMES = [
 	"ida",
 	"eval",
 	"github",
+	"git_checkpoint",
 	"glob",
 	"grep",
 	"find",
