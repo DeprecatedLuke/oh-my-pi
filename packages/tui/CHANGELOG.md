@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed transcript lines hidden behind the todo HUD after a turn ended going missing from both the screen and terminal scrollback while the HUD stayed visible
+
 ## [18.12.0] - 2026-10-17
 
 ### Breaking Changes

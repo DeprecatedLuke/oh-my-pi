@@ -29,6 +29,10 @@ import { ensureThemeSync, getEditorTheme, theme } from "../theme/theme";
 const DOUBLE_INTERRUPT_MS = 500;
 // How long idle chrome must hold its height after a turn before it is treated as permanent.
 const IDLE_CHROME_SETTLE_MS = 250;
+// Self-clearing HUDs (todos, background jobs) usually vanish shortly after a turn, but a todo plan
+// lingers for its auto-clear delay (or indefinitely while tasks stay open). Rows such a HUD displaces
+// are clipped, not retired, so one that outlives this window is promoted like persistent chrome.
+const SELF_CLEARING_CHROME_SETTLE_MS = 1000;
 
 /** Live settings that affect the composer before and after session adoption. */
 export interface ComposerPreferences {
@@ -417,11 +421,19 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		this.#rowsBelow = new Map(ends.map(({ root, end }) => [root, after.length - end]));
 		const transientFloor = this.#syncTransientFloor(transientRows);
 		// Eligible chrome excludes user-driven transient rows above their resting height and every
-		// self-clearing row; contraction, floor and rebaseline all use it.
+		// self-clearing row; contraction, floor and rebaseline all use it. Self-clearing rows never
+		// seed the floor (a resumed todo HUD's first paint is its peak), but once idle chrome that
+		// includes them settles and is promoted, they stay in the measure so their collapse contracts it.
 		const eligibleChrome = after.length - (transientRows - transientFloor) - selfClearingRows;
-		const promotedChromeContracted = this.#chromeFloorPromoted && eligibleChrome < (this.#chromeFloor ?? 0);
-		this.#chromeFloor = Math.min(this.#chromeFloor ?? eligibleChrome, eligibleChrome);
-		this.#rebaselineChromeFloor(this.#runActive || transcript.hasActiveBlock(), eligibleChrome);
+		const promotableChrome = eligibleChrome + selfClearingRows;
+		const measuredChrome = this.#chromeFloorPromoted ? promotableChrome : eligibleChrome;
+		const promotedChromeContracted = this.#chromeFloorPromoted && measuredChrome < (this.#chromeFloor ?? 0);
+		this.#chromeFloor = Math.min(this.#chromeFloor ?? measuredChrome, measuredChrome);
+		this.#rebaselineChromeFloor(
+			this.#runActive || transcript.hasActiveBlock(),
+			promotableChrome,
+			selfClearingRows > 0 ? SELF_CLEARING_CHROME_SETTLE_MS : IDLE_CHROME_SETTLE_MS,
+		);
 		const belowFloor = this.#chromeFloor;
 		// Offer history under capacity pressure only: blocks stay live (and keep
 		// reflowing to the current width) while the screen has room. A batch
@@ -705,8 +717,8 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		}
 	}
 
-	/** Raise the floor to eligible idle chrome that survives the settle window, even if it appeared after the run. */
-	#rebaselineChromeFloor(busy: boolean, chrome: number): void {
+	/** Raise the floor to idle chrome that survives `settleMs`, even if it appeared after the run. */
+	#rebaselineChromeFloor(busy: boolean, chrome: number, settleMs: number): void {
 		if (busy || chrome <= (this.#chromeFloor ?? chrome)) {
 			this.#resetIdleChrome();
 			return;
@@ -720,7 +732,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		if (this.#idleChrome === chrome && this.#idleChromeTimer !== undefined) return;
 		this.#resetIdleChrome();
 		this.#idleChrome = chrome;
-		this.#idleChromeTimer = this.ui.scheduleAfter(IDLE_CHROME_SETTLE_MS, () => {
+		this.#idleChromeTimer = this.ui.scheduleAfter(settleMs, () => {
 			this.#idleChromeTimer = undefined;
 			this.#idleChromeSettled = true;
 			this.ui.requestRender();

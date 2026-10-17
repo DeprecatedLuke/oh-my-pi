@@ -772,6 +772,68 @@ describe("composer inline shrink (#11007)", () => {
 		}
 	});
 
+	it("retires transcript rows displaced by a self-clearing HUD that outlives the run", async () => {
+		const rows = 30;
+		const shell = Array.from({ length: 12 }, (_, i) => `shell${i}`);
+		const terminal = new VirtualTerminal(COLUMNS, rows);
+		terminal.write(`${shell.join("\r\n")}${"\r\n".repeat(rows + 1)}`);
+		const scheduler = new VirtualRenderScheduler();
+		const composer = new Composer({
+			terminal,
+			tuiOptions: { renderScheduler: scheduler },
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
+		});
+		const transcript = new TranscriptContainer();
+		const todos = new InlineWidget();
+		const editor = new Container();
+		editor.addChild(new Text("EDITOR", 0, 0));
+		composer.setRuntimeChildren([transcript, todos, editor], {
+			transientChrome: [editor],
+			selfClearingChrome: [todos],
+		});
+		composer.start({ playWelcomeIntro: false });
+		const reachable = (): string[] =>
+			terminal
+				.getScrollBuffer()
+				.map(row => Bun.stripANSI(row).trim())
+				.filter(row => /^(shell|line)\d+$/.test(row));
+		const view = (): string[] => terminal.getViewport().map(row => Bun.stripANSI(row).trim());
+		try {
+			await scheduler.settle(terminal);
+			composer.setRunActive(true);
+			const answer = Array.from({ length: 110 }, (_, i) => `line${i}`);
+			for (const [i, row] of answer.entries()) {
+				// The todo plan is written partway through the turn.
+				if (i === 20) todos.rows = 8;
+				transcript.addChild({ render: () => [row] });
+				composer.ui.requestRender();
+				await scheduler.settle(terminal);
+			}
+			composer.setRunActive(false);
+			// Open tasks keep the HUD up well past the self-clearing settle window.
+			await scheduler.advance(terminal, 1500);
+
+			// Scrollback plus screen hold every row once, in order: none clipped under the HUD.
+			expect(reachable()).toEqual([...shell, ...answer]);
+			const lastRow = view().indexOf("line109");
+			const hudTop = view().indexOf("Live widget row 0");
+			expect(lastRow).toBeGreaterThanOrEqual(0);
+			expect(hudTop).toBeGreaterThan(lastRow);
+			expect(view().filter(row => row.startsWith("Live widget row "))).toHaveLength(8);
+
+			// The HUD finally auto-clears: the promoted floor contracts without re-emitting or dropping rows.
+			todos.rows = 0;
+			composer.ui.requestRender();
+			await scheduler.advance(terminal, 1500);
+			expect(view().some(row => row.startsWith("Live widget row "))).toBe(false);
+			expect(view().indexOf("line109")).toBeGreaterThanOrEqual(0);
+			expect(blankBand(terminal)).toBeLessThanOrEqual(2);
+			expect(reachable()).toEqual([...shell, ...answer]);
+		} finally {
+			composer.stop();
+		}
+	});
+
 	it("does not bill a startup draft replayed before runtime mount into the floor", async () => {
 		const rows = 30;
 		const shell = Array.from({ length: 12 }, (_, i) => `shell${i}`);
