@@ -868,6 +868,8 @@ export interface BackgroundJobRow {
 	id: string;
 	/** A task's live current action, or a shell/eval job's label. */
 	summary: string;
+	/** A task agent's latest self-estimated completion (0–100); undefined until the first probe. */
+	completionPercent?: number;
 	ageMs: number;
 }
 
@@ -875,7 +877,7 @@ export interface BackgroundJobRow {
  * Background Jobs panel lines, e.g.
  *
  * Background Jobs (2 running, 1 completed):
- *   [task] SomeTask: summarized current action - 1m23s
+ *   [task] SomeTask: summarized current action 42% - 1m23s
  *   [shell] some long command - 1m23s
  *
  * Settled counts cover jobs seen running since the panel last cleared.
@@ -903,17 +905,23 @@ export function renderBackgroundJobsLines(
 	for (const job of jobs) {
 		const tag = job.agentType && job.agentType !== "task" ? `[${clean(job.agentType)}]` : JOB_TYPE_TAG[job.type];
 		const id = clean(job.id);
+		const percent = job.completionPercent !== undefined ? ` ${Math.round(job.completionPercent)}%` : "";
 		const age = ` - ${formatDuration(Math.max(0, job.ageMs))}`;
 		const summary = clean(job.summary);
 		const showSummary = summary.length > 0 && summary !== id;
 		const head = id ? `  ${tag} ${id}${showSummary ? ": " : ""}` : `  ${tag} `;
-		const budget = contentColumns - visibleWidth(head) - visibleWidth(age);
+		const budget = contentColumns - visibleWidth(head) - visibleWidth(percent) - visibleWidth(age);
 		const text = showSummary ? (budget > 0 ? truncateToWidth(summary, budget) : "") : id ? "" : "(no label)";
 		const styledHead = id
 			? `  ${theme.fg("dim", tag)} ${theme.fg("accent", theme.bold(id))}${showSummary ? ": " : ""}`
 			: `  ${theme.fg("dim", tag)} `;
 		// A long tag or id alone can still overflow; the final cut keeps one row per job.
-		lines.push(truncateToWidth(`${styledHead}${text}${theme.fg("dim", age)}`, contentColumns));
+		lines.push(
+			truncateToWidth(
+				`${styledHead}${text}${percent ? theme.fg("accent", percent) : ""}${theme.fg("dim", age)}`,
+				contentColumns,
+			),
+		);
 	}
 	return lines;
 }
@@ -1528,6 +1536,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				agentId,
 				id: formatTaskId(displayId),
 				summary: summary || label,
+				completionPercent: progress?.completionPercent,
 				ageMs,
 			};
 		};

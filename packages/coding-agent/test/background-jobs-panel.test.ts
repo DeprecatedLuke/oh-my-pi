@@ -49,10 +49,13 @@ describe("renderBackgroundJobsLines", () => {
 		const jobs: BackgroundJobRow[] = [
 			...rows("x".repeat(400)),
 			{ type: "task", agentType: "a".repeat(60), id: "Very.Long.Nested.Agent.Id", summary: "s", ageMs: 1 },
+			{ type: "task", id: "Worker", summary: "y".repeat(400), completionPercent: 42, ageMs: 1 },
 		];
 		for (const columns of [24, 80, 120]) {
 			const lines = renderBackgroundJobsLines(jobs, { completed: 12, failed: 3, cancelled: 4 }, columns);
 			expect(new BackgroundJobsView(lines, []).render(columns)).toHaveLength(lines.length);
+			// The summary yields width to the completion estimate, never the other way round.
+			if (columns >= 80) expect(Bun.stripANSI(lines.at(-1)!)).toEndWith("… 42% - 1ms");
 		}
 	});
 

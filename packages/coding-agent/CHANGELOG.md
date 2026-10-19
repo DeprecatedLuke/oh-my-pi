@@ -10,6 +10,7 @@
 
 - Added the `git_checkpoint` agent tool: a bare call lists the dirty repos without committing, and a call naming only those repos commits them as local WIP checkpoints. It shares one implementation with `omp git checkpoint`, so matching rules, listing output, and failure isolation cannot drift between the CLI and the tool.
 - Added `/git checkpoint`, which commits every dirty repo (root plus unlinked nested repos) with generated messages in one step.
+- Added a completion percentage to Background Jobs panel subagent rows, showing each running agent's latest self-estimate.
 
 ### Changed
 
