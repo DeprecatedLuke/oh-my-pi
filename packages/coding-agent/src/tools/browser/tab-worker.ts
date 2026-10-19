@@ -63,6 +63,7 @@ import {
 	connectPuppeteer,
 	DEFAULT_VIEWPORT,
 	isPuppeteerHandle,
+	isPuppeteerTimeout,
 	loadPuppeteerInWorker,
 	loadedKnownDevices,
 	loadedNetworkConditions,
@@ -2202,11 +2203,7 @@ export class WorkerCore {
 			// our per-op deadline fired, or puppeteer's own (equal) timeout fired first — having
 			// already torn down the CDP action via the op signal, so no work is left dangling.
 			// Cell-budget aborts and uncapped helpers (goto/evaluate) keep their native errors.
-			if (
-				capped &&
-				!cellSignal.aborted &&
-				(opTimeout?.aborted || (err instanceof Error && err.name === "TimeoutError"))
-			) {
+			if (capped && !cellSignal.aborted && (opTimeout?.aborted || isPuppeteerTimeout(err))) {
 				const refusal = err instanceof ClickRefusedError ? err.refusal : undefined;
 				const count = selector ? await this.#selectorMatchCount(selector) : undefined;
 				const hint = refusal
@@ -2344,7 +2341,7 @@ export class WorkerCore {
 							page.goto(url, options),
 						);
 					} catch (err) {
-						if (err instanceof Error && err.name === "TimeoutError") {
+						if (isPuppeteerTimeout(err)) {
 							// Abandon the hung navigation NOW — a still-pending load stalls every
 							// later op on this page and cascades into more opaque timeouts.
 							await this.#stopLoading();
