@@ -10,6 +10,18 @@
 
 - Fixed ClinePass GLM-5.2 catalog metadata advertising the unsupported `max` reasoning effort instead of the gateway's `xhigh` top tier.
 
+## [18.12.2] - 2026-10-18
+
+### Changed
+
+- Seeded TypeSafe `jev-1.14.0` and OpenRouter `typesafe/jev-1.14`, and made them the `judge` role defaults and TypeSafe's default model; TypeSafe discovery keeps seeded ids its alias-only `/v1/models` listing omits
+
+## [18.12.1] - 2026-10-17
+
+### Fixed
+
+- Anthropic's `request-encoding-rejection` now also matches the API's "request body is not valid JSON" 400, which a gzip body gets when a proxy drops its `Content-Encoding` header ([#16108](https://github.com/can1357/oh-my-pi/pull/16108) by [@alphastorm](https://github.com/alphastorm))
+
 ## [18.12.0] - 2026-10-17
 
 ### Added

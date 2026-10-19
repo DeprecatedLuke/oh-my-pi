@@ -48,6 +48,8 @@ function createContext(
 		isCompacting?: boolean;
 		isStreaming?: boolean;
 		runIdleCompaction?: AgentSession["runIdleCompaction"];
+		promptCacheEntry?: AgentSession["promptCacheEntry"];
+		hasPendingAsyncWork?: AgentSession["hasPendingAsyncWork"];
 		runEphemeralTurn?: AgentSession["runEphemeralTurn"];
 		present?: InteractiveModeContext["present"];
 		sessionName?: string;
@@ -80,12 +82,13 @@ function createContext(
 			isCompacting: options.isCompacting ?? false,
 			isStreaming: options.isStreaming ?? false,
 			runIdleCompaction,
+			promptCacheEntry: options.promptCacheEntry,
 			runEphemeralTurn,
 			model: { provider: "anthropic", id: "claude-sonnet-4-5" },
 			messages: [createAssistantMessage()],
 			getContextUsage: () => ({ tokens: 210, contextWindow: 1_000, percent: 21 }),
 			getGoalModeState: () => goalState,
-			hasPendingAsyncWork: () => false,
+			hasPendingAsyncWork: options.hasPendingAsyncWork ?? (() => false),
 			getAsyncJobSnapshot: (_options?: { recentLimit?: number; scope?: "owner" | "all" }) => ({
 				running: [],
 				recent: [],
@@ -117,51 +120,11 @@ describe("EventController idle compaction teardown", () => {
 		resetSettingsForTest();
 	});
 
-	function makeContext(
-		runIdleCompaction: () => void,
-		hasPendingAsyncWork: () => boolean = () => false,
-	): InteractiveModeContext {
-		const context = {
-			settings,
-			isInitialized: true,
-			loadingAnimation: undefined,
-			streamingComponent: undefined,
-			streamingMessage: undefined,
-			pendingTools: new Map<string, unknown>(),
-			flushPendingModelSwitch: async () => {},
-			flushPendingCommandOutput: () => {},
-			ui: { requestRender: vi.fn() },
-			chatContainer: { removeChild: vi.fn() },
-			statusContainer: { clear: vi.fn() },
-			statusLine: { invalidate: vi.fn(), markActivityEnd: vi.fn() },
-			updateEditorTopBorder: vi.fn(),
-			syncRetryHintRow: vi.fn(),
-			refreshBackgroundJobs: () => {},
-			editor: { getText: () => "" },
-			sessionManager: { getSessionName: () => undefined },
-			session: {
-				isCompacting: false,
-				isStreaming: false,
-				runIdleCompaction,
-				hasPendingAsyncWork,
-				getAsyncJobSnapshot: (_options?: { recentLimit?: number; scope?: "owner" | "all" }) => ({
-					running: [],
-					recent: [],
-					delivery: { queued: 0, delivering: false, pendingJobIds: [] },
-				}),
-				getContextUsage: () => ({ tokens: 210 }),
-				agent: { state: { messages: [createAssistantMessage()] } },
-			},
-			get viewSession() {
-				return (this as typeof context).session;
-			},
-			clearTransientSessionUi: () => {},
-		} as unknown as InteractiveModeContext;
-		return context;
-	}
 	it("cancels scheduled idle compaction when disposed", async () => {
-		const runIdleCompaction = vi.fn();
-		const controller = new EventController(makeContext(runIdleCompaction));
+		const runIdleCompaction = vi.fn(async () => {});
+		const context = createContext({ runIdleCompaction });
+
+		const controller = new EventController(context);
 		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
 		controller.dispose();
 		vi.advanceTimersByTime(60_000);
@@ -173,7 +136,7 @@ describe("EventController idle compaction teardown", () => {
 		// Positive control: with the gate clear, the same harness schedules and
 		// fires, so the gated test below proves the gate (not a dead scheduler).
 		const runIdleCompaction = vi.fn();
-		const controller = new EventController(makeContext(runIdleCompaction, () => false));
+		const controller = new EventController(createContext({ runIdleCompaction, hasPendingAsyncWork: () => false }));
 		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
 		vi.advanceTimersByTime(60_000);
 
@@ -205,11 +168,85 @@ describe("EventController idle compaction teardown", () => {
 
 	it("does not schedule idle compaction while background jobs are running", async () => {
 		const runIdleCompaction = vi.fn();
-		const controller = new EventController(makeContext(runIdleCompaction, () => true));
+		const controller = new EventController(createContext({ runIdleCompaction, hasPendingAsyncWork: () => true }));
 		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
 		vi.advanceTimersByTime(60_000);
 
 		expect(runIdleCompaction).not.toHaveBeenCalled();
+		controller.dispose();
+	});
+
+	it("waits for the prompt cache lifetime instead of the fallback delay when it is known", async () => {
+		const runIdleCompaction = vi.fn(async () => {});
+		const context = createContext({
+			runIdleCompaction,
+			promptCacheEntry: { touchedAt: Date.now(), tier: "long", ttlMs: 3_600_000 },
+		});
+		const controller = new EventController(context);
+		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
+
+		// The 60s fallback would have fired long ago; the 1h entry is refreshed at 54 min.
+		vi.advanceTimersByTime(54 * 60_000 - 5_001);
+		expect(runIdleCompaction).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(runIdleCompaction).toHaveBeenCalledTimes(1);
+		controller.dispose();
+	});
+
+	it("compacts right away when the turn settles past the refresh point but before expiry", async () => {
+		const runIdleCompaction = vi.fn(async () => {});
+		const context = createContext({
+			runIdleCompaction,
+			promptCacheEntry: { touchedAt: Date.now() - 59 * 60_000, tier: "long", ttlMs: 3_600_000 },
+		});
+		const controller = new EventController(context);
+		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
+
+		// The entry expires in one minute; the 60s fallback would land after it.
+		vi.advanceTimersByTime(1);
+		expect(runIdleCompaction).toHaveBeenCalledTimes(1);
+		controller.dispose();
+	});
+
+	it("falls back to the configured delay once the cache entry has lapsed", async () => {
+		const runIdleCompaction = vi.fn(async () => {});
+		const context = createContext({
+			runIdleCompaction,
+			promptCacheEntry: { touchedAt: Date.now() - 2 * 3_600_000, tier: "long", ttlMs: 3_600_000 },
+		});
+		const controller = new EventController(context);
+		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
+
+		vi.advanceTimersByTime(59_999);
+		expect(runIdleCompaction).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(runIdleCompaction).toHaveBeenCalledTimes(1);
+		controller.dispose();
+	});
+
+	it("ignores a live 5-minute cache entry and keeps the configured delay", async () => {
+		resetSettingsForTest();
+		await Settings.init({
+			inMemory: true,
+			overrides: {
+				"compaction.idleEnabled": true,
+				"compaction.idleThresholdTokens": 100,
+				"compaction.idleTimeoutSeconds": 600,
+			},
+		});
+		const runIdleCompaction = vi.fn(async () => {});
+		const context = createContext({
+			runIdleCompaction,
+			promptCacheEntry: { touchedAt: Date.now(), tier: "short", ttlMs: 300_000 },
+		});
+		const controller = new EventController(context);
+		await controller.handleEvent({ type: "agent_end", messages: [createAssistantMessage()] });
+
+		// Cache timing would compact at ~4.4 min; the configured 10 min wins.
+		vi.advanceTimersByTime(600_000 - 1);
+		expect(runIdleCompaction).not.toHaveBeenCalled();
+		vi.advanceTimersByTime(1);
+		expect(runIdleCompaction).toHaveBeenCalledTimes(1);
 		controller.dispose();
 	});
 

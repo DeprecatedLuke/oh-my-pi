@@ -6889,6 +6889,7 @@ describe("advisor", () => {
 				expect(
 					resolveAdvisorDeliveryChannel({
 						severity,
+						continueSeverity: "nit",
 						autoResumeSuppressed: false,
 						streaming: false,
 						aborting: false,
@@ -6903,6 +6904,7 @@ describe("advisor", () => {
 			expect(
 				resolveAdvisorDeliveryChannel({
 					severity: "nit",
+					continueSeverity: "concern",
 					autoResumeSuppressed: false,
 					streaming: true,
 					aborting: false,
@@ -6913,6 +6915,7 @@ describe("advisor", () => {
 				expect(
 					resolveAdvisorDeliveryChannel({
 						severity,
+						continueSeverity: "concern",
 						autoResumeSuppressed: false,
 						streaming: true,
 						aborting: false,
@@ -6922,10 +6925,12 @@ describe("advisor", () => {
 			}
 		});
 
-		it("routes a non-interrupting nit to the aside queue regardless of state", () => {
+		it("routes a non-interrupting nit to the aside queue unless the primary is idle on a terminal answer", () => {
+			// A `nit` continue threshold only governs the terminal-answer case.
 			expect(
 				resolveAdvisorDeliveryChannel({
 					severity: "nit",
+					continueSeverity: "nit",
 					autoResumeSuppressed: true,
 					streaming: true,
 					aborting: true,
@@ -6934,6 +6939,7 @@ describe("advisor", () => {
 			expect(
 				resolveAdvisorDeliveryChannel({
 					severity: undefined,
+					continueSeverity: "nit",
 					autoResumeSuppressed: false,
 					streaming: false,
 					aborting: false,
@@ -6947,6 +6953,7 @@ describe("advisor", () => {
 					expect(
 						resolveAdvisorDeliveryChannel({
 							severity,
+							continueSeverity: "blocker",
 							autoResumeSuppressed: false,
 							streaming,
 							aborting: false,
@@ -6956,85 +6963,52 @@ describe("advisor", () => {
 			}
 		});
 
-		it("preserves a late concern when the primary already ended with a terminal answer", () => {
-			expect(
-				resolveAdvisorDeliveryChannel({
-					severity: "concern",
-					autoResumeSuppressed: false,
-					streaming: false,
-					aborting: false,
-					terminalAnswerNoQueuedWork: true,
-				}),
-			).toBe("preserve");
-		});
+		it.each([
+			{ severity: undefined, continueSeverity: "nit", channel: "steer" },
+			{ severity: "nit", continueSeverity: "concern", channel: "preserve" },
+			{ severity: "concern", continueSeverity: "concern", channel: "steer" },
+			{ severity: "concern", continueSeverity: "blocker", channel: "preserve" },
+			// #5628: a blocker always continues the run past a terminal answer.
+			{ severity: "blocker", continueSeverity: "blocker", channel: "steer" },
+		] as const)(
+			"after a terminal answer, $severity at continueSeverity=$continueSeverity → $channel",
+			({ severity, continueSeverity, channel }) => {
+				expect(
+					resolveAdvisorDeliveryChannel({
+						severity,
+						continueSeverity,
+						autoResumeSuppressed: false,
+						streaming: false,
+						aborting: false,
+						terminalAnswerNoQueuedWork: true,
+					}),
+				).toBe(channel);
+			},
+		);
 
-		it("steers a late blocker after a terminal answer so the primary continues and acknowledges it (#5628)", () => {
+		it("preserves a terminal continuation blocked by stop suppression, preserveOnly, or the cooldown", () => {
+			const terminal = {
+				severity: "concern",
+				continueSeverity: "concern",
+				autoResumeSuppressed: false,
+				streaming: false,
+				aborting: false,
+				terminalAnswerNoQueuedWork: true,
+			} as const;
+			expect(resolveAdvisorDeliveryChannel({ ...terminal, autoResumeSuppressed: true })).toBe("preserve");
+			expect(resolveAdvisorDeliveryChannel({ ...terminal, preserveOnly: true })).toBe("preserve");
+			// An aside would sit unseen in the idle yield queue; the card stays visible.
+			expect(resolveAdvisorDeliveryChannel({ ...terminal, interruptImmuneTurnActive: true })).toBe("preserve");
 			expect(
-				resolveAdvisorDeliveryChannel({
-					severity: "blocker",
-					autoResumeSuppressed: false,
-					streaming: false,
-					aborting: false,
-					terminalAnswerNoQueuedWork: true,
-				}),
+				resolveAdvisorDeliveryChannel({ ...terminal, severity: "blocker", interruptImmuneTurnActive: true }),
 			).toBe("steer");
-		});
-
-		it("opts a late concern into steering with allowTerminalConcernSteering, without bypassing other guards", () => {
-			// Final-review continuation policy: a concern against a terminal answer
-			// MAY steer one continuation when the caller opts in — but stop/abort
-			// suppression, preserveOnly, and the immune-turn cooldown still win.
-			expect(
-				resolveAdvisorDeliveryChannel({
-					severity: "concern",
-					autoResumeSuppressed: false,
-					streaming: false,
-					aborting: false,
-					terminalAnswerNoQueuedWork: true,
-					allowTerminalConcernSteering: true,
-				}),
-			).toBe("steer");
-			// Stop/abort suppression is not bypassed.
-			expect(
-				resolveAdvisorDeliveryChannel({
-					severity: "concern",
-					autoResumeSuppressed: true,
-					streaming: false,
-					aborting: false,
-					terminalAnswerNoQueuedWork: true,
-					allowTerminalConcernSteering: true,
-				}),
-			).toBe("preserve");
-			// preserveOnly (headless/terminal-yield drain) is not bypassed.
-			expect(
-				resolveAdvisorDeliveryChannel({
-					severity: "concern",
-					autoResumeSuppressed: false,
-					streaming: false,
-					aborting: false,
-					terminalAnswerNoQueuedWork: true,
-					allowTerminalConcernSteering: true,
-					preserveOnly: true,
-				}),
-			).toBe("preserve");
-			// The immune-turn cooldown is not bypassed.
-			expect(
-				resolveAdvisorDeliveryChannel({
-					severity: "concern",
-					autoResumeSuppressed: false,
-					streaming: false,
-					aborting: false,
-					terminalAnswerNoQueuedWork: true,
-					interruptImmuneTurnActive: true,
-					allowTerminalConcernSteering: true,
-				}),
-			).toBe("aside");
 		});
 
 		it("downgrades concern to aside during immune turns, but still steers a blocker (#5628)", () => {
 			expect(
 				resolveAdvisorDeliveryChannel({
 					severity: "concern",
+					continueSeverity: "concern",
 					autoResumeSuppressed: false,
 					streaming: true,
 					aborting: false,
@@ -7044,6 +7018,7 @@ describe("advisor", () => {
 			expect(
 				resolveAdvisorDeliveryChannel({
 					severity: "blocker",
+					continueSeverity: "concern",
 					autoResumeSuppressed: false,
 					streaming: false,
 					aborting: false,
@@ -7053,6 +7028,7 @@ describe("advisor", () => {
 			expect(
 				resolveAdvisorDeliveryChannel({
 					severity: "blocker",
+					continueSeverity: "concern",
 					autoResumeSuppressed: true,
 					streaming: false,
 					aborting: false,
@@ -7065,6 +7041,7 @@ describe("advisor", () => {
 				expect(
 					resolveAdvisorDeliveryChannel({
 						severity,
+						continueSeverity: "concern",
 						autoResumeSuppressed: true,
 						streaming: false,
 						aborting: false,
@@ -7079,6 +7056,7 @@ describe("advisor", () => {
 			expect(
 				resolveAdvisorDeliveryChannel({
 					severity: "blocker",
+					continueSeverity: "concern",
 					autoResumeSuppressed: true,
 					streaming: true,
 					aborting: true,
@@ -7091,6 +7069,7 @@ describe("advisor", () => {
 				expect(
 					resolveAdvisorDeliveryChannel({
 						severity,
+						continueSeverity: "concern",
 						autoResumeSuppressed: true,
 						streaming: true,
 						aborting: false,
