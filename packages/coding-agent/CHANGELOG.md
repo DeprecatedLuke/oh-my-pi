@@ -16,6 +16,7 @@
 
 - Clicking a Background Jobs panel row for a running task now focuses that subagent's session (with `tui.mouse` on); shell and eval rows have no agent to focus.
 - Agents are now told never to fill a turn with no-op tool calls such as `sleep 0`, and to run the remaining step (land, merge, verify) or give the final answer instead.
+- Advisors are now told to send a note only when it names a risk and a concrete action, and to stay silent by not calling `advise` instead of sending "silent", approval, status, or plan-recap notes.
 - Added `display.backgroundJobs` (on by default) to hide the Background Jobs panel, which lists every live subagent — blocking and background — plus shell and eval jobs; `display.pinnedAgents: off` from older configs migrates to `false`, and configs still setting `display.pinnedAgents` or `display.subagentLivePreview` load again instead of failing with "Unknown setting".
 
 ### Fixed
