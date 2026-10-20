@@ -657,13 +657,9 @@ function collectMessageRegexSecretValues(obfuscator: SecretObfuscator, messages:
 			}
 			continue;
 		}
-		if (
-			message.role !== "user" &&
-			message.role !== "toolResult" &&
-			!(message.role === "developer" && message.attribution === "user")
-		) {
-			continue;
-		}
+		// Every developer message is walked, harness-authored ones included: async
+		// job completions, IRC relays, and subagent results embed raw tool output.
+		if (message.role !== "user" && message.role !== "toolResult" && message.role !== "developer") continue;
 		const target = message as UserFacingMessage;
 		if (typeof target.content === "string") {
 			addText(target.content);
@@ -677,11 +673,12 @@ function collectMessageRegexSecretValues(obfuscator: SecretObfuscator, messages:
 }
 
 /**
- * Redact secrets from outbound messages. User messages, tool results, and
- * user-authored developer messages (e.g. `@file` mentions) are obfuscated.
- * Assistant replay content is re-obfuscated too, because session restoration
- * expands keyed placeholders locally before the next provider request. Inline
- * image bytes are never walked.
+ * Redact secrets from outbound messages. User messages, tool results, and all
+ * developer messages are obfuscated — harness-authored developer messages
+ * (background job completions, IRC relays, subagent results) carry raw tool
+ * output. Assistant replay content is re-obfuscated too, because session
+ * restoration expands keyed placeholders locally before the next provider
+ * request. Inline image bytes are never walked.
  */
 export function obfuscateMessages(obfuscator: SecretObfuscator, messages: Message[]): Message[] {
 	if (!obfuscator.obfuscates()) return messages;
@@ -712,11 +709,7 @@ function obfuscateMessageBatch(obfuscator: SecretObfuscator, messages: Message[]
 				current = replay;
 			}
 		}
-		if (
-			current.role !== "user" &&
-			current.role !== "toolResult" &&
-			!(current.role === "developer" && current.attribution === "user")
-		) {
+		if (current.role !== "user" && current.role !== "toolResult" && current.role !== "developer") {
 			if (current.role !== "assistant") return current;
 			const content = obfuscateAssistantContentForReplay(obfuscator, current.content, sharedRegexSecretValues);
 			if (content === current.content) return current;

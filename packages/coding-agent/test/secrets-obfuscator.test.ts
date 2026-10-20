@@ -48,6 +48,8 @@ import {
 	stripPendingSecretPlaceholderSuffix,
 } from "@oh-my-pi/pi-coding-agent/secrets/placeholder";
 import { compileSecretRegex } from "@oh-my-pi/pi-coding-agent/secrets/regex";
+import { buildAsyncResultBatchMessage } from "@oh-my-pi/pi-coding-agent/session/async-job-delivery";
+import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { getActiveProfile, getAgentDir, setProfile } from "@oh-my-pi/pi-utils/dirs";
 
 describe("compileSecretRegex", () => {
@@ -374,7 +376,7 @@ describe("SecretObfuscator regex behavior", () => {
 		expect(JSON.stringify(obfuscated)).not.toContain(secret);
 	});
 
-	it("redacts user-facing messages and assistant replay content", () => {
+	it("redacts user, developer, tool-result, and assistant replay content", () => {
 		const secret = "SUPER_SECRET_TOKEN_12345";
 		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
 		const userMsg: Message = { role: "user", content: `user says ${secret}`, timestamp: 1 };
@@ -427,13 +429,44 @@ describe("SecretObfuscator regex behavior", () => {
 			toolResultMsg,
 		]);
 
-		// User-facing content and assistant replay fields are redacted.
-		expect(JSON.stringify(obfuscated[0])).not.toContain(secret);
-		expect(JSON.stringify(obfuscated[2])).not.toContain(secret);
-		expect(JSON.stringify(obfuscated[3])).not.toContain(secret);
-		expect(JSON.stringify(obfuscated[4])).not.toContain(secret);
-		// System developer reminders remain untouched.
-		expect(obfuscated[1]).toBe(systemDeveloperMsg);
+		// Every model-visible message is redacted, including harness/agent developer messages.
+		for (const message of obfuscated) expect(JSON.stringify(message)).not.toContain(secret);
+	});
+
+	it("redacts background job output delivered to the model as an agent developer message", () => {
+		const secret = "SUPER_SECRET_TOKEN_12345";
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+		const delivery = buildAsyncResultBatchMessage([
+			{ jobId: "bg_1", result: `TOKEN=${secret}`, job: undefined, durationMs: 1, epoch: 0 },
+		]);
+		if (!delivery) throw new Error("expected an async-result message");
+		const messages = convertToLlm([delivery]);
+		expect(messages).toMatchObject([{ role: "developer", attribution: "agent" }]);
+
+		const outbound = JSON.stringify(obfuscateProviderContext(obfuscator, { messages }).messages);
+		expect(outbound).not.toContain(secret);
+		expect(obfuscator.deobfuscate(outbound)).toContain(`TOKEN=${secret}`);
+	});
+
+	it("collects regex values from background job output for batch-wide placeholder collisions", () => {
+		// A stale friendly placeholder whose label spells a regex value seen only in
+		// job output must lose that label everywhere in the batch.
+		const obfuscator = new SecretObfuscator([
+			{ type: "plain", content: "OTHERSECRET", friendlyName: "TOKABC123" },
+			{ type: "regex", content: "tok_[a-z0-9]+", mode: "replace", replacement: "[hidden]" },
+		]);
+		const stale = obfuscator.obfuscate("remember OTHERSECRET");
+		expect(stale).toContain("TOKABC123_");
+		const delivery = buildAsyncResultBatchMessage([
+			{ jobId: "bg_1", result: "minted tok_abc123", job: undefined, durationMs: 1, epoch: 0 },
+		]);
+		if (!delivery) throw new Error("expected an async-result message");
+		const messages = convertToLlm([{ role: "user", content: stale, timestamp: 1 }, delivery]);
+
+		const outbound = JSON.stringify(obfuscateMessages(obfuscator, messages));
+		expect(outbound).not.toContain("tok_abc123");
+		expect(outbound).not.toContain("TOKABC123_");
+		expect(obfuscator.deobfuscate(outbound)).toContain("remember OTHERSECRET");
 	});
 
 	it("obfuscates file metadata on a replayed compaction payload but keeps the block verbatim", () => {

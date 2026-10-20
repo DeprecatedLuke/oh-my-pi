@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- Fixed Hide Secrets not redacting background job completions (and other harness notices such as IRC relays and subagent results) before they were sent to the model; every developer message is now redacted like user messages and tool results.
 - Fixed `omp auth-gateway check --strict` probing OAuth credentials of structured-key providers (e.g. OpenCode Console sign-ins) with a raw token instead of the credential shape live requests send, which could mark good credentials as failed.
 - Fixed reviewer subagents not seeing already-filed project issues in their system prompt, which let them re-file settled or duplicate findings.
 - Fixed `edit` refusing every `knowledge://` note with "is written through `write`, not edited"; knowledge notes can be patched in place again while `write` still normalizes their frontmatter.
