@@ -37,6 +37,10 @@ export interface ChangelogPromptInput {
 	existingEntries?: string;
 	stat: string;
 	diff: string;
+	/** Masks configured secrets in diff/stat/changelog text before it leaves for the model. */
+	obfuscate?: (text: string) => string;
+	/** Restores placeholders the model echoed back so entries keep the original text. */
+	deobfuscate?: (text: string) => string;
 }
 
 export async function generateChangelogEntries({
@@ -49,13 +53,15 @@ export async function generateChangelogEntries({
 	existingEntries,
 	stat,
 	diff,
+	obfuscate,
+	deobfuscate,
 }: ChangelogPromptInput): Promise<ChangelogGenerationResult> {
 	const userContent = prompt.render(changelogUserPrompt, {
 		changelog_path: changelogPath,
 		is_package_changelog: isPackageChangelog,
-		existing_entries: existingEntries,
-		stat,
-		diff,
+		existing_entries: existingEntries === undefined || !obfuscate ? existingEntries : obfuscate(existingEntries),
+		stat: obfuscate ? obfuscate(stat) : stat,
+		diff: obfuscate ? obfuscate(diff) : diff,
 	});
 	const response = await retryTransientCompletion(
 		() =>
@@ -76,7 +82,11 @@ export async function generateChangelogEntries({
 	}
 
 	const parsed = parseChangelogResponse(response);
-	return { entries: dedupeEntries(parsed.entries) };
+	const entries = dedupeEntries(parsed.entries);
+	if (!deobfuscate) return { entries };
+	const restored: Record<string, string[]> = {};
+	for (const [category, values] of Object.entries(entries)) restored[category] = values.map(deobfuscate);
+	return { entries: restored };
 }
 
 function parseChangelogResponse(message: AssistantMessage): ChangelogGenerationResult {

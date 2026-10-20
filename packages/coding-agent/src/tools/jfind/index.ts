@@ -117,6 +117,7 @@ export class FindTool implements AgentTool<typeof findSchema, FindToolDetails> {
 				extraKeywords: params.grep_keywords,
 				judge,
 				includeHidden: false,
+				obfuscate: this.session.obfuscateText,
 				signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
 				onProgress: message => onUpdate?.({ content: [{ type: "text", text: message }] }),
 			});

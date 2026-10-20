@@ -48,6 +48,7 @@ export function createSkillDescriptionCompressor(
 	settings: Settings,
 	sessionId?: string,
 	getTelemetry?: () => AgentTelemetry | undefined,
+	redaction?: { obfuscate?: (text: string) => string; deobfuscate?: (text: string) => string },
 ): SkillDescriptionCompressor {
 	const select = (): Model<Api> | undefined => {
 		const available = registry.getAvailable();
@@ -73,7 +74,14 @@ export function createSkillDescriptionCompressor(
 			const response = await instrumentedCompleteSimple(
 				model,
 				{
-					messages: [{ role: "user", content: request, timestamp: Date.now() }],
+					// Workspace skills can embed configured secrets; redact the prompt and restore the answer.
+					messages: [
+						{
+							role: "user",
+							content: redaction?.obfuscate ? redaction.obfuscate(request) : request,
+							timestamp: Date.now(),
+						},
+					],
 				},
 				{
 					apiKey: registry.resolver(model, sessionId),
@@ -91,10 +99,11 @@ export function createSkillDescriptionCompressor(
 			if (response.stopReason !== "stop") {
 				throw new Error(`Model stopped: ${response.stopReason} ${response.errorMessage ?? ""}`);
 			}
-			return response.content
+			const text = response.content
 				.filter(block => block.type === "text")
 				.map(block => block.text)
 				.join("");
+			return redaction?.deobfuscate ? redaction.deobfuscate(text) : text;
 		},
 	};
 }

@@ -145,7 +145,10 @@ export async function askImageQuestion(
 						role: "user",
 						content: [
 							{ type: "image", data: image.data, mimeType: image.mimeType },
-							{ type: "text", text: question },
+							{
+								type: "text",
+								text: session.obfuscateText ? session.obfuscateText(question) : question,
+							},
 						],
 						timestamp: Date.now(),
 					},
@@ -179,7 +182,7 @@ export async function askImageQuestion(
 	}
 
 	return {
-		text,
+		text: session.deobfuscateText ? session.deobfuscateText(text) : text,
 		model: `${model.provider}/${model.id}`,
 		usage: response.usage,
 	};

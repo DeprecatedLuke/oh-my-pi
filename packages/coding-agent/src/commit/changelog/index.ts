@@ -22,6 +22,10 @@ export interface ChangelogFlowInput {
 	dryRun: boolean;
 	maxDiffChars?: number;
 	onProgress?: (message: string) => void;
+	/** Masks configured secrets in diff/stat/changelog text before it leaves for the model. */
+	obfuscate?: (text: string) => string;
+	/** Restores placeholders the model echoed back so entries keep the original text. */
+	deobfuscate?: (text: string) => string;
 }
 
 export interface ChangelogProposalInput {
@@ -47,6 +51,8 @@ export async function runChangelogFlow({
 	dryRun,
 	maxDiffChars,
 	onProgress,
+	obfuscate,
+	deobfuscate,
 }: ChangelogFlowInput): Promise<string[]> {
 	if (stagedFiles.length === 0) return [];
 	const repo = vcs.requireGit(cwd);
@@ -82,6 +88,8 @@ export async function runChangelogFlow({
 			existingEntries: existingEntries || undefined,
 			stat,
 			diff: diffForPrompt,
+			obfuscate,
+			deobfuscate,
 		});
 		if (Object.keys(generated.entries).length === 0) continue;
 

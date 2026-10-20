@@ -546,6 +546,10 @@ export interface ExecutorOptions {
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
+	/** Parent session's secret redactor for inputs to out-of-band model calls (task labels). */
+	obfuscate?: (text: string) => string;
+	/** Reverses {@link obfuscate} for model output shown to the user (task labels). */
+	deobfuscate?: (text: string) => string;
 	/**
 	 * Parent session's live per-family service tiers, the source of truth for a
 	 * subagent whose `tier.subagent` is `"inherit"`. `null` = the parent
@@ -1225,6 +1229,10 @@ interface RunMonitorArgs {
 	modelRegistry?: ModelRegistry;
 	/** Parent settings for tiny-model label generation. */
 	settings?: Settings;
+	/** Parent session's secret redactor; absent → labels send the raw assignment. */
+	obfuscate?: (text: string) => string;
+	/** Reverses {@link obfuscate} for the returned label. */
+	deobfuscate?: (text: string) => string;
 	modelOverride?: string | string[];
 	/** Explicit pre-expansion model role alias selected for this run. */
 	modelRole?: string;
@@ -1663,7 +1671,12 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	// failures just leave the label unset.
 	const labelSource = assignment?.trim();
 	if (!args.description && args.modelRegistry && args.settings && labelSource) {
-		generateTaskLabel(labelSource, args.modelRegistry, args.settings, id, abortSignal)
+		generateTaskLabel(labelSource, args.modelRegistry, args.settings, {
+			sessionId: id,
+			signal: abortSignal,
+			obfuscate: args.obfuscate,
+			deobfuscate: args.deobfuscate,
+		})
 			.then(label => {
 				if (!label || abortSignal.aborted || progress.description) return;
 				progress.description = label;
@@ -3915,6 +3928,27 @@ function explicitSubagentToolNames(spec: SubagentSessionSpec): ReadonlySet<strin
 	return new Set((spec.options.customTools ?? []).map(tool => tool.name));
 }
 
+/**
+ * Resolve the secret obfuscator a child session should redact with. The spawning
+ * agent's live obfuscator is authoritative — a child cwd (isolated worktree,
+ * security scan target root) can be outside the project whose `secrets.yml`
+ * holds the parent's configured secrets. Walk to the nearest live ancestor
+ * because a revive may outlive its direct parent's live session.
+ */
+function inheritParentObfuscator(parentAgentId: string | undefined): CreateAgentSessionOptions["obfuscator"] {
+	const registry = AgentRegistry.global();
+	const seen = new Set<string>();
+	let id = parentAgentId;
+	while (id !== undefined && !seen.has(id)) {
+		seen.add(id);
+		const ref = registry.get(id);
+		if (!ref) return undefined;
+		if (ref.session?.obfuscator) return ref.session.obfuscator;
+		id = ref.parentId;
+	}
+	return undefined;
+}
+
 function buildSubagentSessionOptions(
 	spec: SubagentSessionSpec,
 	settings: Settings,
@@ -3929,6 +3963,7 @@ function buildSubagentSessionOptions(
 	const customTools = spec.options.customTools ?? [];
 	return {
 		...spec.options,
+		obfuscator: spec.options.obfuscator ?? inheritParentObfuscator(spec.options.parentAgentId),
 		taskPromptCacheKey: launch ? spec.options.taskPromptCacheKey : undefined,
 		mcpTools: mcpTools.length > 0 ? mcpTools : undefined,
 		customTools: customTools.length > 0 ? customTools : undefined,
@@ -4258,6 +4293,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		description: options.description,
 		modelRegistry: options.modelRegistry,
 		settings,
+		obfuscate: options.obfuscate,
+		deobfuscate: options.deobfuscate,
 		modelOverride,
 		modelRole,
 		modelRoute: options.modelRoute,

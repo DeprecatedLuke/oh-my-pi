@@ -21,6 +21,7 @@ import { IdleTimeout } from "../../src/eval/idle-timeout";
 import { disposeAllVmContexts } from "../../src/eval/js/context-manager";
 import { executeJs } from "../../src/eval/js/executor";
 import { disposeAllKernelSessions, type PythonResult } from "../../src/eval/py/executor";
+import { SecretObfuscator } from "../../src/secrets";
 import type { ToolSession } from "../../src/tools";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 
@@ -251,6 +252,28 @@ describe("runEvalCompletion", () => {
 
 		const model = spy.mock.calls[0]?.[0] as Model<Api>;
 		expect(`${model.provider}/${model.id}`).toBe("p/slow");
+	});
+
+	it("redacts configured secrets from the prompt and system text, restoring them in the cell's result", async () => {
+		const secret = "EVAL-LEAK-SENTINEL-5e0a71";
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+		const placeholder = obfuscator.obfuscate(secret);
+		const session = Object.assign(makeSession(), {
+			obfuscateText: (text: string) => obfuscator.obfuscate(text),
+			deobfuscateText: (text: string) => obfuscator.deobfuscate(text),
+		});
+		// The model echoes the placeholder it was shown back into its answer.
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: `export TOKEN=${placeholder}` }));
+
+		const result = await runEvalCompletionAndWait(
+			{ prompt: `Write an export line for ${secret}`, system: `Never print ${secret} twice.`, model: "smol" },
+			{ session },
+		);
+
+		const request = JSON.stringify(spy.mock.calls[0]?.[1]);
+		expect(request).not.toContain(secret);
+		expect(request).toContain(placeholder);
+		expect(result.text).toBe(`export TOKEN=${secret}`);
 	});
 
 	it("uses the tier fallback chain after the primary model fails", async () => {

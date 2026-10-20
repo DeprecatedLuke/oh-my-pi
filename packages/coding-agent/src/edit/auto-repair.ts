@@ -372,11 +372,13 @@ export async function attemptEditAutoRepair(options: {
 	const timeout = AbortSignal.timeout(REPAIR_TIMEOUT_MS);
 	const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
 	const complete = async (builtPrompt: string): Promise<string> => {
+		// The region and its neighbors come from disk and can hold configured secrets.
+		const content = session.obfuscateText ? session.obfuscateText(builtPrompt) : builtPrompt;
 		const response = await retryTransientCompletion(
 			() =>
 				completeSimple(
 					model,
-					{ messages: [{ role: "user", content: builtPrompt, timestamp: Date.now() }] },
+					{ messages: [{ role: "user", content, timestamp: Date.now() }] },
 					{
 						apiKey: registry.resolver(model, sessionId),
 						sessionId,
@@ -399,7 +401,8 @@ export async function attemptEditAutoRepair(options: {
 					: "auto-repair aborted",
 			);
 		}
-		return response.content.map(block => (block.type === "text" ? block.text : "")).join("");
+		const text = response.content.map(block => (block.type === "text" ? block.text : "")).join("");
+		return session.deobfuscateText ? session.deobfuscateText(text) : text;
 	};
 
 	const repair = await repairParseRegression({ ...snapshot, next: current }, complete);

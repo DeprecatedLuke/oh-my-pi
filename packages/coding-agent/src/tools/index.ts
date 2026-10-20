@@ -29,6 +29,7 @@ import type { MnemopiSessionState } from "../mnemopi/state";
 import type { PlanModeState } from "../plan-mode/state";
 import type { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import type { AgentRegistry } from "../registry/agent-registry";
+import type { SecretObfuscator } from "../secrets/obfuscator";
 import type { ArtifactManager } from "../session/artifacts";
 import type { ClientBridge } from "../session/client-bridge";
 import type { CustomMessage } from "../session/messages";
@@ -243,6 +244,21 @@ export interface ToolSession {
 	settingsApproval?: boolean;
 	/** Whether this session has begun disposal. */
 	isDisposed?: () => boolean;
+	/**
+	 * Redact session-derived text before forwarding it to another model. Identity when
+	 * no secrets are configured; live, so `/fix-refusal` replacements apply immediately.
+	 */
+	obfuscateText?: (text: string) => string;
+	/**
+	 * Reverse {@link obfuscateText} for model output shown to the user (titles, commit
+	 * messages). Identity when no secrets are configured; live like `obfuscateText`.
+	 */
+	deobfuscateText?: (text: string) => string;
+	/**
+	 * Current session obfuscator, for children that need their own redaction boundary
+	 * (subagent/sca sessions). Read live so `/fix-refusal` replacements are inherited.
+	 */
+	getObfuscator?: () => SecretObfuscator | undefined;
 	/**
 	 * Suppress the spawn specialization/coordination advisory appended to `task`
 	 * results. Set by internal/programmatic callers (e.g. the commit agent's

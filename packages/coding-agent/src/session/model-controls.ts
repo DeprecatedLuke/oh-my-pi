@@ -66,6 +66,8 @@ export interface ModelControlsHost {
 	providerSessionState: Map<string, ProviderSessionState>;
 	model(): Model | undefined;
 	sessionId(): string;
+	/** Redact configured secrets from text bound for a model; identity when none are configured. */
+	obfuscateTextForProvider(text: string): string;
 	promptGeneration(): number;
 	resolveActiveEditMode(): EditMode;
 	syncAfterModelChange(previousEditMode: EditMode): Promise<void>;
@@ -668,6 +670,7 @@ export class ModelControls {
 							if (entryId) usageOwner.parentId = entryId;
 						},
 						telemetry: this.#host.agent.telemetry,
+						obfuscate: text => this.#host.obfuscateTextForProvider(text),
 					},
 				);
 			} catch (error) {

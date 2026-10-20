@@ -102,6 +102,7 @@ function createHost(
 		promptGeneration: () => 0,
 		promptSequence: () => 0,
 		sessionId: () => "test-session",
+		obfuscateTextForProvider: text => text,
 		hasPendingAsyncWake: options.hasPendingAsyncWake ?? (() => false),
 		emitSessionEvent: async () => {},
 		scheduleAgentContinue: () => {},

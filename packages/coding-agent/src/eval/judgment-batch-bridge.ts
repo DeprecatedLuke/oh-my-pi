@@ -119,7 +119,7 @@ function isBatchKey(value: unknown): value is BatchKey {
 	return (typeof value === "string" && value.length > 0) || (typeof value === "number" && Number.isFinite(value));
 }
 
-function parseItems(value: unknown): BatchInput[] {
+function parseItems(value: unknown, redact?: (text: string) => string): BatchInput[] {
 	if (!Array.isArray(value)) throw invalid("items must be an array of { key, state }");
 	if (value.length === 0) throw invalid("items must not be empty");
 	const seen = new Set<BatchKey>();
@@ -127,7 +127,7 @@ function parseItems(value: unknown): BatchInput[] {
 		if (!isRecord(entry) || !isBatchKey(entry.key)) throw invalid(`item ${index} needs a string or number key`);
 		if (seen.has(entry.key)) throw invalid(`duplicate item key ${JSON.stringify(entry.key)}`);
 		seen.add(entry.key);
-		const input: BatchInput = { key: entry.key, state: parseState(entry.state) };
+		const input: BatchInput = { key: entry.key, state: parseState(entry.state, redact) };
 		if (Object.hasOwn(entry, "images")) {
 			if (Array.isArray(entry.images)) {
 				input.imageSources = entry.images;
@@ -533,8 +533,9 @@ export async function runEvalJudgmentBatch(
 	switch (args.op) {
 		case "create": {
 			if (Object.hasOwn(args, "images")) throw invalid("images must be provided on each item");
-			const items = parseItems(args.items);
-			const questions = parseQuestions(args.questions);
+			const redact = session.obfuscateText;
+			const items = parseItems(args.items, redact);
+			const questions = parseQuestions(args.questions, redact);
 			const batch = new JudgmentBatch(
 				session,
 				items,

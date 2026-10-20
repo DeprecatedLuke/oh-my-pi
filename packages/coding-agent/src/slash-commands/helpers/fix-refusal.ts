@@ -9,6 +9,7 @@ import {
 import type { Settings } from "../../config/settings";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../../modes/types";
+import { AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
 import {
 	appendManagedSecrets,
 	buildSecretObfuscator,
@@ -196,7 +197,16 @@ export async function executeFixRefusal(deps: FixRefusalDeps): Promise<FixRefusa
 
 	// Rebuild from every configured source, including built-in credential patterns,
 	// so newly managed patterns take effect without dropping existing protection.
-	session.setObfuscator(await buildSecretObfuscator(cwd, agentDir, keyDir));
+	// Live children inherited this session's previous obfuscator by identity; hand
+	// them the replacement so their redaction boundary picks up the new patterns.
+	const previousObfuscator = session.obfuscator;
+	const nextObfuscator = await buildSecretObfuscator(cwd, agentDir, keyDir);
+	session.setObfuscator(nextObfuscator);
+	AgentRegistry.global().propagateObfuscator(
+		session.getAgentId() ?? MAIN_AGENT_ID,
+		previousObfuscator,
+		nextObfuscator,
+	);
 
 	ui.step(
 		added === 0

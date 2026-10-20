@@ -63,6 +63,8 @@ export interface ClassifyAutoPrewalkDeps {
 	signal?: AbortSignal;
 	onUsage?: (usage: JudgmentUsage) => void;
 	telemetry?: AgentTelemetryConfig;
+	/** Redacts configured secrets from the judged turn text before the judge sees it. */
+	obfuscate?: (text: string) => string;
 }
 
 /** Text of a user-authored request: a typed prompt or a user-invoked skill, never an injected or agent-attributed one. */
@@ -89,11 +91,15 @@ function recentContext(history: readonly AgentMessage[]): { request?: string; re
 }
 
 /** `request` leads and is authoritative; the earlier pair is included only when the transcript has one. */
-function buildState(input: AutoPrewalkInput): Record<string, string> {
-	const state: Record<string, string> = { request: preprocessTinyMessage(input.request) };
+function buildState(input: AutoPrewalkInput, obfuscate?: (text: string) => string): Record<string, string> {
+	const prepare = (text: string): string => {
+		const processed = preprocessTinyMessage(text);
+		return obfuscate?.(processed) ?? processed;
+	};
+	const state: Record<string, string> = { request: prepare(input.request) };
 	const { request, response } = recentContext(input.history);
-	if (request) state.previous_request = preprocessTinyMessage(request);
-	if (response) state.previous_response = preprocessTinyMessage(response);
+	if (request) state.previous_request = prepare(request);
+	if (response) state.previous_response = prepare(response);
 	return state;
 }
 
@@ -141,7 +147,7 @@ export async function classifyAutoPrewalk(
 	// The cached execution chain can lag the fresh gate after credentials or discovery change.
 	const { answers } = await judge.withCandidate((candidate, kind) => {
 		if (kind !== "native") throw new Error("auto-prewalk: the judge role has no native backend");
-		return candidate.judge({ state: buildState(input), questions: QUESTIONS }, options);
+		return candidate.judge({ state: buildState(input, deps.obfuscate), questions: QUESTIONS }, options);
 	}, options);
 	return toDecision(answers.route);
 }

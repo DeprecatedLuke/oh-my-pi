@@ -13,6 +13,8 @@ import { roleCandidatePool } from "../config/model-roles";
 import { settings, type Settings } from "../config/settings";
 import type { CustomTool, CustomToolContext } from "../extensibility/custom-tools/types";
 import ttsDescription from "../prompts/tools/tts.md" with { type: "text" };
+import { buildSecretObfuscator } from "../secrets";
+import { cfgSecretsEnabled } from "../secrets/settings";
 import { DEFAULT_TTS_VOICE, KOKORO_VOICES } from "../tts/models";
 import { ttsClient } from "../tts/tts-client";
 import { encodeWav } from "../tts/wav";
@@ -212,7 +214,20 @@ export const ttsTool: CustomTool<typeof ttsSchema, TtsToolDetails> = {
 					return await synthesizeLocal(model, params, settingsInstance, cwd, outputPath, signal);
 				}
 				if (model.api === "xai-tts" || model.api === "openai-speech") {
-					return await synthesizeCloud(model, params, ctx, outputPath, displayPath, codec, signal);
+					// Spoken text leaves the machine only on cloud backends; local inference stays as-is.
+					// A heard placeholder is a smaller loss than shipping a configured secret to a provider.
+					const obfuscator = cfgSecretsEnabled.get(settingsInstance)
+						? await buildSecretObfuscator(cwd, settingsInstance.getAgentDir())
+						: undefined;
+					return await synthesizeCloud(
+						model,
+						obfuscator ? { ...params, text: obfuscator.obfuscate(params.text) } : params,
+						ctx,
+						outputPath,
+						displayPath,
+						codec,
+						signal,
+					);
 				}
 				throw new Error(`Unsupported speech model API: ${model.api}`);
 			} catch (error) {

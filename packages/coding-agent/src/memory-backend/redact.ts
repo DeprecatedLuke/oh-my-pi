@@ -169,12 +169,12 @@ const TEXT_FIELDS = [
  * free text in it (`mnemopi/backend.ts` copies `MemoryBackendSaveInput.context` to
  * `metadata.context`), so its strings need the same treatment as `content`.
  */
-function redactNested(value: unknown): unknown {
-	if (typeof value === "string") return redactMemorySecrets(value);
+function mapNestedText(value: unknown, map: (text: string) => string): unknown {
+	if (typeof value === "string") return map(value);
 	if (Array.isArray(value)) {
 		let changed = false;
 		const out = value.map(item => {
-			const next = redactNested(item);
+			const next = mapNestedText(item, map);
 			if (next !== item) changed = true;
 			return next;
 		});
@@ -184,7 +184,7 @@ function redactNested(value: unknown): unknown {
 	const source = value as Record<string, unknown>;
 	let out: Record<string, unknown> | undefined;
 	for (const [key, item] of Object.entries(source)) {
-		const next = redactNested(item);
+		const next = mapNestedText(item, map);
 		if (next === item) continue;
 		out ??= { ...source };
 		out[key] = next;
@@ -192,23 +192,20 @@ function redactNested(value: unknown): unknown {
 	return out ?? value;
 }
 
-/**
- * Copy `value` with every text-bearing field and all nested metadata strings redacted.
- * Returns `value` itself when nothing changed, so a clean write allocates nothing.
- */
-export function redactMemoryTextFields<T extends object>(value: T): T {
+/** Copy `value` with every text-bearing field and all nested metadata strings mapped. */
+function mapMemoryTextFields<T extends object>(value: T, map: (text: string) => string): T {
 	const source = value as Record<string, unknown>;
 	let out: Record<string, unknown> | undefined;
 	for (const field of TEXT_FIELDS) {
 		const text = source[field];
 		if (typeof text !== "string") continue;
-		const clean = redactMemorySecrets(text);
-		if (clean === text) continue;
+		const mapped = map(text);
+		if (mapped === text) continue;
 		out ??= { ...source };
-		out[field] = clean;
+		out[field] = mapped;
 	}
 	if ("metadata" in source) {
-		const metadata = redactNested(source.metadata);
+		const metadata = mapNestedText(source.metadata, map);
 		if (metadata !== source.metadata) {
 			out ??= { ...source };
 			out.metadata = metadata;
@@ -218,8 +215,41 @@ export function redactMemoryTextFields<T extends object>(value: T): T {
 }
 
 /**
- * Scrub a `remember(memory, options)` call pair. `memory` is either the content string
- * or an input object. `options` is `undefined` when the caller takes the facade default.
+ * Copy `value` with every text-bearing field and all nested metadata strings redacted.
+ * Returns `value` itself when nothing changed, so a clean write allocates nothing.
+ */
+export function redactMemoryTextFields<T extends object>(value: T): T {
+	return mapMemoryTextFields(value, redactMemorySecrets);
+}
+
+/**
+ * Scrub a `remember(memory, options)` call pair with the session's secret redactor.
+ * `memory` is either the content string or an input object. `options` is `undefined`
+ * when the caller takes the facade default.
+ *
+ * Mnemopi persists every text field it is given and later embeds, extracts, and recalls
+ * it — locally and through configured remote embedding/LLM endpoints — so configured
+ * secrets must become placeholders *before* the write, not after.
+ */
+export function obfuscateRememberWrite<M extends string | object, O>(
+	memory: M,
+	options: O,
+	obfuscate: (text: string) => string,
+): [M, O] {
+	// Obfuscation first (reversible, configured + built-in credential patterns), then the
+	// pattern scrub for credential shapes no configured entry covers. Placeholders are
+	// opaque tokens the keyword scan does not touch, so they survive the second pass.
+	const scrub = (text: string) => redactMemorySecrets(obfuscate(text));
+	const scrubbedMemory = (typeof memory === "string" ? scrub(memory) : mapMemoryTextFields(memory, scrub)) as M;
+	const scrubbedOptions = (
+		options === undefined || options === null ? options : mapMemoryTextFields(options as object, scrub)
+	) as O;
+	return [scrubbedMemory, scrubbedOptions];
+}
+
+/**
+ * Scrub a `remember(memory, options)` call pair. Credential-shaped tokens only; callers
+ * with a session redactor use {@link obfuscateRememberWrite} instead.
  */
 export function redactRememberWrite<M extends string | object, O>(memory: M, options: O): [M, O] {
 	const scrubbedMemory = (

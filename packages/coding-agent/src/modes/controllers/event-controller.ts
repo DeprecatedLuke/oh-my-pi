@@ -353,6 +353,11 @@ export class EventController {
 						registry: session.modelRegistry,
 						sessionId: session.sessionId,
 						metadataResolver: provider => session.agent.metadataForProvider(provider),
+						// Message-end text reaches the vocalizer deobfuscated, so re-redact
+						// configured secrets on the way to the rewriter and restore them in
+						// its spoken output.
+						obfuscate: text => session.obfuscateTextForProvider(text),
+						deobfuscate: text => session.obfuscator?.deobfuscate(text) ?? text,
 					})
 				: null,
 		);

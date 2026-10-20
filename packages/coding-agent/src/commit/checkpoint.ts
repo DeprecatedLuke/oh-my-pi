@@ -3,7 +3,9 @@ import { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
 import { detectGitRepos, discoverNestedGitRepos, formatRepoLabel } from "../patches";
 import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
-import { generateCommitMessage } from "../utils/commit-message-generator";
+import { buildSecretObfuscator } from "../secrets";
+import { cfgSecretsEnabled } from "../secrets/settings";
+import { generateCommitMessage, type CommitMessageRedactionOptions } from "../utils/commit-message-generator";
 import * as git from "../utils/git";
 
 /** A repository with uncommitted changes, as reported by {@link dirtyRepos}. */
@@ -30,6 +32,8 @@ export interface CheckpointCommitOptions {
 	modelRegistry: ModelRegistry;
 	settings: Settings;
 	sessionId?: string;
+	/** Masks and restores configured secrets around the commit-message model call. */
+	redaction?: CommitMessageRedactionOptions;
 }
 
 /** Model access for the commit stage, acquired only once a selection is about to commit. */
@@ -132,10 +136,24 @@ export async function commitCheckpointRepos(
 	repos: readonly DirtyRepo[],
 	options: CheckpointCommitOptions,
 ): Promise<CheckpointRepoEntry[]> {
+	// Callers may pass a live session redactor; otherwise build one here so the CLI and the
+	// registry-less tool path never ship a diff with configured secrets to the message model.
+	const obfuscator =
+		options.redaction || !cfgSecretsEnabled.get(options.settings)
+			? undefined
+			: await buildSecretObfuscator(options.cwd, options.settings.getAgentDir());
+	const redaction =
+		options.redaction ??
+		(obfuscator
+			? {
+					obfuscate: (text: string) => obfuscator.obfuscate(text),
+					deobfuscate: (text: string) => obfuscator.deobfuscate(text),
+				}
+			: undefined);
 	const entries: CheckpointRepoEntry[] = [];
 	for (const repo of repos) {
 		try {
-			entries.push(await commitSingleRepo(repo, options));
+			entries.push(await commitSingleRepo(repo, { ...options, redaction }));
 		} catch (error) {
 			entries.push({
 				repoPath: repo.repoPath,
@@ -202,7 +220,13 @@ async function commitSingleRepo(repo: DirtyRepo, options: CheckpointCommitOption
 		return { repoPath, label, status: "skipped", filesChanged: 0, reason: "no-changes" };
 	}
 	const diff = await git.diff(repoPath, { cached: true });
-	const message = await generateCommitMessage(diff, options.modelRegistry, options.settings, options.sessionId);
+	const message = await generateCommitMessage(
+		diff,
+		options.modelRegistry,
+		options.settings,
+		options.sessionId,
+		options.redaction,
+	);
 	if (!message) {
 		throw new Error("Could not generate a commit message.");
 	}

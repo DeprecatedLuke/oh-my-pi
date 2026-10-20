@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { buildStage1RolloutItems } from "@oh-my-pi/pi-coding-agent/memories";
+import { SecretObfuscator } from "@oh-my-pi/pi-coding-agent/secrets";
 import { parseJsonlLenient } from "@oh-my-pi/pi-utils";
 
 /** Reference: the whole-file read + stringify + head/tail truncation the streaming builder replaces. */
@@ -77,6 +78,28 @@ describe("buildStage1RolloutItems", () => {
 		// One record larger than a whole window.
 		lines.splice(lines.length - 3, 0, messageLine(3, "y".repeat(1_500_000)));
 		await expectParity(`${lines.join("\n")}\n`, [1, 4000, 100_000, 10_000_000]);
+	});
+
+	it("redacts configured secrets from user text and tool output before they reach the stage-1 model", async () => {
+		const secret = "STAGE1-SENTINEL-9a4e1f";
+		const obfuscator = new SecretObfuscator([{ type: "plain", content: secret }]);
+		const filePath = path.join(tempDir, "rollout.jsonl");
+		const lines = [
+			messageLine(0, `deploy with ${secret}`),
+			messageLine(1, "running it"),
+			JSON.stringify({
+				type: "message",
+				id: "m2",
+				message: { role: "toolResult", toolName: "bash", content: [{ type: "text", text: `TOKEN=${secret}` }] },
+			}),
+		];
+		await Bun.write(filePath, `${lines.join("\n")}\n`);
+
+		const items = await buildStage1RolloutItems(filePath, 1_000_000, text => obfuscator.obfuscate(text));
+
+		expect(items).not.toContain(secret);
+		expect(items).toContain(`deploy with ${obfuscator.obfuscate(secret)}`);
+		expect(items).toContain(`TOKEN=${obfuscator.obfuscate(secret)}`);
 	});
 
 	it("rejects missing rollouts", async () => {

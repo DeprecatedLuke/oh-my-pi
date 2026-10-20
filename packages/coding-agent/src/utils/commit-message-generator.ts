@@ -75,6 +75,13 @@ function getSmolModelCandidates(
 	return candidates;
 }
 
+export interface CommitMessageRedactionOptions {
+	/** Masks configured secrets in session-derived text before it leaves for the model. */
+	obfuscate?: (text: string) => string;
+	/** Restores placeholders the model echoed back so commit subjects never contain them. */
+	deobfuscate?: (text: string) => string;
+}
+
 /**
  * Generate a commit message from a unified diff.
  * Returns null if generation fails (caller should fall back to generic message).
@@ -84,6 +91,7 @@ export async function generateCommitMessage(
 	registry: ModelRegistry,
 	settings: Settings,
 	sessionId?: string,
+	redaction?: CommitMessageRedactionOptions,
 ): Promise<string | null> {
 	const candidates = getSmolModelCandidates(registry, settings);
 	if (candidates.length === 0) {
@@ -98,7 +106,7 @@ export async function generateCommitMessage(
 		logger.debug("commit-msg-generator: diff is empty after noise filtering");
 		return null;
 	}
-	const userMessage = `<diff>\n${truncatedDiff}\n</diff>`;
+	const userMessage = `<diff>\n${redaction?.obfuscate ? redaction.obfuscate(truncatedDiff) : truncatedDiff}\n</diff>`;
 
 	for (const candidate of candidates) {
 		const apiKey = await registry.getApiKey(candidate.model, sessionId);
@@ -139,8 +147,11 @@ export async function generateCommitMessage(
 			// Clean up: remove wrapping quotes, backticks, trailing period
 			msg = msg.replace(/^[`"']|[`"']$/g, "").replace(/\.$/, "");
 
-			logger.debug("commit-msg-generator: generated", { model: candidate.model.id, msg });
-			return msg;
+			logger.debug("commit-msg-generator: generated", {
+				model: candidate.model.id,
+				msg: redaction?.obfuscate ? redaction.obfuscate(msg) : msg,
+			});
+			return redaction?.deobfuscate ? redaction.deobfuscate(msg) : msg;
 		} catch (err) {
 			logger.debug("commit-msg-generator: error", {
 				model: candidate.model.id,

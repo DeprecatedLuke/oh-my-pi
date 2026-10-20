@@ -20,32 +20,42 @@ export function labelEchoesHandle(handle: string | undefined, label: string): bo
 	return /^\d+$/.test(suffix) && prefix.localeCompare(label, undefined, { sensitivity: "accent" }) === 0;
 }
 
+/** Session accessors the label request needs; both redactors are absent when the session has no configured secrets. */
+export interface TaskLabelOptions {
+	/** Spawn handle, used to reject labels that merely repeat the id. */
+	sessionId?: string;
+	signal?: AbortSignal;
+	/** Redacts configured secrets from the assignment before the label model sees it. */
+	obfuscate?: (text: string) => string;
+	/** Restores placeholders the label model echoed, so the UI shows real values instead of tokens. */
+	deobfuscate?: (text: string) => string;
+}
+
 /** Compresses a delegated assignment into a one-sentence UI label via the tiny title model — fired by the executor spawn path because the task wire schema no longer carries a `description`; null on empty input or failure. */
 export async function generateTaskLabel(
 	assignment: string,
 	registry: ModelRegistry,
 	settings: Settings,
-	sessionId?: string,
-	signal?: AbortSignal,
+	options: TaskLabelOptions = {},
 ): Promise<string | null> {
 	const text = assignment.trim();
 	if (!text) return null;
 	try {
 		const label = await generateSessionTitle(
-			text,
+			options.obfuscate?.(text) ?? text,
 			registry,
 			settings,
-			sessionId,
+			options.sessionId,
 			undefined,
 			undefined,
 			TASK_LABEL_SYSTEM_PROMPT,
-			signal,
+			options.signal,
 		);
-		if (!label || labelEchoesHandle(sessionId, label)) return null;
-		return label;
+		if (!label || labelEchoesHandle(options.sessionId, label)) return null;
+		return options.deobfuscate?.(label) ?? label;
 	} catch (err) {
 		logger.debug("task-label: generation failed", {
-			sessionId,
+			sessionId: options.sessionId,
 			error: err instanceof Error ? err.message : String(err),
 		});
 		return null;

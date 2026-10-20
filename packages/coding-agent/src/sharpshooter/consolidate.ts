@@ -55,7 +55,11 @@ interface ReplacementFile {
 	content: string;
 }
 
-export function renderSharpshooterSessions(groups: readonly SharpshooterSessionDeltas[]): string {
+export function renderSharpshooterSessions(
+	groups: readonly SharpshooterSessionDeltas[],
+	obfuscate?: (text: string) => string,
+): string {
+	const redact = obfuscate ?? ((text: string) => text);
 	return [...groups]
 		.sort((a, b) => (a.deltas[0]?.delta.ts ?? 0) - (b.deltas[0]?.delta.ts ?? 0))
 		.map(group => {
@@ -64,15 +68,15 @@ export function renderSharpshooterSessions(groups: readonly SharpshooterSessionD
 				.map(({ delta }) => {
 					const fields = [
 						`kind=${delta.kind}`,
-						`statement=${JSON.stringify(delta.statement)}`,
-						`evidence=${JSON.stringify(delta.evidence)}`,
+						`statement=${JSON.stringify(redact(delta.statement))}`,
+						`evidence=${JSON.stringify(redact(delta.evidence))}`,
 						`source=${delta.source}`,
 						`friction(corrective=${delta.friction.corrective}, regression=${delta.friction.regression}, subtle=${delta.friction.subtle})`,
 					];
 					if (delta.rejectedAlternative) {
-						fields.push(`rejectedAlternative=${JSON.stringify(delta.rejectedAlternative)}`);
+						fields.push(`rejectedAlternative=${JSON.stringify(redact(delta.rejectedAlternative))}`);
 					}
-					if (delta.rationale) fields.push(`rationale=${JSON.stringify(delta.rationale)}`);
+					if (delta.rationale) fields.push(`rationale=${JSON.stringify(redact(delta.rationale))}`);
 					return `- ${fields.join("; ")}`;
 				});
 			return [`### session ${group.sessionId}`, ...lines].join("\n");
@@ -87,6 +91,8 @@ export async function runSharpshooterConsolidation(options: {
 	modelRegistry: ModelRegistry;
 	sessionId: string;
 	force?: boolean;
+	/** Session secret redactor; the queue, project docs, and memory files are model input. */
+	obfuscate?: (text: string) => string;
 }): Promise<SharpshooterConsolidationResult> {
 	const bankDir = sharpshooterBankDir(options.agentDir, options.cwd);
 	try {
@@ -119,6 +125,7 @@ async function consolidateLocked(
 		modelRegistry: ModelRegistry;
 		sessionId: string;
 		force?: boolean;
+		obfuscate?: (text: string) => string;
 	},
 	bankDir: string,
 ): Promise<SharpshooterConsolidationResult> {
@@ -142,12 +149,13 @@ async function consolidateLocked(
 		if (!model) return { ran: false, reason: "no_model" };
 
 		const currentFiles = await readCurrentMemoryFiles(options.agentDir, options.cwd);
-		const projectDocs = await readProjectDocs(options.cwd);
-		const sessions = renderSharpshooterSessions(groups);
+		const projectDocs = await readProjectDocs(options.cwd, options.obfuscate);
+		const sessions = renderSharpshooterSessions(groups, options.obfuscate);
+		const redact = options.obfuscate ?? ((text: string) => text);
 		const input = prompt.render(consolidateInputTemplate, {
-			architecture: currentFiles["architecture.md"],
-			product: currentFiles["product.md"],
-			style: currentFiles["style.md"],
+			architecture: redact(currentFiles["architecture.md"]),
+			product: redact(currentFiles["product.md"]),
+			style: redact(currentFiles["style.md"]),
 			projectDocs,
 			sessions,
 		});
@@ -219,13 +227,15 @@ async function readCurrentMemoryFiles(agentDir: string, cwd: string): Promise<Re
 	return files;
 }
 
-async function readProjectDocs(cwd: string): Promise<string> {
+async function readProjectDocs(cwd: string, obfuscate?: (text: string) => string): Promise<string> {
 	const blocks: string[] = [];
 	for (const name of ["AGENTS.md", "CLAUDE.md"]) {
 		const content = await Bun.file(path.join(cwd, name))
 			.text()
 			.catch(() => "");
-		if (content.trim()) blocks.push(`--- ${name} ---\n${content.trim()}`);
+		// Redact before the token truncation so a cut cannot split a secret past the redactor.
+		const redacted = obfuscate ? obfuscate(content) : content;
+		if (redacted.trim()) blocks.push(`--- ${name} ---\n${redacted.trim()}`);
 	}
 	return truncateApproxTokens(blocks.join("\n\n"), PROJECT_DOC_TOKEN_LIMIT);
 }

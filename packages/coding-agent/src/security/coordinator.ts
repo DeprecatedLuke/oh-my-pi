@@ -12,7 +12,10 @@ import securityReviewerPrompt from "../prompts/agents/security-reviewer.md" with
 import securityCoordinatorPrompt from "../prompts/security/scan-coordinator.md" with { type: "text" };
 import securityRequestPrompt from "../prompts/security/scan-request.md" with { type: "text" };
 import securityPublishDescription from "../prompts/tools/security-publish.md" with { type: "text" };
+import { AgentRegistry } from "../registry/agent-registry";
 import { createAgentSession } from "../sdk";
+import { buildSecretObfuscator } from "../secrets";
+import { cfgSecretsEnabled } from "../secrets/settings";
 import type { AgentSession } from "../session/agent-session";
 import type { AuthStorage } from "../session/auth-storage";
 import { SessionManager } from "../session/session-manager";
@@ -243,8 +246,22 @@ async function createDefaultSecuritySession(input: SecurityScanSessionFactoryInp
 		"security-reviewer": "off",
 	});
 	const providerSessionId = `security:${input.scanId}`;
+	// The scan runs in an isolated root (worktree/targets dir) outside the project
+	// whose secrets.yml holds the user's configured secrets: inherit the spawning
+	// session's obfuscator, and gate the fallback build on the HOST project's
+	// secrets.enabled (the cloned scan settings are scoped to the execution root).
+	const parentObfuscator =
+		input.host.agentId === undefined
+			? undefined
+			: AgentRegistry.global().get(input.host.agentId)?.session?.obfuscator;
+	const obfuscator =
+		parentObfuscator ??
+		(cfgSecretsEnabled.get(input.host.settings)
+			? await buildSecretObfuscator(input.plan.repositoryRoot, input.host.settings.getAgentDir())
+			: undefined);
 	const { session } = await createAgentSession({
 		cwd: input.executionRoot,
+		obfuscator,
 		authStorage: input.host.authStorage,
 		modelRegistry: input.host.modelRegistry,
 		settings: scanSettings,

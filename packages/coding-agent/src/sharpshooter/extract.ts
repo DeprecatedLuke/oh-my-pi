@@ -225,7 +225,16 @@ async function runSharpshooterExtraction(
 	const model = await resolveSharpshooterModel(settings, modelRegistry);
 	if (!model || session.isDisposed) return;
 
-	const input = prompt.render(extractInputTemplate, { ...envelope });
+	// The envelope carries raw user/assistant text. Redact before rendering so the
+	// provider sees placeholders, and compare admitted evidence against the same
+	// redacted prompt so a placeholder-bearing quote still verifies.
+	const obfuscate = (text: string) => session.obfuscateTextForProvider?.(text) ?? text;
+	const redactedEnvelope: SharpshooterEnvelope = {
+		prompt: obfuscate(envelope.prompt),
+		...(envelope.previousHuman ? { previousHuman: obfuscate(envelope.previousHuman) } : {}),
+		...(envelope.assistantContext ? { assistantContext: obfuscate(envelope.assistantContext) } : {}),
+	};
+	const input = prompt.render(extractInputTemplate, { ...redactedEnvelope });
 	const response = await retryTransientCompletion(
 		() =>
 			completeSimple(
@@ -257,7 +266,7 @@ async function runSharpshooterExtraction(
 			continue;
 		}
 		for (const candidate of args.deltas) {
-			const delta = admitDelta(candidate, envelope.prompt, session.sessionId);
+			const delta = admitDelta(candidate, redactedEnvelope.prompt, session.sessionId);
 			if (!delta) continue;
 			if (session.isDisposed) return;
 			await appendSharpshooterDelta(agentDir, session.sessionManager.getCwd(), delta);
@@ -276,7 +285,8 @@ function admitDelta(candidate: unknown, currentPrompt: string, sessionId: string
 		return undefined;
 	}
 	if (typeof raw.evidence !== "string" || !raw.evidence || !currentPrompt.includes(raw.evidence)) {
-		logger.debug("Sharpshooter extraction rejected delta with unverifiable evidence", { evidence: raw.evidence });
+		// Never log the candidate evidence: it is a verbatim substring of the user's prompt.
+		logger.debug("Sharpshooter extraction rejected delta with unverifiable evidence");
 		return undefined;
 	}
 	if (typeof raw.kind !== "string" || !Object.hasOwn(SHARPSHOOTER_DELTA_KINDS, raw.kind)) {

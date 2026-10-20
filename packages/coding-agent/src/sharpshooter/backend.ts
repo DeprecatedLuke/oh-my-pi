@@ -88,6 +88,7 @@ export const sharpshooterBackend: MemoryBackend = {
 				settings,
 				modelRegistry,
 				sessionId: session.sessionId,
+				obfuscate: text => session.obfuscateTextForProvider?.(text) ?? text,
 			});
 			try {
 				const unsubscribe = session.subscribe(event => {
@@ -149,6 +150,7 @@ export const sharpshooterBackend: MemoryBackend = {
 			modelRegistry: session.modelRegistry,
 			sessionId: session.sessionId,
 			force: true,
+			obfuscate: text => session.obfuscateTextForProvider?.(text) ?? text,
 		});
 	},
 

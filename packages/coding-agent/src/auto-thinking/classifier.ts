@@ -124,6 +124,8 @@ export interface ClassifyDifficultyDeps {
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
 	onUsage?: (usage: JudgmentUsage) => void;
 	telemetry?: AgentTelemetryConfig;
+	/** Redacts configured secrets from the turn text before the judge sees it. */
+	obfuscate?: (text: string) => string;
 }
 
 /**
@@ -160,9 +162,10 @@ export async function classifyDifficulty(
 		cache: sharedJudgmentCache(),
 	});
 	const solutionSpace = input.solutionSpace?.trim();
-	const state: Record<string, string> = solutionSpace
-		? { solution_space: preprocessTinyMessage(solutionSpace) }
-		: { request: preprocessTinyMessage(input.request) };
+	const text = preprocessTinyMessage(solutionSpace || input.request);
+	const obfuscate = deps.obfuscate;
+	const redacted = obfuscate?.(text) ?? text;
+	const state: Record<string, string> = solutionSpace ? { solution_space: redacted } : { request: redacted };
 	const questions = solutionSpace ? SOLUTION_SPACE_QUESTIONS : REQUEST_QUESTIONS;
 	const options = { signal: deps.signal };
 	const ceiling = autoEffortCeiling(deps);

@@ -1524,11 +1524,11 @@ export class SessionMaintenance {
 						compactionAbortController.signal,
 						{
 							promptOverride: this.#host.obfuscateTextForProvider(compactionPrep.hookPrompt),
-							extraContext: compactionPrep.hookContext,
+							extraContext: this.#obfuscateContextBlocks(compactionPrep.hookContext),
 							// The prompt the live turn actually sent — a per-turn
 							// `before_agent_start` override included — so a provider-native
 							// compaction shares the live request's cached prefix.
-							remoteSystemPrompt: this.#host.agent.state.systemPrompt,
+							remoteSystemPrompt: this.#obfuscateContextBlocks(this.#host.agent.state.systemPrompt),
 							convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
 							codexCompaction,
 						},
@@ -1964,6 +1964,15 @@ export class SessionMaintenance {
 	}
 
 	/**
+	 * Redacts configured secrets from provider-bound context blocks — extension
+	 * `session.compacting` extra context and the live system prompt that a
+	 * provider-native compaction replays verbatim. Identity when none are configured.
+	 */
+	#obfuscateContextBlocks(blocks: string[] | undefined): string[] | undefined {
+		return blocks?.map(block => this.#host.obfuscateTextForProvider(block) ?? block);
+	}
+
+	/**
 	 * Ask the active memory backend for an extra-context block to splice into
 	 * the compaction summary prompt. Both the manual and auto compaction paths
 	 * funnel through this helper so the behaviour stays identical.
@@ -2344,8 +2353,8 @@ export class SessionMaintenance {
 				signal,
 				{
 					promptOverride: this.#host.obfuscateTextForProvider(compactionPrep.hookPrompt),
-					extraContext: compactionPrep.hookContext,
-					remoteSystemPrompt: this.#host.agent.state.systemPrompt,
+					extraContext: this.#obfuscateContextBlocks(compactionPrep.hookContext),
+					remoteSystemPrompt: this.#obfuscateContextBlocks(this.#host.agent.state.systemPrompt),
 					codexCompaction,
 					// Isolate from the live turn: remote compaction transports key
 					// sticky provider sessions by sessionId, and a speculation
@@ -5403,8 +5412,8 @@ export class SessionMaintenance {
 								autoCompactionSignal,
 								{
 									promptOverride: this.#host.obfuscateTextForProvider(compactionPrep.hookPrompt),
-									extraContext: compactionPrep.hookContext,
-									remoteSystemPrompt: this.#host.agent.state.systemPrompt,
+									extraContext: this.#obfuscateContextBlocks(compactionPrep.hookContext),
+									remoteSystemPrompt: this.#obfuscateContextBlocks(this.#host.agent.state.systemPrompt),
 									metadata: this.#host.agent.metadataForProvider(candidate.provider),
 									initiatorOverride: "agent",
 									convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),

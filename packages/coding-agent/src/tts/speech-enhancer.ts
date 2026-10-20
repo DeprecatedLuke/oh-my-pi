@@ -41,6 +41,10 @@ export interface SpeechEnhancerDeps {
 	registry: ModelRegistry;
 	sessionId: string;
 	metadataResolver?: (provider: string) => Record<string, unknown> | undefined;
+	/** Redacts configured secrets from the block before the rewriter sees it. */
+	obfuscate?: (text: string) => string;
+	/** Restores placeholders the rewriter echoed, so speech reads real values instead of tokens. */
+	deobfuscate?: (text: string) => string;
 }
 
 function extractText(content: AssistantMessage["content"]): string {
@@ -90,7 +94,13 @@ export class SpeechEnhancer {
 						model,
 						{
 							systemPrompt: [SYSTEM_PROMPT],
-							messages: [{ role: "user", content: boundBlock(block), timestamp: Date.now() }],
+							messages: [
+								{
+									role: "user",
+									content: boundBlock(this.#deps.obfuscate?.(block) ?? block),
+									timestamp: Date.now(),
+								},
+							],
 						},
 						{
 							apiKey: registry.resolver(model, sessionId),
@@ -108,7 +118,8 @@ export class SpeechEnhancer {
 				logger.debug("speech-enhancer: rewrite errored", { error: response.errorMessage });
 				return null;
 			}
-			return extractText(response.content);
+			const spoken = extractText(response.content);
+			return this.#deps.deobfuscate?.(spoken) ?? spoken;
 		} catch (error) {
 			if (!signal?.aborted) {
 				logger.debug("speech-enhancer: rewrite failed", {

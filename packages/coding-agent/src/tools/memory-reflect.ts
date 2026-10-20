@@ -77,8 +77,9 @@ export class MemoryReflectTool implements AgentTool<typeof memoryReflectSchema> 
 
 			try {
 				await ensureBankExists(state.client, state.bankId, state.config, state.banksSet);
-				const response = await state.client.reflect(state.bankId, params.query, {
-					context: params.context,
+				// Tool args arrive deobfuscated; reflect sends to the remote Hindsight service.
+				const response = await state.client.reflect(state.bankId, state.obfuscateTextForService(params.query), {
+					context: params.context === undefined ? undefined : state.obfuscateTextForService(params.context),
 					budget: state.config.recallBudget,
 					tags: state.recallTags,
 					tagsMatch: state.recallTagsMatch,

@@ -227,6 +227,8 @@ export function createPersistedSubagentReviverFactory(
 			try {
 				({ session } = await createAgentSession({
 					cwd: restoredSeance?.cwd ?? ctx.session.sessionManager.getCwd(),
+					// A revived agent redacts with the root session's secret set, not its own cwd's.
+					obfuscator: ctx.session.obfuscator,
 					authStorage: ctx.authStorage,
 					// Revived agents join the root session tree, so their observability
 					// frames ride the same bus the RPC/collab surfaces subscribed to.

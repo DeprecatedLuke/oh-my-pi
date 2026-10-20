@@ -51,6 +51,8 @@ export class OmpCommitInference implements CommitInference {
 	readonly #authStorage: AuthStorage | null;
 	readonly #onProgress?: CommitProgress;
 	readonly #signal?: AbortSignal;
+	readonly #obfuscate?: (text: string) => string;
+	readonly #deobfuscate?: (text: string) => string;
 	readonly #sessionId = Bun.randomUUIDv7();
 
 	constructor(options: {
@@ -63,6 +65,10 @@ export class OmpCommitInference implements CommitInference {
 		authStorage?: AuthStorage;
 		onProgress?: CommitProgress;
 		signal?: AbortSignal;
+		/** Masks configured secrets in diff/context-derived prompts before they leave for a provider. */
+		obfuscate?: (text: string) => string;
+		/** Restores placeholders the model echoed back so commits never contain them. */
+		deobfuscate?: (text: string) => string;
 	}) {
 		const secondary = options.forcePrimaryForEveryRole ? options.primary : options.smol;
 		this.#targets = {
@@ -76,6 +82,8 @@ export class OmpCommitInference implements CommitInference {
 		this.#authStorage = options.authStorage ?? null;
 		this.#onProgress = options.onProgress;
 		this.#signal = options.signal;
+		this.#obfuscate = options.obfuscate;
+		this.#deobfuscate = options.deobfuscate;
 	}
 
 	/** Run one request with cache lookup, parse validation, and exponential retries. */
@@ -83,20 +91,25 @@ export class OmpCommitInference implements CommitInference {
 		const target = this.#targets[request.role];
 		const modelKey = `${target.model.provider}/${target.model.id}`;
 		const reasoning = toReasoningEffort(target.thinkingLevel);
+		// Diff and repository context carry real secret values; redact before the cache and the wire,
+		// then restore placeholders in the answer before parsing so commits keep the original text.
+		const systemPrompt = this.#obfuscate ? this.#obfuscate(request.systemPrompt) : request.systemPrompt;
+		const userPrompt = this.#obfuscate ? this.#obfuscate(request.userPrompt) : request.userPrompt;
 		const key = computeCommitCacheKey({
 			operation: request.operation,
 			model: modelKey,
 			apiMode: target.model.api,
 			toolName: request.toolName,
-			systemPrompt: request.systemPrompt,
-			userPrompt: request.userPrompt,
+			systemPrompt,
+			userPrompt,
 			reasoningEffort: reasoning,
 		});
 		if (request.cacheable !== false) {
 			const cached = this.#cache?.get(key);
 			if (cached) {
 				try {
-					const parsed = parse({ text: cached.text, stopReason: cached.stopReason });
+					const text = this.#deobfuscate ? this.#deobfuscate(cached.text) : cached.text;
+					const parsed = parse({ text, stopReason: cached.stopReason });
 					this.#onProgress?.(`Cache hit: ${request.progressLabel}`);
 					return parsed;
 				} catch {}
@@ -105,8 +118,8 @@ export class OmpCommitInference implements CommitInference {
 
 		const requestJson = JSON.stringify({
 			model: modelKey,
-			system: request.systemPrompt,
-			user: request.userPrompt,
+			system: systemPrompt,
+			user: userPrompt,
 			reasoning,
 		});
 		let lastError: Error | undefined;
@@ -120,8 +133,8 @@ export class OmpCommitInference implements CommitInference {
 				const message = await completeSimple(
 					target.model,
 					{
-						systemPrompt: request.systemPrompt.trim() ? [request.systemPrompt] : undefined,
-						messages: [{ role: "user", content: request.userPrompt, timestamp: Date.now() }],
+						systemPrompt: systemPrompt.trim() ? [systemPrompt] : undefined,
+						messages: [{ role: "user", content: userPrompt, timestamp: Date.now() }],
 					},
 					{
 						apiKey: target.apiKey,
@@ -134,7 +147,10 @@ export class OmpCommitInference implements CommitInference {
 				responseText = extractTextContent(message);
 				if (message.stopReason === "error") throw new Error(message.errorMessage ?? "Provider error");
 				if (!responseText.trim()) throw new Error("Empty model response");
-				const raw = { text: responseText, stopReason: message.stopReason };
+				const raw = {
+					text: this.#deobfuscate ? this.#deobfuscate(responseText) : responseText,
+					stopReason: message.stopReason,
+				};
 				const parsed = parse(raw);
 				if (request.cacheable !== false) {
 					this.#cache?.put({

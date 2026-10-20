@@ -555,6 +555,12 @@ export interface CreateAgentSessionOptions {
 	additionalDirectories?: string[];
 	/** Global config directory. Default: ~/.omp/agent */
 	agentDir?: string;
+	/**
+	 * Secret obfuscator to redact with instead of building one from `cwd`. Child sessions
+	 * (subagents, revives, scans) pass their parent's so a different cwd cannot drop the
+	 * parent's project-scoped secrets.
+	 */
+	obfuscator?: SecretObfuscator;
 	/** Spawns to allow. Default: "*" */
 	spawns?: string;
 	/** User-authorized model agents inherited from the parent session for nested delegation. */
@@ -1990,9 +1996,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// Load and create secret obfuscator early so resumed session state and prompt warnings
 	// reflect actual loaded secrets, not just the setting toggle. Reassigned when
 	// `secrets.enabled` first turns on mid-session (see the watch after session creation).
-	let obfuscator: SecretObfuscator | undefined = cfgSecretsEnabled.get(settings)
-		? await buildSecretObfuscator(cwd, agentDir, options.agentDir)
-		: undefined;
+	let obfuscator: SecretObfuscator | undefined =
+		options.obfuscator ??
+		(cfgSecretsEnabled.get(settings) ? await buildSecretObfuscator(cwd, agentDir, options.agentDir) : undefined);
+	// `/fix-refusal` replaces the session's obfuscator; closures read the live one.
+	const liveObfuscator = (): SecretObfuscator | undefined => (hasSession ? session.obfuscator : obfuscator);
 
 	// An abnormal process exit after a non-terminal message tail is durable
 	// evidence that the old process can no longer finish that turn. Preserve the
@@ -2279,7 +2287,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					modelRegistry,
 					sessionId: () => sessionManager.getSessionId(),
 					telemetry: () => agent?.telemetry,
-					obfuscate: () => (obfuscator?.hasSecrets() ? text => obfuscator?.obfuscate(text) ?? text : undefined),
+					obfuscate: () => {
+						const current = liveObfuscator();
+						return current?.hasSecrets() ? text => current.obfuscate(text) : undefined;
+					},
 					onUsage: message => {
 						if (!message.usage) return;
 						sessionManager.appendModelUsage(
@@ -2350,6 +2361,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			setActiveToolNames,
 			toolRegistry,
 			hasUI: options.hasUI ?? false,
+			obfuscateText: text => {
+				const current = liveObfuscator();
+				return current?.obfuscates() ? current.obfuscate(text) : text;
+			},
+			deobfuscateText: text => {
+				const current = liveObfuscator();
+				return current?.hasSecrets() ? current.deobfuscate(text) : text;
+			},
+			getObfuscator: liveObfuscator,
 			canPromptUser: options.interactivePrompts ?? options.hasUI ?? false,
 			advertiseHeadlessAsk: options.advertiseHeadlessAsk,
 			settingsApproval: options.settingsApproval === true && !isSubagentSession,
@@ -3944,10 +3964,20 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// its own telemetry handle, so its usage stays out of the run summary.
 			// The first requests can start before `agent` is constructed; they use
 			// the telemetry config and session id the agent is constructed with.
-			compress: createSkillDescriptionCompressor(modelRegistry, settings, undefined, () =>
-				agent
-					? resolveTelemetry(agent.telemetry, agent.sessionId)
-					: resolveTelemetry(options.telemetry, providerSessionId),
+			compress: createSkillDescriptionCompressor(
+				modelRegistry,
+				settings,
+				undefined,
+				() =>
+					agent
+						? resolveTelemetry(agent.telemetry, agent.sessionId)
+						: resolveTelemetry(options.telemetry, providerSessionId),
+				// Skill text can carry configured secrets; read the session's current
+				// obfuscator so `/fix-refusal` swaps reach progressive compression too.
+				{
+					obfuscate: text => liveObfuscator()?.obfuscate(text) ?? text,
+					deobfuscate: text => liveObfuscator()?.deobfuscate(text) ?? text,
+				},
 			),
 		});
 		const rebuildSystemPrompt = async (
@@ -4422,7 +4452,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			blobBroker,
 		);
 		const transformProviderContext = async (context: Context, transformModel: Model): Promise<Context> => {
-			let transformed = obfuscator ? obfuscateProviderContext(obfuscator, context) : context;
+			const currentObfuscator = liveObfuscator();
+			let transformed = currentObfuscator ? obfuscateProviderContext(currentObfuscator, context) : context;
 			// The archive was sized for the model active at the last context build; a model switch may have lowered the budget.
 			transformed = capArchiveFrameBytes(transformed, transformModel);
 			transformed = await snapcompactInline.transform(transformed, transformModel);
@@ -4942,6 +4973,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						if (!obfuscator && built) {
 							obfuscator = built;
 							session.setObfuscator(built);
+							// Live children inherited "no secrets"; give them the first build.
+							AgentRegistry.global().propagateObfuscator(
+								session.getAgentId() ?? MAIN_AGENT_ID,
+								undefined,
+								built,
+							);
 						}
 					}
 					obfuscator?.setObfuscating(cfgSecretsEnabled.get(settings));

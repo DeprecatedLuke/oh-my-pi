@@ -661,6 +661,8 @@ function buildExecutorOptions(
 		authStorage: session.authStorage,
 		modelRegistry: session.modelRegistry,
 		settings: session.settings,
+		obfuscate: session.obfuscateText,
+		deobfuscate: session.deobfuscateText,
 		asyncJobManager: session.asyncJobManager,
 		inheritedSessionAgents: session.getSessionAgents?.(),
 		mcpManager: enableMCP ? (session.mcpManager ?? MCPManager.instance()) : undefined,
@@ -775,6 +777,7 @@ async function runNativePatchSubprocess(
 				request.session.modelRegistry,
 				request.session.settings,
 				request.session.getSessionId?.() ?? undefined,
+				{ obfuscate: request.session.obfuscateText, deobfuscate: request.session.deobfuscateText },
 			);
 			if (generated?.trim()) return generated.trim();
 		}

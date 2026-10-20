@@ -344,7 +344,10 @@ async function executeCompletion(
 			]
 		: undefined;
 	const telemetry = resolveTelemetry(session.getTelemetry?.(), session.getSessionId?.() ?? undefined);
-	const systemPrompt = system ? [system] : ["You are a helpful assistant."];
+	// Cells and prompts are frequently built from tool output that holds real secret values;
+	// redact before the request leaves for a provider, then restore the answer for the cell.
+	const redact = session.obfuscateText ?? ((text: string) => text);
+	const systemPrompt = (system ? [system] : ["You are a helpful assistant."]).map(redact);
 	// Each fallback that issues a model request consumes one retry attempt,
 	// mirroring session recovery. Keyless candidates are skipped without
 	// consuming budget so a usable later fallback is still attempted.
@@ -372,7 +375,7 @@ async function executeCompletion(
 				model,
 				{
 					systemPrompt,
-					messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
+					messages: [{ role: "user", content: [{ type: "text", text: redact(prompt) }], timestamp: Date.now() }],
 					tools,
 				},
 				{
@@ -427,7 +430,7 @@ async function executeCompletion(
 	}
 
 	return {
-		text: resultText,
+		text: session.deobfuscateText?.(resultText) ?? resultText,
 		details: { model: formatModelString(model), tier: finalTier, structured: Boolean(schema) },
 	};
 }

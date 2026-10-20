@@ -53,6 +53,8 @@ export interface ClassifyUnexpectedStopDeps {
 	onUsage?: (usage: JudgmentUsage) => void;
 	telemetry?: AgentTelemetryConfig;
 	signal?: AbortSignal;
+	/** Redacts configured secrets from the turn text before the judge sees it. */
+	obfuscate?: (text: string) => string;
 }
 
 /** Detects terminal turns eligible for mechanical recovery or smart classification. */
@@ -97,7 +99,10 @@ export async function classifyUnexpectedStop(
 			cache: sharedJudgmentCache(),
 		});
 		const request = stop.request?.trim().slice(0, REQUEST_CHARS);
-		const state: JudgmentState = request ? { request, message: stop.message } : { message: stop.message };
+		const obfuscate = deps.obfuscate;
+		const state: JudgmentState = request
+			? { request: obfuscate?.(request) ?? request, message: obfuscate?.(stop.message) ?? stop.message }
+			: { message: obfuscate?.(stop.message) ?? stop.message };
 		const { answers } = await judge.judge(
 			{ state, questions: { stopped: QUESTIONS.stopped } },
 			{ signal: deps.signal },

@@ -23,7 +23,7 @@ import {
 } from "../memory-backend/recall-entry";
 import { memoryToolRefs } from "../memory-backend/tool-names";
 import type { MemoryPromptPreparation } from "../memory-backend/types";
-import { redactMemorySecrets, redactRememberWrite } from "../memory-backend/redact";
+import { redactMemorySecrets, obfuscateRememberWrite } from "../memory-backend/redact";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import memoryRecallChangesPrompt from "../prompts/system/memory-recall-changes.md" with { type: "text" };
 import mnemopiInstructions from "../prompts/system/mnemopi-instructions.md" with { type: "text" };
@@ -265,6 +265,12 @@ export class MnemopiSessionState {
 	unsubscribe?: () => void;
 	#retentionCursorLoaded = false;
 	#recallGeneration = 0;
+	/**
+	 * Redact configured secrets from everything this state hands to a memory model,
+	 * embedding endpoint, or remote store. LIVE: reads the session's current obfuscator
+	 * so `/fix-refusal` entries apply to later writes without rebuilding the state.
+	 */
+	readonly #obfuscateSecretText = (text: string): string => this.session.obfuscateTextForProvider?.(text) ?? text;
 
 	constructor(options: MnemopiSessionStateOptions) {
 		this.sessionId = options.sessionId;
@@ -395,8 +401,11 @@ export class MnemopiSessionState {
 				}
 				if (op === "update") {
 					// `update` writes replacement content straight to the row, bypassing
-					// `rememberInScope`, so it needs the same redaction.
-					const content = options.content === undefined ? null : redactMemorySecrets(options.content);
+					// `rememberInScope`, so it needs the same redaction plus secret obfuscation.
+					const content =
+						options.content === undefined
+							? null
+							: redactMemorySecrets(this.#obfuscateSecretText(options.content));
 					if (target.memory.update(id, content, options.importance ?? null)) {
 						return { status: "updated", ...resultContext };
 					}
@@ -433,6 +442,9 @@ export class MnemopiSessionState {
 	}
 
 	async collectScopedRecallResults(query: string): Promise<RecallResult[]> {
+		// The recall query is embedded (and possibly reranked/extracted) by the configured
+		// provider, and it is composed from raw user turns, so redact before it leaves.
+		query = this.#obfuscateSecretText(query);
 		const merged: RecallResult[] = [];
 		const byId = new Map<string, number>();
 		const byContent = new Map<string, number>();
@@ -526,7 +538,7 @@ export class MnemopiSessionState {
 		target: MnemopiScopedMemory = this.scoped.retain,
 	): string {
 		return withLoopPhase("mnemopi.retain", () => {
-			const [scrubbed, scrubbedOptions] = redactRememberWrite(memory, options);
+			const [scrubbed, scrubbedOptions] = obfuscateRememberWrite(memory, options, this.#obfuscateSecretText);
 			return target.memory.remember(scrubbed, scrubbedOptions);
 		});
 	}
@@ -626,7 +638,9 @@ export class MnemopiSessionState {
 		budget: (block: string) => string = block => this.budgetRecallBlock(block),
 	): Promise<MemoryPromptPreparation | undefined> {
 		if (!this.config.autoRecall || this.hasRecalledForFirstTurn) return undefined;
-		const latestPrompt = promptText.trim();
+		// Redact before composing/truncating: a cut through a secret would leave a
+		// prefix the obfuscator can no longer match.
+		const latestPrompt = this.#obfuscateSecretText(promptText.trim());
 		if (!latestPrompt) return undefined;
 		const generation = ++this.#recallGeneration;
 		// The transcript's recall is history: a resumed session sends it unchanged, so the
@@ -678,9 +692,10 @@ export class MnemopiSessionState {
 		const flat = withLoopPhase("mnemopi.recall", () => flattenAgentMessages(messages));
 		const lastUser = flat.findLast(message => message.role === "user");
 		if (!lastUser) return undefined;
+		const latest = this.#obfuscateSecretText(lastUser.content);
 		const truncated = withLoopPhase("mnemopi.recall", () => {
-			const query = composeRecallQuery(lastUser.content, flat, this.config.recallContextTurns);
-			return truncateRecallQuery(query, lastUser.content, this.config.recallMaxQueryChars);
+			const query = composeRecallQuery(latest, flat, this.config.recallContextTurns);
+			return truncateRecallQuery(query, latest, this.config.recallMaxQueryChars);
 		});
 		return await this.recallForContext(truncated);
 	}

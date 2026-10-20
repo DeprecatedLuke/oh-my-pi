@@ -15,8 +15,11 @@ import type { VcsHunkSelection } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { parseFileDiffs, parseFileHunks } from "../../commit/git/diff";
+import { Settings } from "../../config/settings";
 import { openStandaloneJudge } from "../../judgment/standalone";
 import questionFile from "../../prompts/judge/git-stage.json" with { type: "json" };
+import { buildSecretObfuscator } from "../../secrets";
+import { cfgSecretsEnabled } from "../../secrets/settings";
 import { mapWithConcurrencyLimitAllSettled } from "../../task/parallel";
 import type { ChangedFile } from "@oh-my-pi/pi-tui/apps/git/state";
 import type { AiStageOutcome } from "@oh-my-pi/pi-tui/apps/git/git-tui";
@@ -97,6 +100,12 @@ export async function aiStage(options: AiStageOptions): Promise<AiStageOutcome> 
 	if (tracked.length === 0 && untracked.length === 0) throw new Error("No unstaged changes to filter");
 
 	onProgress?.("Resolving model…");
+	const settingsInstance = await Settings.init({ cwd });
+	const obfuscator = cfgSecretsEnabled.get(settingsInstance)
+		? await buildSecretObfuscator(cwd, settingsInstance.getAgentDir())
+		: undefined;
+	// Instructions and hunk text are user content; a configured secret in either must not reach the judge.
+	const redact = obfuscator ? (text: string) => obfuscator.obfuscate(text) : undefined;
 	const { judge, close } = await openStandaloneJudge(cwd, "git_stage");
 	try {
 		onProgress?.("Reading changes…");
@@ -149,11 +158,11 @@ export async function aiStage(options: AiStageOptions): Promise<AiStageOutcome> 
 				const { answers } = await judge.judge(
 					{
 						state: {
-							instruction,
-							all_changed_files: allChangedFiles,
-							path: unit.path,
+							instruction: redact ? redact(instruction) : instruction,
+							all_changed_files: redact ? allChangedFiles.map(path => redact(path)) : allChangedFiles,
+							path: redact ? redact(unit.path) : unit.path,
 							kind: unit.kind,
-							...(unit.change === undefined ? {} : { change: unit.change }),
+							...(unit.change === undefined ? {} : { change: redact ? redact(unit.change) : unit.change }),
 						},
 						questions: { belongs: QUESTIONS.belongs },
 					},
@@ -190,14 +199,28 @@ export async function aiStage(options: AiStageOptions): Promise<AiStageOutcome> 
 				};
 			});
 			const { answers } = await judge.judge(
-				{ state: { instruction, candidates }, questions: { pick: { ...QUESTIONS.pick, criteria } } },
+				{
+					state: {
+						instruction: redact ? redact(instruction) : instruction,
+						candidates: candidates.map(candidate =>
+							redact
+								? {
+										...candidate,
+										path: redact(candidate.path),
+										...(candidate.change === undefined ? {} : { change: redact(candidate.change) }),
+									}
+								: candidate,
+						),
+					},
+					questions: { pick: { ...QUESTIONS.pick, criteria } },
+				},
 				{ signal },
 			);
 			if (answers.pick.probabilities[NONE] >= NONE_THRESHOLD) {
 				logger.debug("git ai-stage: verification rejected every candidate", {
-					instruction,
+					instruction: redact ? redact(instruction) : instruction,
 					none: answers.pick.probabilities[NONE],
-					candidates: candidates.map(candidate => candidate.path),
+					candidates: candidates.map(candidate => (redact ? redact(candidate.path) : candidate.path)),
 				});
 				accepted.fill(false);
 			}

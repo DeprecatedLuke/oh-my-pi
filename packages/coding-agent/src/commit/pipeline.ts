@@ -4,6 +4,8 @@ import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { cfgCommitChangelogMaxDiffChars } from "./settings";
 import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
+import { buildSecretObfuscator } from "../secrets";
+import { cfgSecretsEnabled } from "../secrets/settings";
 import { runAgenticCommit } from "./agentic";
 import { runChangelogFlow } from "./changelog";
 import { formatConventionalCommit } from "./conventional/normalization";
@@ -75,6 +77,9 @@ async function updateChangelog(cwd: string, args: CommitCommandArgs): Promise<vo
 		await registry.refresh();
 		await loadCliExtensionProviders(registry, settings, cwd);
 		const primary = await resolvePrimaryModel(args.model, settings, registry);
+		const obfuscator = cfgSecretsEnabled.get(settings)
+			? await buildSecretObfuscator(cwd, settings.getAgentDir())
+			: undefined;
 		await runChangelogFlow({
 			cwd,
 			model: primary.model,
@@ -84,6 +89,12 @@ async function updateChangelog(cwd: string, args: CommitCommandArgs): Promise<vo
 			dryRun: false,
 			maxDiffChars: cfgCommitChangelogMaxDiffChars.get(settings),
 			onProgress: message => process.stdout.write(`${message}\n`),
+			...(obfuscator
+				? {
+						obfuscate: (text: string) => obfuscator.obfuscate(text),
+						deobfuscate: (text: string) => obfuscator.deobfuscate(text),
+					}
+				: {}),
 		});
 	} finally {
 		authStorage.close();

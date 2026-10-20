@@ -9,6 +9,8 @@ import { Settings } from "../config/settings";
 import { EditTool } from "../edit";
 import sessionKnowledgeTemplate from "../prompts/system/session-knowledge.md" with { type: "text" };
 import { discoverAuthStorage } from "../sdk";
+import { buildSecretObfuscator, obfuscateProviderContext } from "../secrets";
+import { cfgSecretsEnabled } from "../secrets/settings";
 import { type RunSessionKnowledgeAgentResult, runSessionKnowledgeAgent } from "../session/knowledge-base";
 import {
 	fingerprintKnowledgeRoot,
@@ -377,8 +379,13 @@ function createProductionExporter(modelOverride: string | undefined): SessionKno
 			new WriteTool(toolSession),
 			new EditTool(toolSession),
 		];
-		// No live parent here (separate process): cache inheritance is best-effort
-		// and secrets are identity (saved session messages are stored raw).
+		// Saved session messages store user text and tool output raw, so this process has no
+		// parent obfuscator to inherit: build the project's own (jobs can span projects, so
+		// resolve it against this session's cwd) and redact the outbound context — seeded
+		// messages, system prompt, tool results, and the appended instruction.
+		const obfuscator = cfgSecretsEnabled.get(runtime.settings)
+			? await buildSecretObfuscator(job.session.cwd, runtime.settings.getAgentDir())
+			: undefined;
 		return await runSessionKnowledgeAgent({
 			cwd: job.session.cwd,
 			sourceTitle: job.sourceTitle,
@@ -394,6 +401,7 @@ function createProductionExporter(modelOverride: string | undefined): SessionKno
 				streamFn: streamSimple,
 				getApiKey: () => runtime.apiKey,
 				convertToLlm,
+				transformProviderContext: context => obfuscateProviderContext(obfuscator, context),
 				sessionId: job.session.id,
 			},
 		});

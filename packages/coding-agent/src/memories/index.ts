@@ -436,6 +436,7 @@ async function runPhase1(options: MemoryStartupOptions): Promise<void> {
 				modelMaxTokens: computeModelTokenBudget(phase1Model, config),
 				config,
 				metadata: session.agent?.metadataForProvider(phase1Model.provider),
+				obfuscate: text => session.obfuscateTextForProvider?.(text) ?? text,
 			});
 			if (!isMemoryStartupActive(options)) return;
 
@@ -597,6 +598,7 @@ async function runPhase2(options: MemoryStartupOptions): Promise<void> {
 				apiKey: modelRegistry.resolver(phase2Model, session.sessionId),
 				sessionId: session.sessionId,
 				metadata: session.agent?.metadataForProvider(phase2Model.provider),
+				obfuscate: text => session.obfuscateTextForProvider?.(text) ?? text,
 			});
 			if (!isMemoryStartupActive(options)) return;
 			await applyConsolidation(memoryRoot, consolidated);
@@ -815,8 +817,16 @@ async function* persistableMessagesFromBack(file: Bun.BunFile, size: number): As
  * streams the rollout in byte windows and serializes messages from the front and back only until
  * the head/tail budgets fill. Peak memory is bounded by the window size plus the largest single
  * JSONL record (a record spanning windows is carried until its newline), not by rollout size.
+ *
+ * Rollouts persist user text and tool output raw, so `obfuscate` (the session's secret redactor)
+ * runs over every string value before serialization — before JSON escaping and truncation, which
+ * could otherwise split or re-encode a secret past the redactor.
  */
-export async function buildStage1RolloutItems(rolloutPath: string, tokenLimit: number): Promise<string> {
+export async function buildStage1RolloutItems(
+	rolloutPath: string,
+	tokenLimit: number,
+	obfuscate?: (text: string) => string,
+): Promise<string> {
 	const file = Bun.file(rolloutPath);
 	// stat() throws for a missing rollout, matching the previous Bun.file().text() failure.
 	const { size } = await file.stat();
@@ -824,11 +834,14 @@ export async function buildStage1RolloutItems(rolloutPath: string, tokenLimit: n
 	const maxChars = tokenLimit * 4;
 	const headChars = Math.floor(maxChars * 0.6);
 	const tailChars = maxChars - headChars;
+	const replacer = obfuscate
+		? (_key: string, value: unknown) => (typeof value === "string" ? obfuscate(value) : value)
+		: undefined;
 
 	let head = "[";
 	let truncated = false;
 	for await (const message of persistableMessagesFromFront(file, size)) {
-		head += head.length === 1 ? JSON.stringify(message) : `,${JSON.stringify(message)}`;
+		head += head.length === 1 ? JSON.stringify(message, replacer) : `,${JSON.stringify(message, replacer)}`;
 		if (head.length > maxChars) {
 			truncated = true;
 			break;
@@ -842,7 +855,7 @@ export async function buildStage1RolloutItems(rolloutPath: string, tokenLimit: n
 	let tail = "]";
 	let exhausted = true;
 	for await (const message of persistableMessagesFromBack(file, size)) {
-		tail = `,${JSON.stringify(message)}${tail}`;
+		tail = `,${JSON.stringify(message, replacer)}${tail}`;
 		if (tail.length >= tailChars) {
 			exhausted = false;
 			break;
@@ -861,6 +874,7 @@ async function runStage1Job(options: {
 	modelMaxTokens: number;
 	config: MemoryRuntimeConfig;
 	metadata?: Record<string, unknown>;
+	obfuscate?: (text: string) => string;
 }): Promise<
 	| {
 			kind: "output";
@@ -876,7 +890,7 @@ async function runStage1Job(options: {
 			config.phase1InputTokenLimit,
 			Math.floor(modelMaxTokens * config.rolloutPayloadPercent),
 		);
-		const truncatedItems = await buildStage1RolloutItems(claim.rolloutPath, budgetTokens);
+		const truncatedItems = await buildStage1RolloutItems(claim.rolloutPath, budgetTokens, options.obfuscate);
 		const inputPrompt = prompt.render(stageOneInputTemplate, {
 			thread_id: claim.threadId,
 			response_items_json: truncatedItems,
@@ -1009,6 +1023,7 @@ async function runConsolidationModel(options: {
 	apiKey: ApiKey;
 	sessionId: string;
 	metadata?: Record<string, unknown>;
+	obfuscate?: (text: string) => string;
 }): Promise<{
 	memoryMd: string;
 	memorySummary: string;
@@ -1021,8 +1036,11 @@ async function runConsolidationModel(options: {
 	}>;
 }> {
 	const { memoryRoot, model, apiKey } = options;
-	const rawMemories = await Bun.file(path.join(memoryRoot, "raw_memories.md")).text();
-	const rolloutSummaries = await readRolloutSummaries(memoryRoot);
+	const obfuscate = options.obfuscate ?? ((text: string) => text);
+	// Redact before truncation so a cut can never split a secret past the redactor.
+	// Memories written before redaction existed may still hold raw values.
+	const rawMemories = obfuscate(await Bun.file(path.join(memoryRoot, "raw_memories.md")).text());
+	const rolloutSummaries = obfuscate(await readRolloutSummaries(memoryRoot));
 	const input = prompt.render(consolidationTemplate, {
 		raw_memories: truncateByApproxTokens(rawMemories, 20_000),
 		rollout_summaries: truncateByApproxTokens(rolloutSummaries, 12_000),

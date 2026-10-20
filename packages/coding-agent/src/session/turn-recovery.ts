@@ -255,6 +255,8 @@ export interface TurnRecoveryHost {
 	 */
 	unexpectedStopAbortSignal?(): AbortSignal;
 	sessionId(): string;
+	/** Redact configured secrets from text bound for a model; identity when none are configured. */
+	obfuscateTextForProvider(text: string): string;
 	/** True while owner-scoped background work will re-wake this session with its own follow-up. */
 	hasPendingAsyncWake(): boolean;
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
@@ -1188,6 +1190,7 @@ export class TurnRecovery {
 					metadataResolver: (provider: string) => this.#host.agent.metadataForProvider(provider),
 					onUsage: journalJudgmentUsage(this.#host.sessionManager),
 					telemetry: this.#host.agent.telemetry,
+					obfuscate: text => this.#host.obfuscateTextForProvider(text),
 					signal: controller.signal,
 				});
 			} finally {

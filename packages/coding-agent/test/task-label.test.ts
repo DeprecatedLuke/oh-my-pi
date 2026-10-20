@@ -47,13 +47,9 @@ describe("task label generation", () => {
 			return response.promise;
 		});
 
-		const label = generateTaskLabel(
-			"Investigate shutdown",
-			createRegistry(model),
-			createSettings(model),
-			undefined,
-			controller.signal,
-		);
+		const label = generateTaskLabel("Investigate shutdown", createRegistry(model), createSettings(model), {
+			signal: controller.signal,
+		});
 		await started.promise;
 		controller.abort();
 
@@ -72,7 +68,7 @@ describe("task label generation", () => {
 			"Sleep forty seconds then reply done",
 			createRegistry(model),
 			createSettings(model),
-			"AuthLoader",
+			{ sessionId: "AuthLoader" },
 		);
 		expect(echoed).toBeNull();
 
@@ -84,7 +80,7 @@ describe("task label generation", () => {
 			"Sleep forty seconds then reply done",
 			createRegistry(model),
 			createSettings(model),
-			"AuthLoader",
+			{ sessionId: "AuthLoader" },
 		);
 		expect(labeled).toBe("Sleep then reply done");
 	});

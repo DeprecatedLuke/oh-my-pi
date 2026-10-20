@@ -1852,6 +1852,7 @@ export class AgentSession implements SettingsScope {
 						signal,
 						onUsage: journalJudgmentUsage(this.sessionManager),
 						telemetry: this.agent.telemetry,
+						obfuscate: text => this.obfuscateTextForProvider(text),
 					},
 				),
 			emitNotice: (level, message, source) => this.emitNotice(level, message, source),
@@ -1910,6 +1911,7 @@ export class AgentSession implements SettingsScope {
 			providerSessionState: this.#providerSessionState,
 			model: () => this.model,
 			sessionId: () => this.sessionId,
+			obfuscateTextForProvider: text => this.obfuscateTextForProvider(text),
 			promptGeneration: () => this.#promptGeneration,
 			resolveActiveEditMode: () => this.#tools.resolveActiveEditMode(),
 			syncAfterModelChange: previousEditMode => this.#tools.syncAfterModelChange(previousEditMode),
@@ -1971,6 +1973,7 @@ export class AgentSession implements SettingsScope {
 			promptSequence: () => this.#promptSequence,
 			unexpectedStopAbortSignal: () => this.#postPromptTasksAbortController.signal,
 			sessionId: () => this.sessionId,
+			obfuscateTextForProvider: text => this.obfuscateTextForProvider(text),
 			hasPendingAsyncWake: () => this.#hasPendingAsyncWake(),
 			emitSessionEvent: event => this.#emitSessionEvent(event),
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
@@ -7104,8 +7107,13 @@ export class AgentSession implements SettingsScope {
 		return this.#providerBoundary.buildTranscriptSessionContext(options);
 	}
 
+	/** Redact configured secrets from text bound for any model; identity when no secrets are configured. */
+	obfuscateTextForProvider(text: string): string {
+		return this.#providerBoundary.obfuscateText(text) ?? text;
+	}
+
 	#obfuscateTextForProvider(text: string | undefined): string | undefined {
-		return this.#providerBoundary.obfuscateText(text);
+		return text === undefined ? undefined : this.obfuscateTextForProvider(text);
 	}
 
 	#obfuscatePreparationForProvider(preparation: CompactionPreparation): CompactionPreparation {
@@ -10192,9 +10200,11 @@ export class AgentSession implements SettingsScope {
 		if (titleSignal.aborted) return null;
 		// The title request carries user text, so it follows this session's own credential
 		// redaction policy like its conversation requests (see `settingsAwareStreamFn`).
+		// Configured secrets are redacted on the way out and restored in the title,
+		// matching how assistant text is displayed.
 		const title = await withCredentialRedaction(cfgSecretsEnabled.get(this.settings), () =>
 			generateSessionTitle(
-				firstMessage,
+				this.obfuscateTextForProvider(firstMessage),
 				this.#modelRegistry,
 				this.settings,
 				sessionId,
@@ -10206,7 +10216,8 @@ export class AgentSession implements SettingsScope {
 			),
 		);
 		if (await this.#sessionGenerationChanged(sessionGeneration)) return null;
-		return !titleSignal.aborted && this.sessionId === parentSessionId ? title : null;
+		if (titleSignal.aborted || this.sessionId !== parentSessionId) return null;
+		return title === null ? null : this.#deobfuscateFromProvider(title);
 	}
 
 	/** Capture before generation to detect interruption or disposal of a title request. */

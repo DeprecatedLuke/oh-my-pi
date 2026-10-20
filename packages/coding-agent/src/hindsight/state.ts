@@ -153,7 +153,7 @@ export class HindsightRetainQueue {
 		try {
 			await ensureBankExists(state.client, state.bankId, state.config, state.banksSet);
 			const batch: MemoryItemInput[] = items.map(item => ({
-				content: item.content,
+				content: state.obfuscateTextForService(item.content),
 				context: item.context ?? state.config.retainContext,
 				metadata: { session_id: sessionId },
 				tags: state.retainTags,
@@ -288,13 +288,22 @@ export class HindsightSessionState {
 		this.retainQueue.enqueue(content, context);
 	}
 
+	/**
+	 * Redact configured secrets from text bound for the Hindsight service. Transcripts and
+	 * recall queries are composed from raw user turns, and the service is remote. LIVE:
+	 * reads the session's current obfuscator so `/fix-refusal` entries apply immediately.
+	 */
+	obfuscateTextForService(text: string): string {
+		return this.session.obfuscateTextForProvider?.(text) ?? text;
+	}
+
 	async flushRetainQueue(): Promise<void> {
 		await this.retainQueue.flush();
 	}
 
 	async recallForContext(query: string, signal?: AbortSignal): Promise<RecallOutcome> {
 		try {
-			const response = await this.client.recall(this.bankId, query, {
+			const response = await this.client.recall(this.bankId, this.obfuscateTextForService(query), {
 				budget: this.config.recallBudget,
 				maxTokens: this.config.recallMaxTokens,
 				types: this.config.recallTypes.length > 0 ? this.config.recallTypes : undefined,
@@ -365,7 +374,7 @@ export class HindsightSessionState {
 		}
 
 		await ensureBankExists(this.client, this.bankId, this.config, this.banksSet);
-		await this.client.retain(this.bankId, transcript, {
+		await this.client.retain(this.bankId, this.obfuscateTextForService(transcript), {
 			documentId,
 			context: this.config.retainContext,
 			metadata: { session_id: this.sessionId },
@@ -442,7 +451,9 @@ export class HindsightSessionState {
 
 		if (!this.config.autoRecall || this.hasRecalledForFirstTurn) return undefined;
 
-		const latestPrompt = promptText.trim();
+		// Redact before composing/truncating: a cut through a secret would leave a
+		// prefix the obfuscator can no longer match.
+		const latestPrompt = this.obfuscateTextForService(promptText.trim());
 		if (!latestPrompt) return undefined;
 		const generation = ++this.#recallGeneration;
 		// Reuse this transcript's recall so a resumed session sends the same prompt. Hindsight
@@ -496,8 +507,9 @@ export class HindsightSessionState {
 		const lastUser = messages.findLast(m => m.role === "user");
 		if (!lastUser) return undefined;
 
-		const query = composeRecallQuery(lastUser.content, messages, this.config.recallContextTurns);
-		const truncated = truncateRecallQuery(query, lastUser.content, this.config.recallMaxQueryChars);
+		const latest = this.obfuscateTextForService(lastUser.content);
+		const query = composeRecallQuery(latest, messages, this.config.recallContextTurns);
+		const truncated = truncateRecallQuery(query, latest, this.config.recallMaxQueryChars);
 		const { context } = await this.recallForContext(truncated);
 		return context ?? undefined;
 	}

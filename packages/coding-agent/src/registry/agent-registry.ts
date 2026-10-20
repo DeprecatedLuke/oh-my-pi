@@ -11,6 +11,7 @@
 
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../session/agent-session";
+import type { SecretObfuscator } from "../secrets/obfuscator";
 import { oneLineLabel } from "@oh-my-pi/pi-tui/tools/task";
 
 import { MAIN_AGENT_ID, type AgentStatus, type AgentMetricsSummary } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
@@ -372,6 +373,39 @@ export class AgentRegistry {
 
 	get(id: string): AgentRef | undefined {
 		return this.#refs.get(id);
+	}
+
+	/**
+	 * Re-point a session's live descendants at a replaced secret obfuscator.
+	 * Children inherit their spawner's obfuscator by identity, so after
+	 * `/fix-refusal` swaps it they would otherwise keep redacting with the stale
+	 * set. Returns how many live sessions were re-pointed.
+	 */
+	propagateObfuscator(
+		rootId: string,
+		previous: SecretObfuscator | undefined,
+		next: SecretObfuscator | undefined,
+	): number {
+		const subtree = new Set<string>([rootId]);
+		let frontier = [rootId];
+		while (frontier.length > 0) {
+			const added: string[] = [];
+			for (const ref of this.#refs.values()) {
+				if (ref.parentId === undefined || !frontier.includes(ref.parentId) || subtree.has(ref.id)) continue;
+				subtree.add(ref.id);
+				added.push(ref.id);
+			}
+			frontier = added;
+		}
+		let updated = 0;
+		for (const ref of this.#refs.values()) {
+			if (ref.id === rootId || !subtree.has(ref.id)) continue;
+			const live = ref.session;
+			if (!live || live.obfuscator !== previous) continue;
+			live.setObfuscator(next);
+			updated++;
+		}
+		return updated;
 	}
 
 	list(): AgentRef[] {

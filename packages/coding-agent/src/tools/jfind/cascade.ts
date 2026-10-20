@@ -13,7 +13,7 @@
  * the critical path is three dependent waves.
  */
 import * as path from "node:path";
-import type { Judge, JudgmentResult, NoulQuestion } from "@oh-my-pi/pi-ai";
+import type { Judge, JudgmentResult, JsonValue, NoulQuestion } from "@oh-my-pi/pi-ai";
 import type { FindCoverage, FindHit, FindStats } from "@oh-my-pi/pi-tui/tools/find";
 import type { InternalUrlFilesystem } from "../../internal-urls/url-filesystem";
 import { throwIfAborted } from "../tool-errors";
@@ -57,6 +57,19 @@ const SCAN_TIMEOUT_MS = 30_000;
 /** Distinct failure messages retained for the report. */
 const FAILURES_KEPT = 5;
 
+/** Redact every string in a judge request's JSON state, descending into arrays and objects. */
+function obfuscateJsonStrings(value: JsonValue, redact: (text: string) => string): JsonValue {
+	if (typeof value === "string") return redact(value);
+	if (Array.isArray(value)) return value.map(item => obfuscateJsonStrings(item, redact));
+	if (value !== null && typeof value === "object") {
+		const source = value as { readonly [key: string]: JsonValue };
+		const out: { [key: string]: JsonValue } = {};
+		for (const key in source) out[redact(key)] = obfuscateJsonStrings(source[key], redact);
+		return out;
+	}
+	return value;
+}
+
 export interface CascadeOptions {
 	root: SearchRoot;
 	/** Filesystem the root is listed, scanned, and read through: host paths and internal URLs alike. */
@@ -68,6 +81,8 @@ export interface CascadeOptions {
 	includeHidden: boolean;
 	signal?: AbortSignal;
 	onProgress?: (message: string) => void;
+	/** Masks configured secrets in file names/passages before they reach the judge. */
+	obfuscate?: (text: string) => string;
 }
 
 export interface CascadeResult {
@@ -138,10 +153,18 @@ class Cascade {
 	}
 
 	async #ask(request: Request): Promise<Outcome> {
-		const { judge, signal } = this.#options;
+		const { judge, signal, obfuscate } = this.#options;
 		const started = performance.now();
 		try {
-			const result = await judge.judge(request, { signal });
+			const result = await judge.judge(
+				obfuscate
+					? {
+							state: obfuscateJsonStrings(request.state, obfuscate) as Request["state"],
+							questions: request.questions,
+						}
+					: request,
+				{ signal },
+			);
 			this.stats.requests++;
 			this.stats.apiMs += performance.now() - started;
 			this.stats.inputTokens += result.usage.input;

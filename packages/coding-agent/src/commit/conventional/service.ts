@@ -7,6 +7,8 @@ import { ModelRegistry } from "../../config/model-registry";
 import { Settings } from "../../config/settings";
 import { cfgCommit } from "../settings";
 import { discoverAuthStorage, loadCliExtensionProviders } from "../../sdk";
+import { buildSecretObfuscator } from "../../secrets";
+import { cfgSecretsEnabled } from "../../secrets/settings";
 import { resolvePrimaryModel, resolveSmolModel } from "../model-selection";
 import type { ConventionalCommit } from "../types";
 import { renderStat } from "../utils";
@@ -100,6 +102,9 @@ async function createOmpInference(
 		const cache = config.cacheEnabled
 			? await CommitInferenceCache.open(getCommitCacheDbPath(), config.cacheTtlDays)
 			: null;
+		const obfuscator = cfgSecretsEnabled.get(settings)
+			? await buildSecretObfuscator(options.cwd, settings.getAgentDir())
+			: undefined;
 		return new OmpCommitInference({
 			primary,
 			smol,
@@ -109,6 +114,12 @@ async function createOmpInference(
 			authStorage,
 			onProgress: options.onProgress,
 			signal: options.signal,
+			...(obfuscator
+				? {
+						obfuscate: (text: string) => obfuscator.obfuscate(text),
+						deobfuscate: (text: string) => obfuscator.deobfuscate(text),
+					}
+				: {}),
 		});
 	} catch (error) {
 		authStorage.close();

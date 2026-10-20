@@ -133,13 +133,30 @@ function isJsonValue(value: unknown): value is JsonValue {
 	}
 }
 
-/** Validate a cell-supplied judgment state (non-empty string or JSON value). */
-export function parseState(value: unknown): JudgmentState {
+function redactJson(value: JsonValue, redact: (text: string) => string): JsonValue {
+	if (typeof value === "string") return redact(value);
+	if (Array.isArray(value)) return value.map(item => redactJson(item, redact));
+	if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+		const source = value as { readonly [key: string]: JsonValue };
+		const out: { [key: string]: JsonValue } = {};
+		for (const key in source) out[redact(key)] = redactJson(source[key], redact);
+		return out;
+	}
+	return value;
+}
+
+/**
+ * Validate a cell-supplied judgment state (non-empty string or JSON value).
+ * `redact` masks configured secrets before the state reaches the judge model (and its cache).
+ */
+export function parseState(value: unknown, redact?: (text: string) => string): JudgmentState {
 	if (typeof value === "string") {
 		if (value.length === 0) throw invalid("state must not be empty");
-		return value;
+		return redact ? redact(value) : value;
 	}
-	if ((Array.isArray(value) || isRecord(value)) && isJsonValue(value)) return value;
+	if ((Array.isArray(value) || isRecord(value)) && isJsonValue(value)) {
+		return redact ? (redactJson(value, redact) as JudgmentState) : value;
+	}
 	throw invalid("state must be a string, a JSON object, or a JSON array");
 }
 
@@ -207,13 +224,14 @@ function parseQuestion(id: string, value: unknown): Question {
 	}
 }
 
-/** Validate cell-supplied questions keyed by id; `bool` maps to the library's `noul`. */
-export function parseQuestions(value: unknown): Record<string, Question> {
+/** Validate cell-supplied questions keyed by id; `bool` maps to the library's `noul`. `redact` masks instructions. */
+export function parseQuestions(value: unknown, redact?: (text: string) => string): Record<string, Question> {
 	if (!isRecord(value)) throw invalid("questions must be an object keyed by question id");
 	const questions: Record<string, Question> = {};
 	let count = 0;
 	for (const id in value) {
-		questions[id] = parseQuestion(id, value[id]);
+		const question = parseQuestion(id, value[id]);
+		questions[id] = redact ? { ...question, instructions: redact(question.instructions) } : question;
 		count++;
 	}
 	if (count === 0) throw invalid("questions must contain at least one question");
@@ -267,8 +285,9 @@ export async function runEvalJudgment(
 	options: EvalCompletionBridgeOptions,
 ): Promise<EvalJudgmentResult> {
 	if (!isRecord(args)) throw invalid("expected { state, questions }");
-	const state = parseState(args.state);
-	const questions = parseQuestions(args.questions);
+	const redact = options.session.obfuscateText;
+	const state = parseState(args.state, redact);
+	const questions = parseQuestions(args.questions, redact);
 	const judge = sessionJudge(options, "judge");
 	const signal = options.signal;
 	return withBridgeTimeoutPause(options.emitStatus, async () => {
