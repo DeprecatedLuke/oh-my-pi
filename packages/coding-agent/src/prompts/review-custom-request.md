@@ -6,7 +6,7 @@ Custom review instructions
 
 ### Distribution Guidelines
 
-Use the `task` tool with `agent: "reviewer"` and a `tasks` array.
+Use the `task` tool with a `tasks` array. Set `agent: "reviewer"` inside the `tasks[]` item (`tasks[].agent`), never at the top level or omitted.
 Create exactly **1 reviewer task**. Its assignment MUST include the custom instructions below.
 
 ### Reviewer Instructions
