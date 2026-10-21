@@ -229,6 +229,7 @@ export class KnowledgeProtocolHandler implements ProtocolHandler {
 		backing: "file",
 		selectors: "lines",
 		immutable: false,
+		hideFrontmatter: true,
 		write: { via: "handler", fileEdits: true, payload: "text", scope: "workspace", tier: () => "write" },
 	};
 

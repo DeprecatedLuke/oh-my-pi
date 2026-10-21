@@ -137,6 +137,8 @@ export interface SchemeSpec {
 	imageQuestion?: true;
 	/** Mistyped spellings are aliases of `scheme://x`: single-slash `scheme:/x` and a path-prefixed `/cwd/scheme://x` (local://). */
 	singleSlashAlias?: true;
+	/** Selector-less reads of the located file start after its leading YAML frontmatter (knowledge:// search descriptions). */
+	hideFrontmatter?: true;
 	write?: SchemeWritePolicy;
 }
 

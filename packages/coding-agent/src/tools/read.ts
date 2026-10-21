@@ -742,6 +742,25 @@ async function resolveFileTailSelector(
 	};
 }
 
+const FRONTMATTER_SCAN_BYTES = 64 * 1024;
+
+/**
+ * 0-indexed line where a file's body starts after a leading `---` YAML
+ * frontmatter block and the blank lines that follow it. 0 when there is no
+ * closed block within the scan window, or nothing but blanks follows it.
+ */
+async function frontmatterBodyStartLine(filePath: string): Promise<number> {
+	const lines = (await Bun.file(filePath).slice(0, FRONTMATTER_SCAN_BYTES).text()).split("\n");
+	if (lines[0]?.trimEnd() !== "---") return 0;
+	for (let close = 1; close < lines.length - 1; close++) {
+		if (lines[close].trimEnd() !== "---") continue;
+		let start = close + 1;
+		while (start < lines.length && lines[start].trim() === "") start++;
+		return start < lines.length ? start : 0;
+	}
+	return 0;
+}
+
 const IMAGE_QUESTION_SELECTOR_ERROR =
 	"The ?q= selector only supports images (raster files, .svg:img, file-backed image URLs, PDF page screenshots).";
 
@@ -2376,7 +2395,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					// indistinguishable from requested content, so `raw:31-31` must
 					// return line 31 and nothing else.
 					const rawSelector = isRawSelector(sel);
-					const requestedStart = offset ? Math.max(0, offset - 1) : 0;
+					// Hidden frontmatter (knowledge:// search descriptions) moves only the default start; any selector sees it.
+					const defaultStart =
+						located?.spec.hideFrontmatter && parsed.kind === "none" ? await frontmatterBodyStartLine(absolutePath) : 0;
+					const requestedStart = offset ? Math.max(0, offset - 1) : defaultStart;
 					const expandStart = !rawSelector && offset !== undefined && offset > 1;
 					const expandEnd = !rawSelector && limit !== undefined;
 					const leadingContext = expandStart ? Math.min(requestedStart, RANGE_LEADING_CONTEXT_LINES) : 0;
