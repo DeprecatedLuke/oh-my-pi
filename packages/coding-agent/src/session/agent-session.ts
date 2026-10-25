@@ -171,7 +171,6 @@ import { GoalRuntime } from "../goals/runtime";
 import type { GoalModeState, GoalTokenUsage } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
 import { InternalUrlRouter, type LocalProtocolOptions } from "../internal-urls";
-import type { DiscoverableTool } from "../tool-discovery/tool-index";
 import { type ChainJudge, hasNativeJudge, journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import type { JobWidgetEntry } from "@oh-my-pi/pi-tui/tools/job-widget";
@@ -1970,7 +1969,6 @@ export class AgentSession implements SettingsScope {
 			unexpectedStopAbortSignal: () => this.#postPromptTasksAbortController.signal,
 			sessionId: () => this.sessionId,
 			obfuscateTextForProvider: text => this.obfuscateTextForProvider(text),
-			hasPendingAsyncWake: () => this.#hasPendingAsyncWake(),
 			emitSessionEvent: event => this.#emitSessionEvent(event),
 			scheduleAgentContinue: options => this.#scheduleAgentContinue(options),
 			waitForSessionMessagePersistence: message => this.#waitForSessionMessagePersistence(message),
@@ -6771,22 +6769,6 @@ export class AgentSession implements SettingsScope {
 	/** Enabled MCP tools in their current presentation partition. */
 	getSelectedMCPToolNames(): string[] {
 		return this.#tools.getSelectedMCPToolNames();
-	}
-	/** Discoverable, inactive tools available to legacy BM25 search callers. */
-	getDiscoverableTools(filter?: { source?: DiscoverableTool["source"] }): DiscoverableTool[] {
-		return this.#tools.getDiscoverableTools(filter);
-	}
-
-	getDiscoverableToolSearchIndex() {
-		return this.#tools.getDiscoverableToolSearchIndex();
-	}
-
-	getSelectedDiscoveredToolNames(): string[] {
-		return this.#tools.getSelectedDiscoveredToolNames();
-	}
-
-	activateDiscoveredTools(toolNames: string[]): Promise<string[]> {
-		return this.#tools.activateDiscoveredTools(toolNames);
 	}
 
 	/** Rediscovers reloadable skills and refreshes prompt metadata. */

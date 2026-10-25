@@ -11,15 +11,24 @@
 - Moved the issues tracker out of core into the `omp-issues` plugin: its store, `issues://` scheme, `issues` tool, prompt, in-progress turn reminder, `§ Filed Issues` subagent section, and issue-filing `reviewer` behavior are gone, and `.omp/issues/` entries, the `issues` tool, `issues://` reads/writes, and reviewer issue filing now come from the plugin.
 - Moved the project knowledge base out of core into the `omp-knowledge` plugin: its note store, `knowledge://` scheme, `# Knowledge` prompt index, session-distill passes, automatic update, `/knowledge` command, and `omp build-knowledge` are gone, and `.omp/knowledge/` notes, `knowledge://` reads/writes, `/knowledge save|build|update|compact`, and the automatic distill now come from the plugin (`/knowledge build --sessions` replaces `omp build-knowledge`).
 - Moved the git checkpoint feature out of core into the `omp-git-checkpoint` plugin: the `git_checkpoint` tool, its prompt, and `docs/tools/git_checkpoint.md` are gone, and `omp git checkpoint` / `/git checkpoint` no longer exist.
+- Removed the `ssh` agent tool (remote command execution) along with its `ssh/ssh-executor` module, prompt, and long-output streaming: the agent can no longer run commands on configured SSH hosts, but `ssh://` read/write/search, SSH host discovery, and `omp ssh` host management are unchanged.
+- Removed the `launch` agent tool along with its prompt: service control now goes through `bash` with a `name` and `ready` condition, `proc://<id>` for status/logs/stdin/`/kill`/`/mode`, and automatic completion delivery, while `launch.enabled`, the project broker in `src/launch/*`, and `omp ps` are unchanged.
+- Removed the `job` agent tool (background-job snapshot and cancel) along with its prompt: finished jobs still deliver their results automatically, and job inspection/control now comes from `proc://<id>` reads and `proc://<id>/kill` writes; the Background Jobs panel is unchanged.
+- Removed the `irc` agent tool along with its prompt and the `irc.timeoutMs` setting: peers are messaged with `write agent://<id>` and replies are awaited with the `wait` tool, while the IRC bus, `irc:incoming`/`irc:relay` transcript cards, and `agent://` protocol reads are unchanged.
+- Removed the BM25 tool-discovery system: the `search_tool_bm25` tool, the `tool-discovery` module, and the `tools.discoveryMode`, `tools.essentialOverride`, `mcp.discoveryMode`, and `mcp.discoveryDefaultServers` settings; discoverable tools are reached through `xd://` devices only, and the dead config keys are still cleaned from configs on load.
+- Moved the fork-only `solver`, `research`, and `tester` agents out of core into the `omp-agents` plugin: their prompt files, embedded registration, and the system prompt's "Subagent type" hint are gone, and the three agents are now discovered only from the plugin's `agents/` directory (the `ultrasolve` keyword's `agent: "solver"` escalation needs the plugin linked).
 
 ### Added
 
 - Added a completion percentage to Background Jobs panel subagent rows, showing each running agent's latest self-estimate.
+- Restored the `wait` tool: it blocks on the first settled background job or owned service you started, on a reply you asked for, and returns a completion whose follow-up delivery has not landed yet, so prompts and subagent tool sets that point blocked agents at `wait` are back. Background results still auto-deliver when nothing waits on them.
 
 ### Changed
 
 - Reading a `knowledge://` note without a selector now starts after its `description` frontmatter, which only serves search; `:1` or `:raw` still shows it.
 - Clicking a Background Jobs panel row for a running task now focuses that subagent's session (with `tui.mouse` on); shell and eval rows have no agent to focus.
+- Background job completions are no longer batched: `async.batchSettleMs` and the fan-out settle window are gone, so each finished job delivers its own result instead of waiting for running siblings.
+- An empty or thinking-only turn while background work runs is treated as an unexpected stop again: the `wait` tool is the supported way to block, so the recovery no longer silently drops such turns.
 - Agents are now told never to fill a turn with no-op tool calls such as `sleep 0`, and to run the remaining step (land, merge, verify) or give the final answer instead.
 - Advisors are now told to send a note only when it names a risk and a concrete action, and to stay silent by not calling `advise` instead of sending "silent", approval, status, or plan-recap notes.
 - Added `display.backgroundJobs` (on by default) to hide the Background Jobs panel, which lists every live subagent — blocking and background — plus shell and eval jobs; `display.pinnedAgents: off` from older configs migrates to `false`, and configs still setting `display.pinnedAgents` or `display.subagentLivePreview` load again instead of failing with "Unknown setting".
@@ -32,10 +41,8 @@
 - Fixed `omp auth-gateway check --strict` probing OAuth credentials of structured-key providers (e.g. OpenCode Console sign-ins) with a raw token instead of the credential shape live requests send, which could mark good credentials as failed.
 - Fixed reviewer subagents not seeing already-filed project issues in their system prompt, which let them re-file settled or duplicate findings.
 - Fixed `edit` refusing every `knowledge://` note with "is written through `write`, not edited"; knowledge notes can be patched in place again while `write` still normalizes their frontmatter.
-- Fixed agents polling running subagents or background jobs (sleep loops in eval or shell, repeated `agent://`/`proc://` reads) instead of ending the turn: the system prompt's closing rules no longer forbid ending a turn that is only waiting on auto-delivered results, and an empty or thinking-only turn while background work runs is no longer treated as a stop that needs a retry.
 - Fixed subagents stalling while "waiting on" a background job: idle subagents are no longer shut down while their background jobs are still running, so the job result wakes them.
 - Fixed a subagent revived by a message never reporting back when it waited on a background job: its final result after the job finished was dropped, so the parent agent stopped instead of continuing.
-- Fixed the agent ending its turn after promising a result "when the window ends" (or once some external process finishes) with nothing to wake it; smart unexpected-stop detection now catches these deferrals and prompts the agent to start a background job that wakes it, while deferrals backed by a running background job are left alone.
 - Restored the anchored Background Jobs panel after detached subagent observer updates, replacing the duplicated Subagents tree and repeated task labels with compact live job rows.
 - Fixed automatic refusal recovery no longer observing completed refusal turns, and restored automatic refusal transcript/request snapshots for later analysis.
 - Restored native `knowledge://`, `issues://`, and `patch://` routing, project knowledge summaries in the system prompt, and reviewer issue filing with duplicate awareness.

@@ -574,25 +574,6 @@ export const cfgLaunchEnabled = register({
 	},
 });
 
-export const cfgIrcTimeoutMs = register({
-	id: "irc.timeoutMs",
-	type: "number",
-	default: 120_000,
-	ui: {
-		tab: "tools",
-		group: "Execution",
-		label: "IRC Timeout",
-		description: "Timeout for irc send await:true in milliseconds; 0 disables the timeout",
-		options: [
-			{ value: "0", label: "Disabled" },
-			{ value: "30000", label: "30 seconds" },
-			{ value: "60000", label: "1 minute" },
-			{ value: "120000", label: "2 minutes" },
-			{ value: "300000", label: "5 minutes" },
-		],
-	},
-});
-
 export const cfgSpeechgenEnabled = register({
 	id: "speechgen.enabled",
 	type: "boolean",
@@ -962,47 +943,6 @@ export const cfgAsyncMaxJobs = register({
 	protocolDefault: ["rpc"],
 	type: "number",
 	default: 100,
-});
-
-export const cfgAsyncBatchSettleMs = register({
-	id: "async.batchSettleMs",
-	type: "number",
-	default: 300_000,
-	ui: {
-		tab: "tools",
-		group: "Execution",
-		label: "Async Batch Settle (ms)",
-		description:
-			"Defer dispatching a completed background job while other background jobs are still running, up to this many ms, so sibling completions arrive in one user turn. Jobs from the same task fan-out extend the hold while a sibling is alive and reporting progress; the cap then acts as a silence (hang) bound. 0 disables.",
-	},
-});
-
-// Legacy BM25 discovery settings remain registered for SDK/tool callers (`search_tool_bm25`,
-// `tool-discovery/`); xd:// remains the default transport for current sessions.
-export const cfgToolsDiscoveryMode = register({
-	id: "tools.discoveryMode",
-	type: "enum",
-	values: ["auto", "off", "mcp-only", "all"] as const,
-	default: "auto",
-	ui: {
-		tab: "tools",
-		group: "Discovery & MCP",
-		label: "Tool Discovery",
-		description:
-			"Select the legacy search_tool_bm25 presentation mode; xd:// remains the default transport for current sessions.",
-	},
-});
-
-export const cfgToolsEssentialOverride = register({
-	id: "tools.essentialOverride",
-	type: "array",
-	default: EMPTY_STRING_ARRAY,
-	ui: {
-		tab: "tools",
-		group: "Discovery & MCP",
-		label: "Essential Tools Override",
-		description: "Override the built-in tools retained at the top level when legacy discovery hides tools.",
-	},
 });
 
 export const cfgAsyncWidgets = register({

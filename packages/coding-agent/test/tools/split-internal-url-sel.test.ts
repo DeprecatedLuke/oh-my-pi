@@ -52,10 +52,10 @@ describe("InternalUrlRouter.split", () => {
 		expect(split("skill://plugin:name")).toEqual({ path: "skill://plugin:name" });
 	});
 
-	it("preserves opaque knowledge tokens while peeling a true trailing selector", () => {
-		const knowledgePath = "knowledge://sdk/sdk-gen-$$CDO3CPB981P7:L$$.md";
-		expect(split(`${knowledgePath}:raw`)).toEqual({
-			path: knowledgePath,
+	it("preserves opaque redaction tokens while peeling a true trailing selector", () => {
+		const localPath = "local://sdk/sdk-gen-$$CDO3CPB981P7:L$$.md";
+		expect(split(`${localPath}:raw`)).toEqual({
+			path: localPath,
 			sel: "raw",
 		});
 	});

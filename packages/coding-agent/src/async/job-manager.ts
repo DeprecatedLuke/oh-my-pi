@@ -44,14 +44,6 @@ const DEFAULT_MAX_RUNNING_JOBS = 15;
 /** Abort reason used only when the owning session shuts down the entire manager. */
 export const ASYNC_JOB_MANAGER_SHUTDOWN_REASON = Symbol("AsyncJobManager shutdown");
 
-// Brief pause taken at the start of every dispatch when batching is enabled,
-// to catch completions that race in within the same tick.
-const BATCH_BURST_SETTLE_MS = 500;
-// Check interval while waiting for sibling jobs to finish during the extended
-// batching window. Tradeoff: short = responsive when the last sibling lands;
-// long = cheaper. 250ms is below human perception.
-const BATCH_SETTLE_CHECK_MS = 250;
-
 /** Kind of work a managed job runs; drives job-row badges and delivery labels. */
 export type AsyncJobType = "bash" | "task" | "eval";
 
@@ -107,7 +99,7 @@ export interface AsyncJob {
 	/** Latest tool-render details reported by the running job. */
 	latestDetails?: AsyncJobDetails;
 	/**
-	 * Registry id of the agent that owns this job (e.g. "Main",
+	 * Registry id of the agent that registered the job (e.g. "Main",
 	 * "AuthLoader"). Used by scoped cancel/list APIs so a subagent's teardown
 	 * does not cancel its parent's jobs. Undefined for callers that don't
 	 * supply an id (e.g. legacy tests, SDK consumers without an agent context).
@@ -119,6 +111,13 @@ export interface AsyncJob {
 	 * id differs from the agent id (vibe turn jobs, tan clones).
 	 */
 	agentId?: string;
+	/**
+	 * For `type: "task"` jobs: the subagent type (e.g. "solver", "explore",
+	 * "task") selected via the `agent` parameter. Used to render a more
+	 * informative tag in the background-jobs panel (e.g. `[solver]` instead
+	 * of the generic `[task]`). Undefined for bash jobs and legacy callers.
+	 */
+	agentType?: string;
 	/** The process the job runs, when it spawns one. */
 	process?: AsyncJobProcess;
 	/** What the job's live widget reads; set by bash and task jobs. */
@@ -129,28 +128,6 @@ export interface AsyncJob {
 	 * until the caller invokes `markRunning()` from the run context.
 	 */
 	queued?: boolean;
-	/**
-	 * Shared id stamped on every job spawned by one fan-out call (e.g. one
-	 * `task` tool invocation). The settle window holds a completed job's
-	 * delivery past `deliveryBatchMaxWaitMs` while a *live* sibling from the
-	 * same batch is still running, so the whole batch lands in one dispatch.
-	 */
-	batchId?: string;
-	/**
-	 * Timestamp of the job's last observed activity: registration, or the
-	 * most recent `reportProgress` call. Used as the liveness signal for the
-	 * extended batch hold — a batch sibling silent for longer than
-	 * `deliveryBatchMaxWaitMs` is treated as hung and stops extending the
-	 * hold.
-	 */
-	lastActivityAt: number;
-	/**
-	 * For `type: "task"` jobs: the subagent type (e.g. "solver", "explore",
-	 * "task") selected via the `agent` parameter. Used to render a more
-	 * informative tag in the background-jobs panel (e.g. `[solver]` instead
-	 * of the generic `[task]`). Undefined for bash jobs and legacy callers.
-	 */
-	agentType?: string;
 	/**
 	 * Job backs a foreground tool call that may still auto-background. It is
 	 * hidden from job listings and its delivery is suppressed until
@@ -167,19 +144,6 @@ export interface AsyncJob {
 	 * outlive the job row it was kept alive for.
 	 */
 	retainedArtifactsCleanup?: () => Promise<void>;
-}
-
-/**
- * Single completion delivered to `onJobComplete`. A batch (one or more
- * completions) is dispatched per loop iteration: every delivery that is
- * ready at the moment the loop wakes is bundled into the same call, so
- * downstream consumers (e.g. session message dispatch) can collapse them
- * into a single user turn instead of one turn per job.
- */
-export interface AsyncJobCompletion {
-	jobId: string;
-	text: string;
-	job?: AsyncJob;
 }
 
 /**
@@ -209,24 +173,10 @@ export interface AsyncJobManagerOptions {
 	 * the result text until retention eviction) — never routed here, which
 	 * would leak one agent's result into another session.
 	 */
-	onJobComplete?: (completions: AsyncJobCompletion[]) => void | Promise<void>;
+	onJobComplete?: AsyncJobDeliverySink;
 	/** Running-job cap; a function is re-read on every capacity check so a live setting resizes the cap. */
 	maxRunningJobs?: number | (() => number);
 	retentionMs?: number;
-	/**
-	 * Upper bound, in milliseconds, that the delivery loop will defer
-	 * dispatching a ready completion in order to batch with sibling jobs that
-	 * are still running. After this window elapses the loop dispatches
-	 * whatever has piled up — unless a running job from the same spawn batch
-	 * (`batchId`) as a queued delivery has shown activity within the window,
-	 * in which case the hold extends until the batch settles or goes silent.
-	 * `0` (default) disables the extended window entirely: the loop only
-	 * batches deliveries that arrive while a prior dispatch is awaiting
-	 * downstream work. Set to a positive value (e.g. 300_000 for 5 minutes)
-	 * to coalesce N background completions into a single user turn even when
-	 * they finish minutes apart.
-	 */
-	deliveryBatchMaxWaitMs?: number;
 	/**
 	 * Delay after a job's `async-result` delivery settles before its retained
 	 * artifacts are removed (see {@link RETAINED_ARTIFACTS_CLEANUP_GRACE_MS}).
@@ -258,8 +208,6 @@ interface AsyncJobDelivery {
 	nextAttemptAt: number;
 	lastError?: string;
 	ownerId?: string;
-	/** Snapshot of the job's batchId at enqueue time; survives job eviction. */
-	batchId?: string;
 	promise?: Promise<void>;
 	/**
 	 * Job-body metadata a sink needs to render the delivered result,
@@ -271,15 +219,7 @@ interface AsyncJobDelivery {
 	 */
 	jobSnapshot?: Pick<
 		AsyncJob,
-		| "type"
-		| "status"
-		| "startTime"
-		| "endTime"
-		| "label"
-		| "structured"
-		| "agentId"
-		| "latestDetails"
-		| "lastActivityAt"
+		"type" | "status" | "startTime" | "endTime" | "label" | "structured" | "agentId" | "latestDetails"
 	>;
 }
 
@@ -305,8 +245,6 @@ export interface AsyncJobRegisterOptions {
 	onProgress?: (text: string, details?: AsyncJobDetails) => void | Promise<void>;
 	/** Register the job in queued state; see {@link AsyncJob.queued}. */
 	queued?: boolean;
-	/** Shared id for all jobs spawned by one fan-out call; see AsyncJob.batchId. */
-	batchId?: string;
 	/** Subagent type for task jobs (e.g. "solver", "explore"); see AsyncJob.agentType. */
 	agentType?: string;
 	/** Register the job as backing a foreground call; see {@link AsyncJob.foreground}. */
@@ -355,17 +293,16 @@ export class AsyncJobManager {
 	readonly #releasedForegroundJobs = new Set<string>();
 	#nextAutoId = 1;
 	readonly #deliverySinks = new Map<string, AsyncJobDeliverySink>();
+	readonly #changeListeners = new Set<() => void>();
 	readonly #onJobComplete: AsyncJobManagerOptions["onJobComplete"];
 	readonly #maxRunningJobsOption: AsyncJobManagerOptions["maxRunningJobs"];
 	readonly #retentionMs: number;
-	readonly #deliveryBatchMaxWaitMs: number;
 	readonly #retainedArtifactsCleanupGraceMs: number;
 	readonly #retainedArtifactsCleanupMaxWaitMs: number;
 	readonly #consumedResultEvictionMs: number;
 	#deliveryLoop: Promise<void> | undefined;
 	#deliveryQueueChanged = Promise.withResolvers<void>();
 	#disposed = false;
-	readonly #changeListeners = new Set<() => void>();
 	/** Live widgets of this root's jobs; set by the root session when widgets are available. */
 	widgets: JobWidgetRegistry | undefined;
 
@@ -386,7 +323,6 @@ export class AsyncJobManager {
 		this.#onJobComplete = options.onJobComplete;
 		this.#maxRunningJobsOption = options.maxRunningJobs;
 		this.#retentionMs = Math.max(0, Math.floor(options.retentionMs ?? DEFAULT_RETENTION_MS));
-		this.#deliveryBatchMaxWaitMs = Math.max(0, Math.floor(options.deliveryBatchMaxWaitMs ?? 0));
 		this.#retainedArtifactsCleanupGraceMs = Math.max(
 			0,
 			Math.floor(options.retainedArtifactsCleanupGraceMs ?? RETAINED_ARTIFACTS_CLEANUP_GRACE_MS),
@@ -443,7 +379,7 @@ export class AsyncJobManager {
 		const maxRunningJobs = this.#maxRunningJobs;
 		if (activeCount >= maxRunningJobs) {
 			throw new Error(
-				`Background job limit reached (${maxRunningJobs}). Results auto-deliver; continue independent work, or cancel a stalled, abandoned, or unneeded job. If no work remains, end the turn immediately.`,
+				`Background job limit reached (${maxRunningJobs}). Wait for running jobs to finish or cancel one.`,
 			);
 		}
 
@@ -465,14 +401,11 @@ export class AsyncJobManager {
 			process: options?.process,
 			widgetInputs: options?.widgetInputs,
 			queued: options?.queued === true,
-			batchId: options?.batchId,
 			agentType: options?.agentType,
-			lastActivityAt: startTime,
 			...(options?.foreground ? { foreground: true } : {}),
 		};
 
 		const reportProgress = async (text: string, details?: AsyncJobDetails): Promise<void> => {
-			job.lastActivityAt = Date.now();
 			job.progressText = text;
 			if (details) job.latestDetails = details;
 			if (!options?.onProgress) return;
@@ -515,11 +448,10 @@ export class AsyncJobManager {
 					job.status = "failed";
 					this.#enqueueDelivery(id, errorText);
 				}
-			} finally {
-				this.#emitChange();
 			}
 			if (this.#releasedForegroundJobs.has(id)) this.#discardForegroundJob(id);
 			else this.#scheduleEviction(id);
+			this.#emitChange();
 		})();
 
 		this.#jobs.set(id, job);
@@ -572,7 +504,6 @@ export class AsyncJobManager {
 			status: "completed",
 			startTime: now,
 			endTime: now,
-			lastActivityAt: now,
 			label,
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
@@ -1185,124 +1116,16 @@ export class AsyncJobManager {
 		);
 	}
 
-	#deliveryMatchesFilter(delivery: AsyncJobDelivery, filter?: AsyncJobFilter): boolean {
-		if (!filter?.ownerId) return true;
-		return delivery.ownerId === filter.ownerId;
-	}
-
-	#dropSuppressedDeliveries(): void {
-		let writeIndex = 0;
-		for (const delivery of this.#deliveries) {
-			if (this.isDeliverySuppressed(delivery.jobId)) continue;
-			this.#deliveries[writeIndex] = delivery;
-			writeIndex += 1;
-		}
-		this.#deliveries.length = writeIndex;
-	}
-
-	#selectNextDelivery(filter?: AsyncJobFilter): AsyncJobDelivery | undefined {
-		let selected: AsyncJobDelivery | undefined;
-		for (const delivery of this.#deliveries) {
-			if (!this.#deliveryMatchesFilter(delivery, filter)) continue;
-			if (this.isDeliverySuppressed(delivery.jobId)) continue;
-			if (!selected || delivery.nextAttemptAt < selected.nextAttemptAt) {
-				selected = delivery;
-			}
-		}
-		return selected;
-	}
-
-	#takeDueDeliveries(filter: AsyncJobFilter | undefined, now: number): AsyncJobDelivery[] {
-		const batch: AsyncJobDelivery[] = [];
-		let writeIndex = 0;
-		for (const delivery of this.#deliveries) {
-			if (this.isDeliverySuppressed(delivery.jobId)) continue;
-			if (this.#deliveryMatchesFilter(delivery, filter) && delivery.nextAttemptAt <= now) {
-				batch.push(delivery);
-				continue;
-			}
-			this.#deliveries[writeIndex] = delivery;
-			writeIndex += 1;
-		}
-		this.#deliveries.length = writeIndex;
-		return batch;
-	}
-
-	// The unfiltered delivery loop keeps each callback owner-homogeneous so an
-	// owner-scoped drain can still deliver its queued result while another
-	// owner's callback is in flight.
-	#takeDueDeliveryPrefix(now: number): AsyncJobDelivery[] {
-		const batch: AsyncJobDelivery[] = [];
-		let ownerSelected = false;
-		let ownerId: string | undefined;
-		while (this.#deliveries.length > 0) {
-			const candidate = this.#deliveries[0];
-			if (this.isDeliverySuppressed(candidate.jobId)) {
-				this.#deliveries.shift();
-				continue;
-			}
-			if (candidate.nextAttemptAt > now) break;
-			if (!ownerSelected) {
-				ownerSelected = true;
-				ownerId = candidate.ownerId;
-			} else if (candidate.ownerId !== ownerId) {
-				break;
-			}
-			this.#deliveries.shift();
-			batch.push(candidate);
-		}
-		return batch;
-	}
-
-	async #settleBatchWindow(filter: AsyncJobFilter | undefined, deadline: number): Promise<boolean> {
-		if (this.#deliveryBatchMaxWaitMs <= 0 || this.#disposed) return true;
-		const settleDeadline = Date.now() + this.#deliveryBatchMaxWaitMs;
-		const burstMs = Math.min(
-			BATCH_BURST_SETTLE_MS,
-			this.#deliveryBatchMaxWaitMs,
-			Math.max(0, Math.min(settleDeadline, deadline) - Date.now()),
-		);
-		if (burstMs > 0) await Bun.sleep(burstMs);
-		while (!this.#disposed && Date.now() < deadline) {
-			const running = this.getRunningJobs(filter);
-			if (running.length === 0) break;
-			const now = Date.now();
-			// Past the flat cap, only a *live* sibling from the same spawn
-			// batch as a queued delivery keeps extending the hold. Unrelated
-			// long-runners (e.g. a dev server bash job) stop blocking at the
-			// cap, and a batch member silent for the whole window is treated
-			// as hung so its finished siblings still get dispatched.
-			if (now >= settleDeadline && !this.#hasLiveBatchSibling(running, now)) break;
-			await Bun.sleep(Math.min(BATCH_SETTLE_CHECK_MS, deadline - now));
-		}
-		if (deadline !== Number.POSITIVE_INFINITY && Date.now() >= deadline && this.getRunningJobs(filter).length > 0) {
-			return false;
-		}
-		return true;
-	}
-
-	/**
-	 * True when some running job shares a `batchId` with a queued delivery
-	 * AND has reported progress within the last `deliveryBatchMaxWaitMs`.
-	 * Reads the batchId snapshot off the deliveries (not `#jobs`) so an
-	 * evicted completed job cannot silently drop the hold.
-	 */
-	#hasLiveBatchSibling(running: AsyncJob[], now: number): boolean {
-		const queuedBatchIds = new Set<string>();
-		for (const delivery of this.#deliveries) {
-			if (!delivery.batchId || this.isDeliverySuppressed(delivery.jobId)) continue;
-			queuedBatchIds.add(delivery.batchId);
-		}
-		if (queuedBatchIds.size === 0) return false;
-		const cutoff = now - this.#deliveryBatchMaxWaitMs;
-		return running.some(
-			job => job.batchId !== undefined && queuedBatchIds.has(job.batchId) && job.lastActivityAt > cutoff,
-		);
-	}
-
 	async #deliverNextFiltered(filter: AsyncJobFilter, deadline: number): Promise<boolean> {
 		while (true) {
-			const selected = this.#selectNextDelivery(filter);
+			let selected: AsyncJobDelivery | undefined;
+			for (const delivery of this.#deliveries) {
+				if (delivery.ownerId !== filter.ownerId) continue;
+				if (this.isDeliverySuppressed(delivery.jobId)) continue;
+				if (!selected || delivery.nextAttemptAt < selected.nextAttemptAt) {
+					selected = delivery;
+				}
+			}
 
 			if (!selected) {
 				const inFlight = this.#filterInFlightDeliveries(filter);
@@ -1310,21 +1133,20 @@ export class AsyncJobManager {
 				return this.#waitForDeliveryPromise(inFlight[0]?.promise, deadline);
 			}
 
-			const waitMs = selected.nextAttemptAt - Date.now();
-			if (waitMs > 0) {
+			const now = Date.now();
+			if (selected.nextAttemptAt > now) {
 				if (selected.nextAttemptAt > deadline) return false;
-				await this.#waitForDeliveryQueueChange(waitMs);
-			}
-			if (!this.#deliveries.includes(selected)) continue;
-			if (this.isDeliverySuppressed(selected.jobId)) {
-				this.#dropSuppressedDeliveries();
+				await this.#waitForDeliveryQueueChange(selected.nextAttemptAt - now);
 				continue;
 			}
-			if (!(await this.#settleBatchWindow(filter, deadline))) return false;
 
-			const batch = this.#takeDueDeliveries(filter, Date.now());
-			if (batch.length === 0) continue;
-			return this.#waitForDeliveryPromise(this.#deliverBatch(batch), deadline);
+			const index = this.#deliveries.indexOf(selected);
+			if (index === -1) continue;
+			this.#deliveries.splice(index, 1);
+			this.#notifyDeliveryQueueChanged();
+			if (this.isDeliverySuppressed(selected.jobId)) continue;
+
+			return this.#waitForDeliveryPromise(this.#deliverDelivery(selected), deadline);
 		}
 	}
 
@@ -1344,7 +1166,6 @@ export class AsyncJobManager {
 			attempt: 0,
 			nextAttemptAt: Date.now(),
 			ownerId: job?.ownerId,
-			batchId: job?.batchId,
 			jobSnapshot: job
 				? {
 						type: job.type,
@@ -1355,7 +1176,6 @@ export class AsyncJobManager {
 						structured: job.structured,
 						agentId: job.agentId,
 						latestDetails: job.latestDetails,
-						lastActivityAt: job.lastActivityAt,
 					}
 				: undefined,
 		});
@@ -1381,159 +1201,97 @@ export class AsyncJobManager {
 
 	async #runDeliveryLoop(): Promise<void> {
 		while (this.#deliveries.length > 0) {
-			this.#dropSuppressedDeliveries();
-			const selected = this.#deliveries[0];
-			if (!selected) break;
-
-			const waitMs = selected.nextAttemptAt - Date.now();
+			const delivery = this.#deliveries[0];
+			if (this.isDeliverySuppressed(delivery.jobId)) {
+				this.#deliveries.shift();
+				continue;
+			}
+			const waitMs = delivery.nextAttemptAt - Date.now();
 			if (waitMs > 0) {
 				await this.#waitForDeliveryQueueChange(waitMs);
 				continue;
 			}
-			// Re-check after the sleep: another enqueue or suppression may have shuffled the queue.
-			if (!this.#deliveries.includes(selected)) continue;
-			if (this.isDeliverySuppressed(selected.jobId)) {
-				this.#dropSuppressedDeliveries();
+			if (this.#deliveries[0] !== delivery) {
+				continue;
+			}
+			if (this.isDeliverySuppressed(delivery.jobId)) {
+				this.#deliveries.shift();
 				continue;
 			}
 
-			// Settle window: brief burst pause to catch near-simultaneous
-			// completions, then extend the wait while other jobs are still
-			// running so widely-spaced sibling completions land in the same
-			// dispatch. Unrelated siblings are bounded by
-			// deliveryBatchMaxWaitMs; live siblings from the same spawn batch
-			// extend the hold until the batch settles or goes silent for the
-			// whole window. Disabled when deliveryBatchMaxWaitMs is 0 (the
-			// default).
-			await this.#settleBatchWindow(undefined, Number.POSITIVE_INFINITY);
-
-			// Drain every currently-due, non-suppressed delivery into a single
-			// batch. Anything that piled up during the previous dispatch (or
-			// during this very loop iteration before we entered the batch
-			// window) gets coalesced into one downstream call so consumers can
-			// surface N background-job completions as a single user turn.
-			const batch = this.#takeDueDeliveryPrefix(Date.now());
-			if (batch.length === 0) continue;
-			await this.#deliverBatch(batch);
+			this.#deliveries.shift();
+			void this.#deliverDelivery(delivery);
 		}
 	}
 
-	#deliverBatch(batch: AsyncJobDelivery[]): Promise<void> {
+	/**
+	 * Resolve the sink for one delivery attempt: owned deliveries route ONLY to
+	 * their owner's registered sink (a missing sink dead-letters — never the
+	 * default, which would misroute a dead owner's result into another
+	 * session); unowned deliveries use the constructor default. Resolved per
+	 * attempt so a sink registered between retries (e.g. a revived session)
+	 * picks up the retry.
+	 */
+	#resolveDeliverySink(ownerId: string | undefined): AsyncJobDeliverySink | undefined {
+		if (ownerId !== undefined) return this.#deliverySinks.get(ownerId);
+		return this.#onJobComplete;
+	}
+
+	#deliverDelivery(delivery: AsyncJobDelivery): Promise<void> {
+		const sink = this.#resolveDeliverySink(delivery.ownerId);
+		if (!sink) {
+			// Dead-letter: owned delivery with no live sink (session disposed or
+			// parked), or unowned delivery with no default sink. Drop it — the
+			// job row keeps its result/error text until retention eviction, so
+			// the outcome stays inspectable via job queries and agent:// reads.
+			logger.warn("Async job delivery dead-lettered: no delivery sink", {
+				jobId: delivery.jobId,
+				ownerId: delivery.ownerId,
+			});
+			delivery.promise = Promise.resolve();
+			return delivery.promise;
+		}
 		const promise = (async () => {
-			for (const delivery of batch) this.#inFlightDeliveries.push(delivery);
-			const deliveredJobIds = new Set<string>();
+			this.#inFlightDeliveries.push(delivery);
+			let delivered = false;
 			try {
-				const failedDeliveries: Array<{ delivery: AsyncJobDelivery; error: unknown }> = [];
-				const ownerBatches = new Map<string | undefined, AsyncJobDelivery[]>();
-				for (const delivery of batch) {
-					const ownerBatch = ownerBatches.get(delivery.ownerId);
-					if (ownerBatch) ownerBatch.push(delivery);
-					else ownerBatches.set(delivery.ownerId, [delivery]);
-				}
-				await Promise.all(
-					Array.from(ownerBatches, async ([ownerId, deliveries]) => {
-						if (ownerId === undefined) {
-							const sink = this.#onJobComplete;
-							if (!sink) {
-								logger.warn("Async job delivery dead-lettered: no delivery sink", {
-									jobIds: deliveries.map(delivery => delivery.jobId),
-								});
-								return;
-							}
-							try {
-								await sink(
-									deliveries.map(delivery => ({
-										jobId: delivery.jobId,
-										text: delivery.text,
-										job: this.#jobs.get(delivery.jobId) ?? this.#reconstructEvictedJob(delivery),
-									})),
-								);
-								for (const delivery of deliveries) deliveredJobIds.add(delivery.jobId);
-							} catch (error) {
-								for (const delivery of deliveries) failedDeliveries.push({ delivery, error });
-							}
-							return;
-						}
-						const sink = this.#deliverySinks.get(ownerId);
-						if (!sink) {
-							logger.warn("Async job delivery dead-lettered: no delivery sink", { ownerId });
-							return;
-						}
-						await Promise.all(
-							deliveries.map(async delivery => {
-								try {
-									await sink(
-										delivery.jobId,
-										delivery.text,
-										this.#jobs.get(delivery.jobId) ?? this.#reconstructEvictedJob(delivery),
-									);
-									deliveredJobIds.add(delivery.jobId);
-								} catch (error) {
-									failedDeliveries.push({ delivery, error });
-								}
-							}),
-						);
-					}),
+				await sink(
+					delivery.jobId,
+					delivery.text,
+					this.#jobs.get(delivery.jobId) ?? this.#reconstructEvictedJob(delivery),
 				);
-				const requeuedIds: string[] = [];
-				for (const { delivery, error } of failedDeliveries) {
-					const message = error instanceof Error ? error.message : String(error);
-					delivery.attempt += 1;
-					delivery.lastError = message;
-					delivery.nextAttemptAt = Date.now() + this.#getRetryDelay(delivery.attempt);
-					if (!this.isDeliverySuppressed(delivery.jobId) && this.#jobs.has(delivery.jobId)) {
-						this.#queueDelivery(delivery);
-						requeuedIds.push(delivery.jobId);
-					}
-				}
-				if (failedDeliveries.length > 0) {
-					logger.warn("Async job completion delivery failed", {
-						jobIds: requeuedIds,
-						batchSize: failedDeliveries.length,
-						attempt: failedDeliveries[0]?.delivery.attempt,
-						error:
-							failedDeliveries[0]?.error instanceof Error
-								? failedDeliveries[0].error.message
-								: String(failedDeliveries[0]?.error),
-					});
+				delivered = true;
+				// A foreground snapshot may have consumed this result while the
+				// sink receipt was parked. The receipt has now settled, so the
+				// suppression tombstone no longer needs the full retention window.
+				if (this.#consumedJobResults.has(delivery.jobId) && this.#jobs.has(delivery.jobId)) {
+					this.#scheduleEviction(delivery.jobId, this.#consumedResultEvictionMs);
 				}
 			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				const retryAt = Date.now();
-				const requeuedIds: string[] = [];
-				for (const delivery of batch) {
-					delivery.attempt += 1;
-					delivery.lastError = message;
-					delivery.nextAttemptAt = retryAt + this.#getRetryDelay(delivery.attempt);
-					if (!this.isDeliverySuppressed(delivery.jobId) && this.#jobs.has(delivery.jobId)) {
-						this.#queueDelivery(delivery);
-						requeuedIds.push(delivery.jobId);
-					}
+				delivery.attempt += 1;
+				delivery.lastError = error instanceof Error ? error.message : String(error);
+				delivery.nextAttemptAt = Date.now() + this.#getRetryDelay(delivery.attempt);
+				if (!this.isDeliverySuppressed(delivery.jobId) && this.#jobs.has(delivery.jobId)) {
+					this.#queueDelivery(delivery);
 				}
 				logger.warn("Async job completion delivery failed", {
-					jobIds: requeuedIds,
-					batchSize: batch.length,
-					attempt: batch[0]?.attempt,
-					error: message,
+					jobId: delivery.jobId,
+					attempt: delivery.attempt,
+					nextRetryAt: delivery.nextAttemptAt,
+					error: delivery.lastError,
 				});
 			} finally {
-				for (const delivery of batch) {
-					const index = this.#inFlightDeliveries.indexOf(delivery);
-					if (index !== -1) this.#inFlightDeliveries.splice(index, 1);
-				}
+				const index = this.#inFlightDeliveries.indexOf(delivery);
+				if (index !== -1) this.#inFlightDeliveries.splice(index, 1);
 				if (this.#deliveries.length > 0) this.#ensureDeliveryLoop();
 			}
 			// A normally delivered result is consumed only after the attempt left
 			// #inFlightDeliveries, so it can arm the short eviction grace.
-			for (const jobId of deliveredJobIds) {
-				if (this.#consumedJobResults.has(jobId) && this.#jobs.has(jobId)) {
-					this.#scheduleEviction(jobId, this.#consumedResultEvictionMs);
-				} else {
-					this.#consumeJobResult(jobId);
-				}
+			if (delivered && !this.#consumedJobResults.has(delivery.jobId)) {
+				this.#consumeJobResult(delivery.jobId);
 			}
 		})();
-		for (const delivery of batch) delivery.promise = promise;
+		delivery.promise = promise;
 		return promise;
 	}
 
@@ -1561,7 +1319,6 @@ export class AsyncJobManager {
 			structured: snapshot.structured,
 			agentId: snapshot.agentId,
 			latestDetails: snapshot.latestDetails,
-			lastActivityAt: snapshot.lastActivityAt,
 		};
 	}
 

@@ -43,18 +43,6 @@ export const cfgMcpRenderMarkdownResults = register({
 });
 effect(cfgMcpRenderMarkdownResults, setMcpRenderMarkdownResults);
 
-export const cfgMcpDiscoveryMode = register({
-	id: "mcp.discoveryMode",
-	type: "boolean",
-	default: false,
-	ui: {
-		tab: "tools",
-		group: "Discovery & MCP",
-		label: "MCP Tool Discovery",
-		description: "Enable legacy BM25 discovery for MCP tools.",
-	},
-});
-
 export const cfgMcpNotifications = register({
 	id: "mcp.notifications",
 	type: "boolean",

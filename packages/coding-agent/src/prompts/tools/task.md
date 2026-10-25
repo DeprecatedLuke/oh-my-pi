@@ -13,7 +13,6 @@ Use most specific agent.{{#if scoutAvailable}} Read-only research MUST use `scou
 {{#if batchEnabled}}Specialist `agent` selectors belong inside each `tasks[]` item; NEVER put `agent` at the top level.
 {{/if}}
 Shared edits need one integration owner{{#if ircEnabled}}; siblings coordinate via `write agent://<id>`{{/if}}. Set interfaces in {{#if batchEnabled}}`context`{{else}}the task{{/if}}. Every task MUST skip build/lint/tests/formatters mid-flight; run once afterward.
-{{#if asyncEnabled}}- When you have nothing left to do but spawned tasks are still running, end your turn immediately — produce NO prose, status, filler, or progress tokens, invoke NO wait/sleep/poll/status/unrelated tool call. Their results are delivered automatically as a follow-up turn once they finish.{{/if}}
 
 # Inputs
 `name`: CamelCase ≤32, auto-generated if omitted; address agent by name.{{#if structured}} `outputSchema` overrides agent/session schemas.{{/if}}

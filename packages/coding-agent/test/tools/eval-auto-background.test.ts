@@ -90,8 +90,8 @@ describe("EvalTool auto-background", () => {
 	it("keeps fast cells inline without a job row or delivery", async () => {
 		const deliveries: string[] = [];
 		const asyncJobManager = new AsyncJobManager({
-			onJobComplete: async batch => {
-				for (const { text } of batch) deliveries.push(text);
+			onJobComplete: async (jobId, text) => {
+				deliveries.push(text);
 			},
 		});
 		vi.spyOn(evalIndex.jsBackend, "execute").mockImplementation((async () =>
@@ -124,8 +124,8 @@ describe("EvalTool auto-background", () => {
 		const deliveries: Array<{ jobId: string; text: string }> = [];
 		const updates: Array<{ text: string; state?: string }> = [];
 		const asyncJobManager = new AsyncJobManager({
-			onJobComplete: async batch => {
-				for (const { jobId, text } of batch) deliveries.push({ jobId, text });
+			onJobComplete: async (jobId, text) => {
+				deliveries.push({ jobId, text });
 			},
 		});
 		const cell = mockGatedCell("start\ndone\n");

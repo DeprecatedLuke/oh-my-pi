@@ -72,16 +72,14 @@ function createHarness(initialStreaming: boolean) {
 		build: buildAsyncMessage,
 	});
 	const manager = new AsyncJobManager({
-		onJobComplete: completions => {
-			for (const { jobId, text, job } of completions) {
-				if (manager.isDeliverySuppressed(jobId)) continue;
-				queue.enqueue<AsyncEntry>("async-result", {
-					jobId,
-					result: text,
-					job,
-					durationMs: job ? Math.max(0, Date.now() - job.startTime) : undefined,
-				});
-			}
+		onJobComplete: (jobId, text, job) => {
+			if (manager.isDeliverySuppressed(jobId)) return;
+			queue.enqueue<AsyncEntry>("async-result", {
+				jobId,
+				result: text,
+				job,
+				durationMs: job ? Math.max(0, Date.now() - job.startTime) : undefined,
+			});
 		},
 	});
 	AsyncJobManager.setInstance(manager);

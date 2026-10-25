@@ -2558,8 +2558,8 @@ function b() {
 		it("should keep short commands inline when auto-background is enabled", async () => {
 			const deliveries: string[] = [];
 			const asyncJobManager = new AsyncJobManager({
-				onJobComplete: async batch => {
-					for (const { text } of batch) deliveries.push(text);
+				onJobComplete: async (jobId, text) => {
+					deliveries.push(text);
 				},
 			});
 			const autoBackgroundBashTool = wrapToolWithMetaNotice(
@@ -2596,8 +2596,8 @@ function b() {
 			const deliveries: Array<{ jobId: string; text: string }> = [];
 			const updates: Array<{ text: string; state?: string }> = [];
 			const asyncJobManager = new AsyncJobManager({
-				onJobComplete: async batch => {
-					for (const { jobId, text } of batch) deliveries.push({ jobId, text });
+				onJobComplete: async (jobId, text) => {
+					deliveries.push({ jobId, text });
 				},
 			});
 			const autoBackgroundBashTool = wrapToolWithMetaNotice(
@@ -2716,8 +2716,8 @@ function b() {
 		it("should background instead of timing out when auto-background wait exceeds the effective timeout", async () => {
 			const deliveries: Array<{ jobId: string; text: string }> = [];
 			const asyncJobManager = new AsyncJobManager({
-				onJobComplete: async batch => {
-					for (const { jobId, text } of batch) deliveries.push({ jobId, text });
+				onJobComplete: async (jobId, text) => {
+					deliveries.push({ jobId, text });
 				},
 			});
 			const autoBackgroundBashTool = wrapToolWithMetaNotice(

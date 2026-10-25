@@ -257,8 +257,6 @@ export interface TurnRecoveryHost {
 	sessionId(): string;
 	/** Redact configured secrets from text bound for a model; identity when none are configured. */
 	obfuscateTextForProvider(text: string): string;
-	/** True while owner-scoped background work will re-wake this session with its own follow-up. */
-	hasPendingAsyncWake(): boolean;
 	emitSessionEvent(event: AgentSessionEvent): Promise<void>;
 	scheduleAgentContinue(options: {
 		source: string;
@@ -1049,16 +1047,6 @@ export class TurnRecovery {
 			return undefined;
 		}
 
-		// Ending the turn with no output is the instructed pause while owned
-		// background work runs; its result re-wakes the loop. Drop the empty turn
-		// instead of retrying, which would demand a tool call and drive the agent
-		// into poll loops. Provider empty-output errors still retry.
-		if (!providerEmptyOutput && this.#host.hasPendingAsyncWake()) {
-			this.#emptyStopRetryCount = 0;
-			await this.#dropAssistantTurnDurably(assistantMessage);
-			return undefined;
-		}
-
 		this.#emptyStopRetryCount++;
 		if (this.#emptyStopRetryCount > EMPTY_STOP_MAX_RETRIES) {
 			const attempts = this.#emptyStopRetryCount - 1;
@@ -1140,21 +1128,13 @@ export class TurnRecovery {
 			return false;
 		}
 
-		// A pending background job re-wakes the loop with its result. Ending the
-		// turn — with a deferral, thinking only, or nothing at all — is then the
-		// instructed pause, not an unexpected stop; a retry here demands a tool
-		// call and pushes the agent into poll loops.
-		if (this.#host.hasPendingAsyncWake()) {
-			this.#unexpectedStopRetryCount = 0;
-			return false;
-		}
 		const text = assistantMessage.content
 			.filter((content): content is TextContent => content.type === "text")
 			.map(content => content.text)
 			.join("\n");
 
-		// A thinking-only terminal turn with no pending wake has no visible
-		// assistant message, so both mechanical and smart modes retry it directly,
+		// A thinking-only terminal turn has no visible assistant message, so both
+		// mechanical and smart modes retry it directly,
 		// whether or not the provider exposed its reasoning text. Only a turn with
 		// visible text is gated on the mode and the judge. Tool-call turns never
 		// reach this path: isUnexpectedStopCandidate excludes them, including

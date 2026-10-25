@@ -415,7 +415,6 @@ describe("AgentSession owner-routed async delivery", () => {
 					label: jobId,
 					status: "completed",
 					startTime: Date.now(),
-					lastActivityAt: Date.now(),
 					abortController: new AbortController(),
 					promise: Promise.resolve(),
 					resultText: result,
@@ -447,7 +446,6 @@ describe("AgentSession owner-routed async delivery", () => {
 			type: "task",
 			status: "completed",
 			startTime,
-			lastActivityAt: startTime,
 			label: "SchemaProbe",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
@@ -486,7 +484,6 @@ describe("AgentSession owner-routed async delivery", () => {
 			type: "task",
 			status: "completed",
 			startTime,
-			lastActivityAt: startTime,
 			label: "Foo-t1",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
@@ -508,11 +505,9 @@ describe("AgentSession owner-routed async delivery", () => {
 	it("delivers completed and failed manager states with distinct native identities", async () => {
 		const messages: AsyncResultDetails[] = [];
 		const manager = new AsyncJobManager({
-			onJobComplete: batch => {
-				for (const { jobId, text, job } of batch) {
-					const message = buildAsyncResultBatchMessage([{ jobId, result: text, job, durationMs: 0, epoch: 0 }]);
-					if (message?.details) messages.push(message.details);
-				}
+			onJobComplete: (jobId, text, job) => {
+				const message = buildAsyncResultBatchMessage([{ jobId, result: text, job, durationMs: 0, epoch: 0 }]);
+				if (message?.details) messages.push(message.details);
 			},
 		});
 		try {
@@ -550,7 +545,6 @@ describe("AgentSession owner-routed async delivery", () => {
 			type: "task",
 			status: "failed",
 			startTime: Date.now(),
-			lastActivityAt: Date.now(),
 			label: "worker task",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
@@ -584,7 +578,6 @@ describe("AgentSession owner-routed async delivery", () => {
 						type: "task",
 						status,
 						startTime: Date.now(),
-						lastActivityAt: Date.now(),
 						label: "render task",
 						abortController: new AbortController(),
 						promise: Promise.resolve(),
@@ -615,7 +608,6 @@ describe("AgentSession owner-routed async delivery", () => {
 			type: "task",
 			status: "completed",
 			startTime,
-			lastActivityAt: startTime,
 			label: "SchemaProbe",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
@@ -655,7 +647,6 @@ describe("AgentSession owner-routed async delivery", () => {
 			type: "task",
 			status: "completed",
 			startTime,
-			lastActivityAt: startTime,
 			label: "SchemaProbe",
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
@@ -691,7 +682,6 @@ describe("AgentSession owner-routed async delivery", () => {
 			status: "failed",
 			label: "DeadStream",
 			startTime,
-			lastActivityAt: startTime,
 			abortController: new AbortController(),
 			promise: Promise.resolve(),
 			errorText: "failed",

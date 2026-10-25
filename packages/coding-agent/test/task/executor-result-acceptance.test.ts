@@ -256,9 +256,8 @@ describe("runSubprocess result acceptance", () => {
 		} as CreateAgentSessionResult);
 		const delivered = Promise.withResolvers<{ id: string; text: string }>();
 		const manager = new AsyncJobManager({
-			onJobComplete: completions => {
-				const completion = completions[0];
-				if (completion) delivered.resolve({ id: completion.jobId, text: completion.text });
+			onJobComplete: (jobId, text) => {
+				delivered.resolve({ id: jobId, text });
 			},
 		});
 		const jobId = manager.register("task", AGENT_ID, async ({ signal }) => {

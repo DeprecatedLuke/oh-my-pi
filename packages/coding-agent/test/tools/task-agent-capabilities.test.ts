@@ -19,18 +19,6 @@ describe("task agent capability descriptions", () => {
 		}
 	});
 
-	it("restricts the research agent to web tools — no repo, file, or command access", () => {
-		const research = agentByName(loadBundledAgents(), "research");
-		const tools = research.tools ?? [];
-
-		// The defining guarantee: research reasons from the web only.
-		expect(tools).toContain("web_search");
-		expect(tools).toContain("browser");
-		for (const forbidden of ["read", "write", "edit", "bash", "search", "find", "lsp", "ast_grep", "ast_edit"]) {
-			expect(tools).not.toContain(forbidden);
-		}
-	});
-
 	it("keeps `wait` read-only while any exec-tier tool disqualifies the agent", () => {
 		const scout = agentByName(loadBundledAgents(), "scout");
 

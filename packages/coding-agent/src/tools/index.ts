@@ -39,7 +39,6 @@ import type { ToolChoiceQueue } from "../session/tool-choice-queue";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
 import { type AgentDefinition, canSpawnAtDepth } from "../task/types";
-import type { DiscoverableTool, DiscoverableToolSearchIndex } from "../tool-discovery/tool-index";
 import { type StructuredSubagentSchemaMode } from "@oh-my-pi/pi-tui/tools/task";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { EventBus } from "../utils/event-bus";
@@ -60,9 +59,7 @@ import { GithubTool } from "./gh";
 import { GlobTool } from "./glob";
 import { GrepTool } from "./grep";
 import { IdaTool } from "./ida";
-import { IrcTool } from "./irc";
-import { JobTool } from "./job";
-import { LaunchTool } from "./launch";
+import { isIrcEnabled } from "../irc/messaging";
 import { FindTool, isFindEnabled } from "./jfind";
 import { LearnTool } from "./learn";
 import { ManageSkillTool } from "./manage-skill";
@@ -79,15 +76,15 @@ import { supportsExternalThinking, ThinkTool } from "./think";
 import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TodoTool } from "./todo";
 import { WriteTool } from "./write";
+import { WaitTool } from "./wait";
 import { isMountableUnderXdev, resolveXdevTool, type XdevState } from "./xdev";
-import { SearchToolBm25Tool } from "./search-tool-bm25";
 import { YieldTool } from "./yield";
-import { loadSshTool } from "./ssh";
 
 import {
 	cfgAskEnabled,
 	cfgAstEditEnabled,
 	cfgAstGrepEnabled,
+	cfgAsyncEnabled,
 	cfgCheckpointEnabled,
 	cfgDebugEnabled,
 	cfgGithubEnabled,
@@ -99,7 +96,6 @@ import {
 	cfgToolsXdev,
 	cfgWebSearchEnabled,
 } from "./settings";
-import { cfgToolsEssentialOverride } from "./settings";
 import { cfgAutolearnEnabled } from "../autolearn/settings";
 import { cfgBashEnabled } from "../exec/settings";
 import { cfgCompactionExperimentalContextManagement } from "../session/context-settings";
@@ -142,17 +138,7 @@ export * from "./gh";
 export * from "./glob";
 export * from "./grep";
 export * from "./jfind";
-export type {
-	AgentActivitySnapshot,
-	CancelStatus,
-	CancelOutcome,
-	CoordinationDetails,
-	JobSnapshot,
-} from "@oh-my-pi/pi-tui/tools/wait";
-export type { IrcDetails } from "./irc";
-export { IrcTool, ircToolRenderer } from "./irc";
-export * from "./job";
-export * from "./launch";
+export type { AgentActivitySnapshot, CoordinationDetails, JobSnapshot } from "@oh-my-pi/pi-tui/tools/wait";
 export * from "./image-gen";
 export * from "./learn";
 export * from "./manage-skill";
@@ -170,7 +156,6 @@ export type {
 	FindingDetails,
 	SubmitReviewDetails,
 } from "@oh-my-pi/pi-tui/tools/task";
-export * from "./search-tool-bm25";
 export * from "./security-scan";
 export * from "./think";
 export * from "./todo";
@@ -179,7 +164,6 @@ export * from "./vibe";
 export * from "./wait";
 export type { VibeToolDetails } from "@oh-my-pi/pi-tui/tools/vibe";
 export * from "./write";
-export * from "./ssh";
 export * from "./xdev";
 export * from "./yield";
 
@@ -518,21 +502,6 @@ export interface ToolSession {
 	getToolCallIntent?: (toolCallId: string) => string | undefined;
 	/** Replace the active workpool item contract and refresh its provider-facing prompt. */
 	setWorkPoolYieldItems?: (items: readonly WorkPoolYieldItem[]) => Promise<void>;
-	/** Whether legacy/generic tool discovery is active for this session. */
-	isToolDiscoveryEnabled?: () => boolean;
-	/** Whether legacy MCP-only discovery is active for this session. */
-	isMCPDiscoveryEnabled?: () => boolean;
-	/** Names selected by prior discovery calls. */
-	getSelectedMCPToolNames?: () => string[];
-	/** Activate MCP tools and return names accepted by the session. */
-	activateDiscoveredMCPTools?: (toolNames: string[]) => Promise<string[]>;
-	/** Hidden built-in/MCP/extension tools available to BM25 discovery. */
-	getDiscoverableTools?: (filter?: { source?: DiscoverableTool["source"] }) => DiscoverableTool[];
-	/** Cached BM25 index for discoverable tools. */
-	getDiscoverableToolSearchIndex?: () => DiscoverableToolSearchIndex;
-	getSelectedDiscoveredToolNames?: () => string[];
-	/** Activate discovered tools and return the names accepted by the session. */
-	activateDiscoveredTools?: (toolNames: string[]) => Promise<string[]>;
 	/** The tool-choice queue used to force forthcoming tool invocations and carry invocation handlers. */
 	getToolChoiceQueue?(): ToolChoiceQueue;
 	/** Build a model-provider-specific ToolChoice that targets the named tool, or undefined if unsupported. */
@@ -597,53 +566,6 @@ export interface ToolSession {
 	/** Return image attachments visible to tools for resolving labels such as `Image #1`. */
 	getImageAttachments?: () => ImageAttachmentEntry[];
 }
-export type BuiltinToolLoadMode = "essential" | "discoverable";
-
-/** Default essential names retained by the current tool presentation contract. */
-export const DEFAULT_ESSENTIAL_TOOL_NAMES: readonly string[] = [
-	"read",
-	"bash",
-	"edit",
-	"write",
-	"glob",
-	"eval",
-	"task",
-	"learn",
-	"manage_skill",
-	"context_notes",
-	"new_context",
-] as const;
-
-/** Resolve the active essential built-in names from the compatibility override. */
-export function computeEssentialBuiltinNames(settings: Settings): string[] {
-	const override = cfgToolsEssentialOverride.get(settings) ?? [];
-	const cleaned = normalizeToolNames(override.map(name => name.trim()).filter(Boolean));
-	if (cleaned.length > 0) return cleaned.filter(name => name in BUILTIN_TOOLS);
-	return [...DEFAULT_ESSENTIAL_TOOL_NAMES];
-}
-
-/** Hide discoverable built-ins on initial load while preserving explicit contracts. */
-export function filterInitialToolsForDiscoveryAll(
-	initialToolNames: string[],
-	opts: {
-		loadModeOf: (name: string) => BuiltinToolLoadMode | undefined;
-		essentialNames: ReadonlySet<string>;
-		explicitlyRequested: ReadonlySet<string>;
-		restored: ReadonlySet<string>;
-		forceActive: ReadonlySet<string>;
-	},
-): string[] {
-	return initialToolNames.filter(name => {
-		const loadMode = opts.loadModeOf(name);
-		if (!loadMode || loadMode === "essential") return true;
-		return (
-			opts.essentialNames.has(name) ||
-			opts.explicitlyRequested.has(name) ||
-			opts.restored.has(name) ||
-			opts.forceActive.has(name)
-		);
-	});
-}
 
 export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
 
@@ -655,7 +577,6 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	read: s => new ReadTool(s),
 	security_scan: s => new SecurityScanTool(s),
 	bash: s => new BashTool(s),
-	launch: s => new LaunchTool(s),
 	edit: s => new EditTool(s),
 	ast_grep: s => new AstGrepTool(s),
 	ast_edit: s => new AstEditTool(s),
@@ -670,16 +591,13 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	lsp: LspTool.createIf,
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
-	ssh: loadSshTool,
 	patch: PatchTool.createIf,
 	context_notes: ContextNotesTool.createIf,
 	new_context: NewContextTool.createIf,
 	task: s => TaskTool.create(s),
-	job: s => new JobTool(s),
-	irc: IrcTool.createIf,
+	wait: s => new WaitTool(s),
 	todo: s => new TodoTool(s),
 	web_search: s => new WebSearchTool(s),
-	search_tool_bm25: SearchToolBm25Tool.createIf,
 	write: s => new WriteTool(s),
 	memory_edit: MemoryEditTool.createIf,
 	retain: MemoryRetainTool.createIf,
@@ -844,7 +762,6 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 			const goalState = session.getGoalModeState?.();
 			return goalState === undefined || goalState.enabled === true || goalState.goal.status === "dropped";
 		}
-		if (name === "launch") return cfgLaunchEnabled.get(session.settings);
 		if (name === "lsp") return enableLsp && cfgLspEnabled.get(session.settings);
 		if (name === "bash") return cfgBashEnabled.get(session.settings);
 		if (name === "eval") return allowEval;
@@ -869,6 +786,13 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 				cfgCheckpointEnabled.get(session.settings) &&
 				((session.taskDepth ?? 0) === 0 || requestedTools !== undefined)
 			);
+		if (name === "wait") {
+			return (
+				cfgAsyncEnabled.get(session.settings) ||
+				(session.enableIrc !== false && isIrcEnabled(session.settings, session.taskDepth ?? 0)) ||
+				cfgLaunchEnabled.get(session.settings)
+			);
+		}
 		if (name === "retain" || name === "recall" || name === "reflect") {
 			return ["hindsight", "mnemopi"].includes(cfgMemoryBackend.get(session.settings));
 		}

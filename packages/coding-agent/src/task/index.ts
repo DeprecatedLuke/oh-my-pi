@@ -1426,16 +1426,11 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 
 		const started: Array<{ agentId: string; jobId: string }> = [];
 		const failedSchedules: string[] = [];
-		// One shared batch id per fan-out call: the job manager's settle window
-		// holds each completed task's delivery while live siblings from the
-		// same batch are still running, so the whole batch lands in one turn.
-		const batchId = crypto.randomUUID();
 		for (const spawn of asyncSpawns) {
 			try {
 				const jobId = this.#registerSpawnJob({
 					manager,
 
-					batchId,
 					toolCallId,
 					spawnParams: spawnParamsFor(params, spawn.item, defaultAgent),
 					agentId: spawn.agentId,
@@ -1608,7 +1603,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		toolCallId: string;
 		spawnParams: TaskParams;
 		agentId: string;
-		batchId: string;
 		/** Run already started while the call streamed; the job adopts it instead of launching. */
 		run?: SpawnRun;
 		progress: AgentProgress;
@@ -1622,7 +1616,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			toolCallId,
 			spawnParams,
 			agentId,
-			batchId,
 			run,
 			progress,
 			ircEnabled,
@@ -1810,7 +1803,6 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				agentId,
 				queued: true,
 				ownerId: this.session.getAgentId?.() ?? undefined,
-				batchId,
 				agentType: spawnParams.agent,
 				widgetInputs: createTaskWidgetInputs({
 					manager,

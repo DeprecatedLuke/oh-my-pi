@@ -70,8 +70,8 @@ describe("capture failure across background and cancellation boundaries", () => 
 		await using temp = await TempDir.create("@capture-background-bash-");
 		const deliveries: string[] = [];
 		const manager = new AsyncJobManager({
-			onJobComplete: async completions => {
-				for (const { text } of completions) deliveries.push(text);
+			onJobComplete: async (jobId, text) => {
+				deliveries.push(text);
 			},
 		});
 		const session = sessionFor(temp.path(), manager);
@@ -107,8 +107,8 @@ describe("capture failure across background and cancellation boundaries", () => 
 		await using temp = await TempDir.create("@capture-background-eval-");
 		const deliveries: string[] = [];
 		const manager = new AsyncJobManager({
-			onJobComplete: async completions => {
-				for (const { text } of completions) deliveries.push(text);
+			onJobComplete: async (jobId, text) => {
+				deliveries.push(text);
 			},
 		});
 		try {
