@@ -152,7 +152,7 @@ function addUsageTotals(target: Usage, usage: Partial<Usage>): void {
 
 // ── patch-tool merge strategy: capture isolated edits as native patches ──────
 
-export interface PatchTarget {
+interface PatchTarget {
 	repoPath: string;
 	repoLabel: string;
 	relativePath: string;
@@ -160,7 +160,7 @@ export interface PatchTarget {
 }
 
 /** Resolves a non-empty commit message for a native patch about to be committed. */
-export type NativePatchCommitMessageFn = (manifest: NativePatchManifest) => Promise<string>;
+type NativePatchCommitMessageFn = (manifest: NativePatchManifest) => Promise<string>;
 
 function patchUri(patchId: string): string {
 	return `patch://${patchId}`;
