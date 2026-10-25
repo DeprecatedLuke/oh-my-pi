@@ -111,87 +111,6 @@ function normalizeFindings(value: unknown): FindingDetails[] {
 	}
 	return findings;
 }
-type ReviewIssueSeverity = "critical" | "high" | "medium" | "low";
-
-interface ReviewIssue {
-	severity?: ReviewIssueSeverity;
-	title?: string;
-	url?: string;
-	filename?: string;
-	bodyPreview?: string;
-}
-
-const ISSUE_SEVERITY_ORDER: readonly ReviewIssueSeverity[] = ["critical", "high", "medium", "low"];
-const ISSUE_SEVERITY_INFO: Record<ReviewIssueSeverity, { ord: number; color: ThemeColor }> = {
-	critical: { ord: 0, color: "error" },
-	high: { ord: 1, color: "warning" },
-	medium: { ord: 2, color: "muted" },
-	low: { ord: 3, color: "accent" },
-};
-
-function normalizeIssueAdds(value: unknown): ReviewIssue[] {
-	if (!Array.isArray(value)) return [];
-	const issues: ReviewIssue[] = [];
-	for (const item of value) {
-		if (!isRecord(item) || item.op !== "add") continue;
-		const severity = item.severity;
-		issues.push({
-			severity:
-				severity === "critical" || severity === "high" || severity === "medium" || severity === "low"
-					? severity
-					: undefined,
-			title: typeof item.title === "string" ? item.title : undefined,
-			url: typeof item.url === "string" ? item.url : undefined,
-			filename: typeof item.filename === "string" ? item.filename : undefined,
-			bodyPreview: typeof item.bodyPreview === "string" ? item.bodyPreview : undefined,
-		});
-	}
-	return issues;
-}
-
-function formatIssuesSummary(issues: ReviewIssue[], theme: Theme): string {
-	const counts: Partial<Record<ReviewIssueSeverity, number>> = {};
-	for (const issue of issues) {
-		const severity = issue.severity ?? "low";
-		counts[severity] = (counts[severity] ?? 0) + 1;
-	}
-	const parts = ISSUE_SEVERITY_ORDER.map(severity =>
-		theme.fg(ISSUE_SEVERITY_INFO[severity].color, `${severity}:${counts[severity] ?? 0}`),
-	);
-	return `${theme.fg("dim", "Findings:")} ${parts.join(theme.sep.dot)}`;
-}
-
-function renderIssuesList(issues: ReviewIssue[], continuePrefix: string, expanded: boolean, theme: Theme): string[] {
-	const sorted = expanded
-		? issues
-		: [...issues].sort(
-				(a, b) => ISSUE_SEVERITY_INFO[a.severity ?? "low"].ord - ISSUE_SEVERITY_INFO[b.severity ?? "low"].ord,
-			);
-	const displayCount = expanded ? sorted.length : Math.min(3, sorted.length);
-	const lines: string[] = [];
-	for (let i = 0; i < displayCount; i++) {
-		const issue = sorted[i];
-		const isLast = i === displayCount - 1 && (expanded || sorted.length <= 3);
-		const issuePrefix = isLast ? theme.tree.last : theme.tree.branch;
-		const issueContinue = isLast ? "   " : `${theme.tree.vertical}  `;
-		const severity = issue.severity ?? "low";
-		const { color } = ISSUE_SEVERITY_INFO[severity];
-		const title = replaceTabs(sanitizeText(issue.title ?? "(untitled)")).replace(/[\r\n]+/g, " ");
-		const url = sanitizeText(issue.url ?? `issues://${issue.filename ?? "?"}`);
-		lines.push(
-			`${continuePrefix}${issuePrefix} ${theme.fg(color, `[${severity}]`)} ${title} ${theme.fg("dim", url)}`,
-		);
-		if (expanded && issue.bodyPreview) {
-			for (const bodyLine of sanitizeText(issue.bodyPreview).split("\n")) {
-				lines.push(`${continuePrefix}${issueContinue}${theme.fg("dim", replaceTabs(bodyLine))}`);
-			}
-		}
-	}
-	if (!expanded && issues.length > 3) {
-		lines.push(`${continuePrefix}${theme.fg("dim", formatMoreItems(issues.length - 3, "finding"))}`);
-	}
-	return lines;
-}
 
 /** Reviewer output shapes: `findings` is an array (a lone finding still assembles as a list); the verdict fields are scalars. */
 const REVIEWER_SECTION_SHAPES: YieldSectionShapes = new Map([
@@ -361,6 +280,61 @@ const yieldSectionsMemo = new WeakMap<object, SnapshotMemoEntry<string[]>>();
 const completedReviewMemo = new WeakMap<object, SnapshotMemoEntry<string[] | null>>();
 const recentOutputMemo = new WeakMap<object, SnapshotMemoEntry<string[]>>();
 const agentResultMemo = new WeakMap<object, SnapshotMemoEntry<string[]>>();
+const reviewExtrasMemo = new WeakMap<object, SnapshotMemoEntry<string[]>>();
+
+/** Rows of a `Text`/`Container` subprocess renderer output; other components carry no inline rows. */
+function componentRows(component: unknown): string[] {
+	if (component instanceof Text) return component.getText().split("\n");
+	if (component instanceof Container) {
+		const rows: string[] = [];
+		for (const child of (component as Container).children) {
+			if (child instanceof Text) rows.push(...child.getText().split("\n"));
+		}
+		return rows;
+	}
+	return [];
+}
+
+/**
+ * Final rows of every extension-registered subprocess renderer (`yield` and
+ * `task` have dedicated renderers above). A review verdict renders its own
+ * block and returns early, so plugin tools that surfaced structured data next
+ * to that verdict — e.g. issue-tracker entries filed by a reviewer — would
+ * otherwise vanish from the card.
+ */
+function renderReviewExtras(
+	extractedToolData: Record<string, unknown[]>,
+	continuePrefix: string,
+	expanded: boolean,
+	theme: Theme,
+): string[] {
+	return memoBySnapshot(
+		reviewExtrasMemo,
+		extractedToolData,
+		[
+			continuePrefix,
+			expanded,
+			theme,
+			...Object.keys(extractedToolData).map(key =>
+				Array.isArray(extractedToolData[key]) ? extractedToolData[key].length : 0,
+			),
+		],
+		() => {
+			const rows: string[] = [];
+			for (const toolName in extractedToolData) {
+				if (toolName === "yield" || toolName === "task") continue;
+				const dataArray = extractedToolData[toolName];
+				if (!Array.isArray(dataArray) || dataArray.length === 0) continue;
+				const handler = getSubprocessToolRenderer(toolName);
+				if (!handler?.renderFinal) continue;
+				for (const row of componentRows(handler.renderFinal(dataArray, theme, expanded))) {
+					rows.push(`${continuePrefix}${row}`);
+				}
+			}
+			return rows;
+		},
+	);
+}
 
 /** Formats sanitized task identifiers as hierarchy breadcrumbs. */
 export function formatTaskId(id: string): string {
@@ -906,20 +880,17 @@ function renderAgentProgress(
 		// yield sections.
 		if (progress.status === "completed") {
 			const yieldValue = progress.extractedToolData.yield;
-			const issuesValue = progress.extractedToolData.issues;
 			const reviewLines = memoBySnapshot(
 				completedReviewMemo,
 				yieldValue,
-				[continuePrefix, expanded, theme, issuesValue, Array.isArray(issuesValue) ? issuesValue.length : 0],
+				[continuePrefix, expanded, theme],
 				(): string[] | null => {
 					const completeData = normalizeYieldData(yieldValue);
-					const issues = normalizeIssueAdds(issuesValue);
 					const incrementalReview = extractIncrementalReviewResult(completeData);
 					if (incrementalReview) {
 						return renderReviewResult(
 							incrementalReview.summary,
 							incrementalReview.findings,
-							issues,
 							continuePrefix,
 							expanded,
 							theme,
@@ -929,18 +900,12 @@ function renderAgentProgress(
 						.map(c => c.data as SubmitReviewDetails)
 						.filter(d => d && typeof d === "object" && "overall_correctness" in d);
 					if (reviewData.length === 0) return null;
-					return renderReviewResult(
-						reviewData[reviewData.length - 1],
-						[],
-						issues,
-						continuePrefix,
-						expanded,
-						theme,
-					);
+					return renderReviewResult(reviewData[reviewData.length - 1], [], continuePrefix, expanded, theme);
 				},
 			);
 			if (reviewLines) {
 				lines.push(...reviewLines);
+				lines.push(...renderReviewExtras(progress.extractedToolData, continuePrefix, expanded, theme));
 				return lines; // Review result handles its own rendering
 			}
 		}
@@ -1034,7 +999,6 @@ function renderAgentProgress(
 function renderReviewResult(
 	summary: SubmitReviewDetails,
 	findings: FindingDetails[],
-	issues: ReviewIssue[],
 	continuePrefix: string,
 	expanded: boolean,
 	theme: Theme,
@@ -1071,19 +1035,11 @@ function renderReviewResult(
 		}
 	}
 
-	// Findings summary + list. New reviewers file via `issues`; legacy agents
-	// may still use report_finding. Surface every real source.
-	if (findings.length === 0 && issues.length === 0) {
-		lines.push(`${continuePrefix}${formatFindingSummary([], theme)}`);
-	} else {
-		if (findings.length > 0) {
-			lines.push(`${continuePrefix}${formatFindingSummary(findings, theme)}`);
-			lines.push(...renderFindings(findings, continuePrefix, expanded, theme));
-		}
-		if (issues.length > 0) {
-			lines.push(`${continuePrefix}${formatIssuesSummary(issues, theme)}`);
-			lines.push(...renderIssuesList(issues, continuePrefix, expanded, theme));
-		}
+	// Findings summary + list
+	lines.push(`${continuePrefix}${formatFindingSummary(findings, theme)}`);
+
+	if (findings.length > 0) {
+		lines.push(...renderFindings(findings, continuePrefix, expanded, theme));
 	}
 
 	return lines;
@@ -1248,15 +1204,11 @@ function renderAgentResult(
 
 	if (incrementalReview) {
 		lines.push(
-			...renderReviewResult(
-				incrementalReview.summary,
-				incrementalReview.findings,
-				normalizeIssueAdds(result.extractedToolData?.issues),
-				continuePrefix,
-				expanded,
-				theme,
-			),
+			...renderReviewResult(incrementalReview.summary, incrementalReview.findings, continuePrefix, expanded, theme),
 		);
+		if (result.extractedToolData) {
+			lines.push(...renderReviewExtras(result.extractedToolData, continuePrefix, expanded, theme));
+		}
 		return lines;
 	}
 
@@ -1269,16 +1221,10 @@ function renderAgentResult(
 	if (submitReviewData) {
 		const summary = submitReviewData[submitReviewData.length - 1];
 		const findings: FindingDetails[] = [];
-		lines.push(
-			...renderReviewResult(
-				summary,
-				findings,
-				normalizeIssueAdds(result.extractedToolData?.issues),
-				continuePrefix,
-				expanded,
-				theme,
-			),
-		);
+		lines.push(...renderReviewResult(summary, findings, continuePrefix, expanded, theme));
+		if (result.extractedToolData) {
+			lines.push(...renderReviewExtras(result.extractedToolData, continuePrefix, expanded, theme));
+		}
 		return lines;
 	}
 

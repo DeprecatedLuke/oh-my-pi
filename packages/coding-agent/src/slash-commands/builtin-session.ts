@@ -1,4 +1,3 @@
-import { commitCheckpointRepos, dirtyRepos, formatCheckpointResult } from "../commit/checkpoint";
 import { clearSubmittedText } from "./helpers/draft";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
@@ -580,40 +579,12 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "git",
 		icon: "branch",
-		description: "Open the git UI (split diff viewer, staging, commit composer), or checkpoint every dirty repo",
-		inlineHint: "[revision|checkpoint]",
+		description: "Open the git UI (split diff viewer, staging, commit composer)",
+		inlineHint: "[revision]",
 		allowArgs: true,
-		handleTui: async (command, runtime) => {
-			const arg = command.args.trim();
+		handleTui: (command, runtime) => {
+			runtime.ctx.showGitUi(command.args.trim() || undefined);
 			clearSubmittedText(runtime);
-			if (arg !== "checkpoint") {
-				runtime.ctx.showGitUi(arg || undefined);
-				return;
-			}
-			// Operator-invoked: the user owns every dirty repo, so commit them all in one
-			// step. Agents go through the `git_checkpoint` tool (or the equivalent
-			// two-stage `omp git checkpoint [repo...]` CLI) instead.
-			const { ctx } = runtime;
-			try {
-				const cwd = ctx.sessionManager.getCwd();
-				const dirty = await dirtyRepos(cwd);
-				if (dirty.length === 0) {
-					ctx.showStatus("Nothing to commit — all repos are clean.");
-					return;
-				}
-				ctx.showStatus(`Checkpointing ${dirty.length} repo${dirty.length === 1 ? "" : "s"}…`);
-				const entries = await commitCheckpointRepos(dirty, {
-					cwd,
-					modelRegistry: ctx.session.modelRegistry,
-					settings: ctx.settings,
-					sessionId: ctx.session.sessionId,
-				});
-				const text = formatCheckpointResult(entries);
-				if (entries.some(entry => entry.status === "failed")) ctx.showError(text);
-				else ctx.showStatus(text);
-			} catch (error) {
-				ctx.showError(`Checkpoint failed: ${errorMessage(error)}`);
-			}
 		},
 	},
 	{

@@ -171,7 +171,6 @@ import { GoalRuntime } from "../goals/runtime";
 import type { GoalModeState, GoalTokenUsage } from "../goals/state";
 import type { HindsightSessionState } from "../hindsight/state";
 import { InternalUrlRouter, type LocalProtocolOptions } from "../internal-urls";
-import { type IssueSummary, listIssues } from "../issues";
 import type { DiscoverableTool } from "../tool-discovery/tool-index";
 import { type ChainJudge, hasNativeJudge, journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
@@ -215,7 +214,6 @@ import {
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
 import { cfgSecretsEnabled } from "../secrets/settings";
-import { cfgIssuesEnabled, cfgIssuesReminders, cfgIssuesRemindersMax } from "../tools/settings";
 import { releaseSharpshooterSession } from "../sharpshooter/backend";
 import { flushSharpshooterExtraction } from "../sharpshooter/extract";
 import { toolReadsSkillUris } from "../system-prompt";
@@ -975,8 +973,6 @@ export class AgentSession implements SettingsScope {
 	#planModeReminderCount = 0;
 	#planModeReminderAwaitingProgress = false;
 	readonly #todo: TodoTracker;
-	// In-progress issue reminder state (mirrors the todo reminder cap/reset).
-	#issuesReminderCount = 0;
 	readonly #modelMentions: ModelMentionRegistry;
 	#workPoolYieldItems: readonly WorkPoolYieldItem[] = [];
 	/** Item set matching the last successfully rebuilt provider prompt. The base
@@ -4893,11 +4889,6 @@ export class AgentSession implements SettingsScope {
 					await emitAgentEndNotification({ willContinue: true });
 					return;
 				}
-				const issueContinuationScheduled = await this.#checkInProgressIssues();
-				if (issueContinuationScheduled) {
-					await emitAgentEndNotification({ willContinue: true });
-					return;
-				}
 			}
 			// A pending async wake means this settle is a scheduling pause, not
 			// the terminal stop: the async-result delivery continues the loop and
@@ -4912,71 +4903,6 @@ export class AgentSession implements SettingsScope {
 			await emitAgentEndNotification(sessionStopWillContinue ? { willContinue: true } : undefined);
 		}
 	};
-
-	/**
-	 * Check whether the agent is ending its turn while issues are still marked
-	 * `in-progress` and, if so, append a reminder and schedule a continue.
-	 *
-	 * Background work re-wakes the session with its own follow-up, so reminders
-	 * are withheld while jobs or their deliveries are still pending. The
-	 * per-prompt cap prevents an unchanged issue from causing an infinite loop.
-	 */
-	async #checkInProgressIssues(): Promise<boolean> {
-		if (cfgIssuesEnabled.get(this.settings) === false) return false;
-		if (!cfgIssuesReminders.get(this.settings)) {
-			this.#issuesReminderCount = 0;
-			return false;
-		}
-		if (this.hasPendingBackgroundJobs()) return false;
-
-		const remindersMax = cfgIssuesRemindersMax.get(this.settings);
-		if (this.#issuesReminderCount >= remindersMax) {
-			logger.debug("Issues reminder: max reminders reached", { count: this.#issuesReminderCount });
-			return false;
-		}
-
-		let inProgress: IssueSummary[];
-		try {
-			inProgress = await listIssues(this.sessionManager.getCwd(), {
-				status: "in-progress",
-				archived: false,
-			});
-		} catch (error) {
-			logger.debug("Issues reminder: listIssues failed", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-			return false;
-		}
-		if (inProgress.length === 0) {
-			this.#issuesReminderCount = 0;
-			return false;
-		}
-
-		this.#issuesReminderCount++;
-		const issueList = inProgress.map(issue => `- #${issue.id} ${issue.title} (${issue.category})`).join("\n");
-		const reminder =
-			`<system-reminder>\n` +
-			`You are ending the turn with ${inProgress.length} issue(s) still marked in-progress:\n${issueList}\n\n` +
-			`Finish the work and set each to fixed (or archive it), or — if it is not actively being worked on — set it back to open via the \`issues\` tool.\n` +
-			`(Reminder ${this.#issuesReminderCount}/${remindersMax})\n` +
-			`</system-reminder>`;
-
-		logger.debug("Issues reminder: sending reminder", {
-			inProgress: inProgress.length,
-			attempt: this.#issuesReminderCount,
-		});
-
-		const reminderMessage: Message = {
-			role: "developer",
-			content: [{ type: "text", text: reminder }],
-			attribution: "agent",
-			timestamp: Date.now(),
-		};
-		this.agent.appendMessage(reminderMessage);
-		this.sessionManager.appendMessage(reminderMessage);
-		this.#scheduleAgentContinue({ source: "issues-reminder", generation: this.#promptGeneration });
-		return true;
-	}
 
 	#ensurePostPromptTasksPromise(): void {
 		if (this.#postPromptTasksPromise) return;
@@ -8443,7 +8369,6 @@ export class AgentSession implements SettingsScope {
 			this.#irc.flushPending();
 
 			this.#todo.resetCycle();
-			this.#issuesReminderCount = 0;
 			this.#resetPromptMaintenanceState();
 			this.#recovery.setAcceptTerminalEmptyStop(options?.acceptTerminalEmptyStop === true);
 
@@ -10534,7 +10459,6 @@ export class AgentSession implements SettingsScope {
 			this.sessionManager.appendServiceTierChange(this.#models.serviceTierEntry());
 
 			this.#todo.resetCycle();
-			this.#issuesReminderCount = 0;
 			this.#planReferenceSent = false;
 			this.#planReferencePath = "local://PLAN.md";
 			this.#advisors.resetSessionState();

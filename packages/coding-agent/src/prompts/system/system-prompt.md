@@ -71,16 +71,6 @@ Skills are specialized knowledge. If one matches your task, you MUST read `skill
 </domain-rules>
 {{/if}}
 
-{{#if knowledgeCategories.length}}
-# Knowledge
-{{#each knowledgeCategories}}
-{{category}}
-{{#each files}}
-- `{{url}}`: {{description}}
-{{/each}}
-{{/each}}
-{{/if}}
-
 # Internal URLs
 Most FS/bash tools resolve these; path selectors: `read` docs.
 {{#each internalUrls}}

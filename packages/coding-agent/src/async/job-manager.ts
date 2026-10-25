@@ -531,8 +531,8 @@ export class AsyncJobManager {
 	 * Subscribe to job-set changes: a job is registered, or reaches a terminal
 	 * state (completed/failed/cancelled). Fires regardless of whether the job
 	 * streamed progress, so UI surfaces (the anchored Background Jobs panel) can
-	 * refresh for jobs started outside a turn — e.g. slash-command spawns like
-	 * `/knowledge compact`. Returns an unsubscribe function.
+	 * refresh for jobs started outside a turn — e.g. slash-command spawns.
+	 * Returns an unsubscribe function.
 	 */
 	onChange(cb: () => void): () => void {
 		this.#changeListeners.add(cb);

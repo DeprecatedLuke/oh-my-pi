@@ -95,6 +95,5 @@ ${chalk.bold("Plugin Options:")}
 
 ${chalk.bold("Useful Commands:")}
   omp agents unpack           - Export bundled subagents to ~/.omp/agent/agents (default)
-  omp agents unpack --project - Export bundled subagents to ./.omp/agents
-  omp build-knowledge --last 30d - Export durable knowledge from recent sessions`;
+  omp agents unpack --project - Export bundled subagents to ./.omp/agents`;
 }

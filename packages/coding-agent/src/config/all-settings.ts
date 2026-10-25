@@ -11,7 +11,6 @@ import * as configModelSettings from "./model-settings";
 import * as sessionContextSettings from "../session/context-settings";
 import * as memoryBackendSettings from "../memory-backend/settings";
 import * as memoriesSettings from "../memories/settings";
-import * as knowledgeSettings from "../session/knowledge-settings";
 import * as sharpshooterSettings from "../sharpshooter/settings";
 import * as autolearnSettings from "../autolearn/settings";
 import * as mnemopiSettings from "../mnemopi/settings";
@@ -52,7 +51,6 @@ const DOMAINS: readonly Readonly<Record<string, unknown>>[] = [
 	sessionContextSettings,
 	memoryBackendSettings,
 	memoriesSettings,
-	knowledgeSettings,
 	sharpshooterSettings,
 	autolearnSettings,
 	mnemopiSettings,

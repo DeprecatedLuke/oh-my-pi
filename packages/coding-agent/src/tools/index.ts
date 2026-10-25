@@ -57,12 +57,10 @@ import { cfgIdaAvailable } from "../ida/install";
 import { EvalTool } from "./eval";
 import { resolveEvalBackends } from "./eval-backends";
 import { GithubTool } from "./gh";
-import { GitCheckpointTool } from "./git-checkpoint";
 import { GlobTool } from "./glob";
 import { GrepTool } from "./grep";
 import { IdaTool } from "./ida";
 import { IrcTool } from "./irc";
-import { IssuesTool } from "./issues";
 import { JobTool } from "./job";
 import { LaunchTool } from "./launch";
 import { FindTool, isFindEnabled } from "./jfind";
@@ -141,7 +139,6 @@ export * from "./eval-backends";
 export * from "./file-mutation-queue";
 export * from "./file-write-fallback";
 export * from "./gh";
-export * from "./git-checkpoint";
 export * from "./glob";
 export * from "./grep";
 export * from "./jfind";
@@ -154,7 +151,6 @@ export type {
 } from "@oh-my-pi/pi-tui/tools/wait";
 export type { IrcDetails } from "./irc";
 export { IrcTool, ircToolRenderer } from "./irc";
-export * from "./issues";
 export * from "./job";
 export * from "./launch";
 export * from "./image-gen";
@@ -668,7 +664,6 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	ida: IdaTool.createIf,
 	eval: s => new EvalTool(s),
 	github: GithubTool.createIf,
-	git_checkpoint: GitCheckpointTool.createIf,
 	glob: s => new GlobTool(s, { rootPathAlias: true }),
 	grep: s => new GrepTool(s),
 	find: s => new FindTool(s),
@@ -682,7 +677,6 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	task: s => TaskTool.create(s),
 	job: s => new JobTool(s),
 	irc: IrcTool.createIf,
-	issues: IssuesTool.createIf,
 	todo: s => new TodoTool(s),
 	web_search: s => new WebSearchTool(s),
 	search_tool_bm25: SearchToolBm25Tool.createIf,

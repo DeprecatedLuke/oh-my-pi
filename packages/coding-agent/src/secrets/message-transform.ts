@@ -733,7 +733,7 @@ function obfuscateMessageBatch(obfuscator: SecretObfuscator, messages: Message[]
 
 /**
  * Redact outbound provider context: conversation messages and system prompt
- * blocks (which embed knowledge notes, context files, and memories that can
+ * blocks (which embed notes, context files, and memories that can
  * carry secrets). Tool schemas pass through unchanged.
  */
 export function obfuscateProviderContext(obfuscator: SecretObfuscator | undefined, context: Context): Context {

@@ -574,49 +574,6 @@ export const cfgLaunchEnabled = register({
 	},
 });
 
-export const cfgIssuesEnabled = register({
-	id: "issues.enabled",
-	type: "boolean",
-	default: true,
-	ui: {
-		tab: "tools",
-		group: "Available Tools",
-		label: "Issues",
-		description: "Enable the project-local issues tool",
-	},
-});
-
-export const cfgIssuesReminders = register({
-	id: "issues.reminders",
-	type: "boolean",
-	default: true,
-	ui: {
-		tab: "tools",
-		group: "Available Tools",
-		label: "Issue Reminders",
-		description:
-			"Remind the agent before it ends a turn while issues are still marked in-progress (only when no background jobs are running).",
-	},
-});
-
-export const cfgIssuesRemindersMax = register({
-	id: "issues.reminders.max",
-	type: "number",
-	default: 3,
-	ui: {
-		tab: "tools",
-		group: "Available Tools",
-		label: "Issue Reminder Limit",
-		description: "Maximum number of in-progress issue reminders before giving up.",
-		options: [
-			{ value: "1", label: "1 reminder" },
-			{ value: "2", label: "2 reminders" },
-			{ value: "3", label: "3 reminders" },
-			{ value: "5", label: "5 reminders" },
-		],
-	},
-});
-
 export const cfgIrcTimeoutMs = register({
 	id: "irc.timeoutMs",
 	type: "number",

@@ -88,7 +88,7 @@ export interface SchemeWritePolicy {
 	/**
 	 * With `via: "handler"`: whole-content `write` still goes through the handler (validation,
 	 * normalization), but `edit`/`ast_edit` patch the file {@link ProtocolHandler.locate} returns
-	 * (knowledge://). Requires a mutable file-backed spec with `locate()`.
+	 * (file-backed note schemes). Requires a mutable file-backed spec with `locate()`.
 	 */
 	fileEdits?: true;
 	/**
@@ -137,7 +137,7 @@ export interface SchemeSpec {
 	imageQuestion?: true;
 	/** Mistyped spellings are aliases of `scheme://x`: single-slash `scheme:/x` and a path-prefixed `/cwd/scheme://x` (local://). */
 	singleSlashAlias?: true;
-	/** Selector-less reads of the located file start after its leading YAML frontmatter (knowledge:// search descriptions). */
+	/** Selector-less reads of the located file start after its leading YAML frontmatter (retrieval-description headers). */
 	hideFrontmatter?: true;
 	write?: SchemeWritePolicy;
 }

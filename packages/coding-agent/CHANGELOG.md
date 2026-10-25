@@ -4,12 +4,16 @@
 
 ### Breaking Changes
 
-- Removed the agent `git` tool (`op: "checkpoint"`/`"status"`); checkpoints now live on the `git` command: `omp git checkpoint` lists the dirty repos and `omp git checkpoint <repo>...` commits only the named ones, so an agent commits just the repos it is responsible for. Agents use the new `git_checkpoint` tool for the same flow.
+- Removed the agent `git` tool (`op: "checkpoint"`/`"status"`); WIP checkpoints now come from the `omp-git-checkpoint` plugin, whose `git_checkpoint` tool commits only the repos the agent names.
+
+### Removed
+
+- Moved the issues tracker out of core into the `omp-issues` plugin: its store, `issues://` scheme, `issues` tool, prompt, in-progress turn reminder, `§ Filed Issues` subagent section, and issue-filing `reviewer` behavior are gone, and `.omp/issues/` entries, the `issues` tool, `issues://` reads/writes, and reviewer issue filing now come from the plugin.
+- Moved the project knowledge base out of core into the `omp-knowledge` plugin: its note store, `knowledge://` scheme, `# Knowledge` prompt index, session-distill passes, automatic update, `/knowledge` command, and `omp build-knowledge` are gone, and `.omp/knowledge/` notes, `knowledge://` reads/writes, `/knowledge save|build|update|compact`, and the automatic distill now come from the plugin (`/knowledge build --sessions` replaces `omp build-knowledge`).
+- Moved the git checkpoint feature out of core into the `omp-git-checkpoint` plugin: the `git_checkpoint` tool, its prompt, and `docs/tools/git_checkpoint.md` are gone, and `omp git checkpoint` / `/git checkpoint` no longer exist.
 
 ### Added
 
-- Added the `git_checkpoint` agent tool: a bare call lists the dirty repos without committing, and a call naming only those repos commits them as local WIP checkpoints. It shares one implementation with `omp git checkpoint`, so matching rules, listing output, and failure isolation cannot drift between the CLI and the tool.
-- Added `/git checkpoint`, which commits every dirty repo (root plus unlinked nested repos) with generated messages in one step.
 - Added a completion percentage to Background Jobs panel subagent rows, showing each running agent's latest self-estimate.
 
 ### Changed

@@ -763,8 +763,6 @@ compaction:
   thresholdTokens: -1 # fixed token limit when > 0
 memory:
   backend: off               # off, local, hindsight, mnemopi
-knowledge:
-  autoUpdateThresholdTokens: 100000   # primary-session provider tokens between automatic project-knowledge updates; 0 disables
 ```
 
 | Key                           | Type    | Default                                  | Notes                                                                                                                                                                                                                                     |
@@ -785,7 +783,6 @@ knowledge:
 | `compaction.keepRecentTokens` | number  | `20000`                                  | Recent-history token budget for summary compaction.                                                                                                                                                                                                           |
 | `compaction.autoContinue`     | boolean | `true`                                   | Continue automatically after compaction.                                                                                                                                                                                                  |
 | `memory.backend`              | enum    | `off`                                    | `off`, `local`, `hindsight`, `mnemopi`. Each backend has its own `hindsight.*` / `mnemopi.*` / `memories.*` tuning keys.                                                                                                                  |
-| `knowledge.autoUpdateThresholdTokens` | number | `100000` | Primary-session provider tokens between automatic project-knowledge updates; `0` disables. |
 | `autolearn.enabled`           | boolean | `false`       | Experimental: enable standing lesson-capture guidance and `manage_skill` (plus `learn` when a memory backend is active). Managed skills live under `<agent dir>/managed-skills`. |
 | `autolearn.autoContinue`      | boolean | `false`       | After an eligible primary stop, run a private capture turn (uses extra tokens). Off keeps only standing guidance; no hidden reminder is inserted into the next turn. Aborted, plan-mode, and goal-loop turns are skipped.                                                                                                           |
 | `autolearn.minToolCalls`      | number  | `5`           | Minimum completed tool calls in a primary turn before automatic capture is eligible.                                                                                                                                                                               |

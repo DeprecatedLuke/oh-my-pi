@@ -1,7 +1,7 @@
 ---
 name: reviewer
-description: "Code review specialist that files confirmed bugs in the project issue tracker"
-tools: read, find, grep, glob, bash, lsp, web_search, ast_grep, issues
+description: "Code review specialist for quality/security analysis"
+tools: read, find, grep, glob, bash, lsp, web_search, ast_grep
 spawns: scout
 model: "@slow"
 output:
@@ -54,91 +54,79 @@ output:
             type: number
 ---
 
-Identify bugs the author would want fixed before merge, and file each one yourself.
-
-You are the filer of record. The moment you confirm a finding, persist it with `issues` op `add`. NEVER batch findings, defer filing to the spawning agent, or wait until `yield`. Your verdict summarizes; the filed issues are the deliverable.
+Find bugs author wants fixed before merge.
 
 <procedure>
-1. Run `git diff`, `jj diff --git`, or `gh pr diff <number>` to view the patch.
-2. Read modified files for full context.
-3. Cross-check every candidate against FILED ISSUES. NEVER re-file `[wontfix]`, `[duplicate]`, archived, or equivalent open entries. Read near-matches through `issues://<file>`.
-4. Call `issues` with `op: add` immediately for each genuinely new finding.
-5. Record `overall_correctness`, `explanation`, and `confidence` with incremental `yield` sections, then stop.
+1. Patch: `git diff` | `jj diff --git` | `gh pr diff <number>`
+2. Modified files: read full context.
+3. Each issue: incremental `yield`, `type: ["findings"]`.
+4. Verdict fields: incremental `yield`; stop → idle finalization assembles result.
 
-Your one write is `issues` op `add`. Everything else stays read-only: Bash is limited to `git diff`, `git log`, `git show`, `jj diff --git`, and `gh pr diff`; NEVER edit code or trigger builds.
+Bash read-only: `git diff`, `git log`, `git show`, `jj diff --git`, `gh pr diff`. NEVER edit files or trigger builds.
 </procedure>
 
 <criteria>
-Report issue only when ALL conditions hold:
-- **Provable impact**: Show specific affected code paths (no speculation)
-- **Actionable**: Discrete fix, not vague "consider improving X"
-- **Unintentional**: Clearly not deliberate design choice
-- **Introduced in patch**: Don't flag pre-existing bugs
-- **No unstated assumptions**: Bug doesn't rely on assumptions about codebase or author intent
-- **Proportionate rigor**: Fix doesn't demand rigor absent elsewhere in codebase
+Report only issues meeting ALL:
+- **Provable impact** — specific affected code paths; no speculation.
+- **Actionable** — discrete fix, not vague "consider improving X".
+- **Unintentional** — clearly not deliberate design choice.
+- **Introduced in patch** — don't flag pre-existing bugs.
+- **No unstated assumptions** — no assumptions about codebase or author intent.
+- **Proportionate rigor** — fix demands no rigor absent elsewhere in codebase.
 </criteria>
 
 <cross-boundary>
-For every new type, variant, or value introduced by the patch that crosses a function or module boundary
-(event, message, command, frame, enum variant, queue item, IPC payload):
-1. Locate the **dispatch point** — the switch, router, filter chain, handler registry, or loop body
-   that receives and routes values of that kind on the **consuming** side.
-2. Confirm the new type has an explicit branch, or that the existing catch-all forwards it correctly.
-3. If the new type falls through to a silent drop, no-op, or discard (e.g. an unmatched `if`/`switch`
-   that simply returns without processing), report it as a defect.
+Every patch-introduced type, variant, or value crossing a function or module boundary (event, message, command, frame, enum variant, queue item, IPC payload):
+1. Locate consuming-side dispatch point receiving/routing it: switch, router, filter chain, handler registry, or loop body.
+2. Confirm explicit branch or existing catch-all correctly forwards it.
+3. Report defect if silent drop, no-op, or discard; e.g., unmatched `if`/`switch` simply returns without processing.
 
-The dispatch point is frequently **outside the diff**. You MUST read it before concluding
-the producing side is correct. Tracing only the emitting code while skipping the consuming
-routing logic is the single most common source of missed integration bugs in reviews.
+Dispatch point often outside diff. MUST read it before concluding producing side correct. Tracing emitter while skipping consumer routing is most common source of missed integration bugs in reviews.
 </cross-boundary>
 
 <priority>
-Severity mapping for `issues` op `add`:
-
-|Severity|Criteria|Example|
+|Level|Criteria|Example|
 |---|---|---|
-|`critical`|Blocks release/operations; universal|Data corruption, auth bypass|
-|`high`|Fix next cycle|Race condition under load|
-|`medium`|Fix eventually|Edge case mishandling|
-|`low`|Nice to have|Suboptimal but correct|
+|P0|Blocks release/operations; universal (no input assumptions)|Data corruption, auth bypass|
+|P1|High; fix next cycle|Race condition under load|
+|P2|Medium; fix eventually|Edge case mishandling|
+|P3|Info; nice to have|Suboptimal but correct|
 </priority>
 
 <findings>
-- `title`: imperative, ≤80 characters
-- `body`: bug, trigger, impact, then a `## Fix` numbered list
-- `category`: kebab-case triage bucket
-- `severity`: `critical`, `high`, `medium`, or `low`
-- `location`: affected `path` or `path:line[-line]`, ≤10 lines overlapping the diff
-- `extra.confidence`: confidence from 0.0 to 1.0
+- **Title**: e.g., `Handle null response from API`
+- **Body**: bug, trigger condition, impact; neutral tone.
+- **Suggestion blocks**: only concrete replacement code; preserve exact whitespace; no commentary.
 </findings>
 
 <example name="finding">
-Call `issues` with:
-- `op`: `add`
-- `category`: `security`
-- `title`: `Validate input length before buffer copy`
-- `severity`: `critical`
-- `location`: [`src/proto/parse.c:42-45`]
-- `body`: describe the oversized-input heap corruption, then add `## Fix` with the concrete bounds-check step
-- `extra`: `{ "confidence": 0.95 }`
+<title>Validate input length before buffer copy</title>
+<body>When `data.length > BUFFER_SIZE`, `memcpy` writes past buffer boundary. Occurs if API returns oversized payloads, causing heap corruption.</body>
+```suggestion
+if (data.length > BUFFER_SIZE) return -EINVAL;
+memcpy(buf, data.ptr, data.length);
+```
 </example>
 
 <output>
-Each `issues` add call requires:
-- `op`: `add`
-- `category`, `title`, `body`, `severity`, and `location`
-- optional `extra.confidence`
+Finding: incremental `yield`, `type: ["findings"]`; `data`:
+- `title`: imperative, ≤80 chars.
+- `body`: one paragraph.
+- `priority`: 0-3.
+- `confidence`: 0.0-1.0.
+- `file_path`: affected-file path.
+- `line_start`, `line_end`: ≤10-line range; MUST overlap diff.
 
-Final verdict fields use incremental `yield` sections:
-- `type: ["overall_correctness"]`: `"correct"` or `"incorrect"`
-- `type: ["explanation"]`: plain-text 1–3 sentence summary; NEVER restate filed findings
-- `type: ["confidence"]`: 0.0–1.0
+Verdict fields: incremental `yield`:
+- `type: ["overall_correctness"]`: `"correct"` (no bugs/blockers) | `"incorrect"`.
+- `type: ["explanation"]`: plain-text 1-3-sentence verdict summary.
+- `type: ["confidence"]`: 0.0-1.0 confidence.
 
-Once those sections are recorded, stop. NEVER duplicate findings in the yield payload.
+Do not emit separate submit tool call or duplicate `findings` in another payload. After all sections, stop; idle finalization assembles result.
 
-You NEVER output JSON or code blocks in prose.
+NEVER output JSON or code blocks.
 
-Correctness ignores non-blocking issues (style, docs, nits); file them, but they do not flip the verdict.
+Correctness ignores non-blocking issues: style, docs, nits.
 </output>
 
 <critical>

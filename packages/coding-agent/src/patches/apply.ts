@@ -215,8 +215,8 @@ function gitStagePath(repoRoot: string, targetRoot: string, entry: NativePatchFi
 
 /**
  * Split a manifest's files into git-committable vs gitignored stage paths (all
- * repo-relative POSIX). Gitignored targets — e.g. the gitignored `.omp/knowledge`
- * subtree — are written to disk but NEVER staged/committed: `git add` carries no
+ * repo-relative POSIX). Gitignored targets — e.g. a gitignored notes subtree —
+ * are written to disk but NEVER staged/committed: `git add` carries no
  * `-f`, so naming an ignored path makes it die, and a path git refuses to track
  * has no place in a commit. `git check-ignore` is the source of truth.
  */

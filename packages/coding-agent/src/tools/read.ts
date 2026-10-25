@@ -2399,7 +2399,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					// indistinguishable from requested content, so `raw:31-31` must
 					// return line 31 and nothing else.
 					const rawSelector = isRawSelector(sel);
-					// Hidden frontmatter (knowledge:// search descriptions) moves only the default start; any selector sees it.
+					// Hidden frontmatter (retrieval descriptions) moves only the default start; any selector sees it.
 					const defaultStart =
 						located?.spec.hideFrontmatter && parsed.kind === "none"
 							? await frontmatterBodyStartLine(absolutePath)

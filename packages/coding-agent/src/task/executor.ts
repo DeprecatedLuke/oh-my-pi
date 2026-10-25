@@ -51,7 +51,6 @@ import type { PreparedExtension } from "../extensibility/extensions/types";
 import { buildSkillPromptMessage, type Skill } from "../extensibility/skills";
 import type { HindsightSessionState } from "../hindsight/state";
 import type { LocalProtocolOptions } from "../internal-urls";
-import { listIssues, renderIssueListing } from "../issues";
 import { IrcBus } from "../irc/bus";
 import type { MCPManager } from "../mcp/manager";
 import type { MnemopiSessionState } from "../mnemopi/state";
@@ -3893,8 +3892,6 @@ interface SubagentPromptInputs {
 	ircEnabled: boolean;
 	/** Root resolved by the latest roster ensure; peer rows render scoped to it, so a session switch hides stale parked trees. */
 	ircRoot: { sessionFile?: string };
-	/** Catalogued `.omp/issues/` listing for agents granted the `issues` tool; empty when omitted. */
-	existingIssues: string;
 	/** Peer roster each prompt block the live session rendered shows, keyed by that block. */
 	ircRenders: Map<string, IrcPeerRosterData>;
 	/** Peer roster of the prompt the parked session held; a warm revive renders it again. */
@@ -3992,7 +3989,6 @@ function buildSubagentSessionOptions(
 				agent: inputs.agentSystemPrompt,
 				context: inputs.context,
 				planReference: inputs.planReference,
-				existingIssues: inputs.existingIssues,
 				planReferencePath: inputs.planReferencePath,
 				worktree: inputs.worktree,
 				structured: inputs.structured,
@@ -4642,29 +4638,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			}
 
 			const { normalized: normalizedOutputSchema } = normalizeSchema(outputSchema);
-			// Agents that can file findings receive the full active + archived
-			// catalogue so settled decisions and existing open reports are not
-			// duplicated.
-			let existingIssues = "";
-			if (toolNames?.includes("issues")) {
-				try {
-					const summaries = await awaitAbortable(listIssues(worktree ?? cwd));
-					existingIssues =
-						summaries.length > 0
-							? renderIssueListing(summaries, {
-									title: "",
-									emptyText: "",
-									group: true,
-									showArchived: true,
-								}).trimStart()
-							: "_No issues filed yet._";
-				} catch (error) {
-					if (error instanceof ToolAbortError) throw error;
-					logger.debug("Failed to load existing issues for subagent prompt", {
-						error: error instanceof Error ? error.message : String(error),
-					});
-				}
-			}
 
 			// Rebuilding an equivalent session from the same JSONL file re-invokes
 			// createAgentSession with this spec (same agent id, tools, model, system
@@ -4751,7 +4724,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					outputSchemaOverridesAgent: options.outputSchemaOverridesAgent === true,
 					ircEnabled,
 					ircRoot: {},
-					existingIssues,
 					ircRenders: new Map(),
 					reviving: false,
 				},
