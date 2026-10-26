@@ -15,7 +15,6 @@ function createContext() {
 			get isAborting() {
 				return sessionState.isAborting;
 			},
-			getAsyncJobSnapshot: () => null,
 		},
 	});
 	return { ctx, setWorkingMessage, sessionState };

@@ -401,7 +401,6 @@ describe("InteractiveMode todo HUD persistence", () => {
 		// The blocker note is dropped with the blocked status — the wait is over.
 		expect(task?.blocker).toBeUndefined();
 	});
-
 	it("does not persist a stale reveal after the owning snapshot changes", async () => {
 		await replaceMode();
 		vi.useFakeTimers();

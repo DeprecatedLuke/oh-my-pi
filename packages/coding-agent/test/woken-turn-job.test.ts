@@ -13,7 +13,7 @@ function makeManager(maxRunningJobs = 15) {
 }
 
 describe("runWokenTurnTracked", () => {
-	test("a subagent woken turn becomes a job the main panel surfaces and that delivers on completion", async () => {
+	test("a subagent woken turn becomes a job the main session surfaces and that delivers on completion", async () => {
 		const { manager, completions } = makeManager();
 		const gate = Promise.withResolvers<void>();
 		let ran = false;
@@ -29,10 +29,10 @@ describe("runWokenTurnTracked", () => {
 			summarize: id => `${id} finished a woken turn`,
 		});
 
-		// The Background Jobs panel reads getAsyncJobSnapshot on the Main session,
-		// which filters running jobs to ownerId === MAIN_AGENT_ID. The woken job MUST
-		// be owned by Main (not the woken subagent) or that filter drops it and the
-		// panel still under-counts — reproduce that exact owner-scoped view here.
+		// The Main session's getAsyncJobSnapshot filters running jobs to
+		// ownerId === MAIN_AGENT_ID. The woken job MUST be owned by Main (not the
+		// woken subagent) or that filter drops it and the job count
+		// still under-counts — reproduce that exact owner-scoped view here.
 		const mainPanelView = manager.getRunningJobs({ ownerId: MAIN_AGENT_ID });
 		expect(mainPanelView.map(j => j.id)).toEqual(["AuthLoader"]);
 		expect(mainPanelView[0]?.ownerId).toBe(MAIN_AGENT_ID);

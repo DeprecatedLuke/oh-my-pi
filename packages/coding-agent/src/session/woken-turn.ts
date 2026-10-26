@@ -4,13 +4,13 @@ import type { AsyncJobManager } from "../async/job-manager";
 export interface WokenTurnJobOptions {
 	/** The session's async job manager (the shared, Main-owned instance for subagents). */
 	manager: AsyncJobManager | undefined;
-	/** Registry id of the agent running the turn — used as the job id (the Background Jobs panel row label). */
+	/** Registry id of the agent running the turn — used as the job id (the job's label in listings). */
 	agentId: string | undefined;
 	/**
-	 * Owner the job is filed under — the agent whose Background Jobs panel,
-	 * pending-async-work, and lifecycle cancellation it belongs to. MUST be the
-	 * panel that should surface the woken turn (the top-level `Main` session), NOT
-	 * the woken subagent, or the owner-scoped panel filter drops it.
+	 * Owner the job is filed under — the agent whose pending-async-work and
+	 * lifecycle cancellation it belongs to. MUST be the session that should
+	 * surface the woken turn (the top-level `Main` session), NOT
+	 * the woken subagent, or the owner-scoped job filter drops it.
 	 */
 	ownerId: string;
 	/** `"sub"` agents register a job; the main agent never does (its wakes deliver to itself). */
@@ -34,7 +34,7 @@ export interface WokenTurnJobOptions {
  * resume, or a revive wakes it. Those later turns flip the agent's registry
  * status to `running` (so the Agent Hub shows it) but the original spawn job has
  * already completed — nothing tracks the new turn. Wrapping it in its own job
- * makes the woken turn (a) appear in the anchored Background Jobs panel, (b) keep
+ * makes the woken turn (a) appear in the owner's job list, (b) keep
  * the owning session's pending-async-work true while it runs, and (c) deliver a
  * completion follow-up that wakes the owner once the turn ends — otherwise the
  * owner never learns the woken turn finished.

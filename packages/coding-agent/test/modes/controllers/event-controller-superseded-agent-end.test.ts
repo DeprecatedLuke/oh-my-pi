@@ -19,14 +19,12 @@ function createContext() {
 				return streamState.isStreaming;
 			},
 			getToolByName: () => undefined,
-			getAsyncJobSnapshot: () => null,
 			hasPendingAsyncWork: () => false,
 		},
 		viewSession: {
 			isCompacting: false,
 			getLastAssistantMessage: () => undefined,
 			hasPendingAsyncWork: () => false,
-			getAsyncJobSnapshot: () => null,
 			get isStreaming() {
 				return streamState.viewIsStreaming;
 			},

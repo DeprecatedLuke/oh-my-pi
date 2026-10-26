@@ -56,7 +56,8 @@ export interface ObservableSession {
 	/**
 	 * Spawn runs as a detached background job (parent turn not blocked on it).
 	 * Sync task spawns and eval `agent()` spawns additionally render live in
-	 * their own inline tool block / eval cell.
+	 * their own inline tool block / eval cell; the pinned HUD jump-lists every
+	 * active subagent either way.
 	 */
 	detached?: boolean;
 	index?: number;
@@ -67,7 +68,8 @@ export interface ObservableSession {
 	progressAt?: number;
 }
 
-export type SessionObserverChangeKind = "lifecycle" | "progress";
+/** Coarse source of an observer change; callers use it to separate lifecycle work from high-frequency progress. */
+export type SessionObserverChangeKind = "main" | "reset" | "lifecycle" | "progress";
 
 const STATUS_MAP: Record<string, ObservableSession["status"]> = {
 	started: "active",
@@ -130,7 +132,7 @@ export class SessionObserverRegistry {
 			sessionFile: sessionFile ?? existing?.sessionFile,
 			lastUpdate: Date.now(),
 		});
-		this.#notifyListeners("lifecycle");
+		this.#notifyListeners("main");
 	}
 
 	/** Return one tracked session without copying or sorting the registry. */
@@ -171,7 +173,7 @@ export class SessionObserverRegistry {
 		this.#sortOrderById.clear();
 		this.#parentSortOrderById.clear();
 		this.#nextSortOrder = 0;
-		this.#notifyListeners("lifecycle");
+		this.#notifyListeners("reset");
 	}
 
 	dispose(): void {

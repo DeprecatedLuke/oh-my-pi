@@ -14,7 +14,6 @@ import {
 	readArgsCollapseIntoGroup,
 	readArgsHaveTarget,
 } from "@oh-my-pi/pi-tui/chat/read-tool-group";
-import { PREVIEW_LIMITS, previewLine, TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { RecapNotice } from "@oh-my-pi/pi-tui/chat/recap-notice";
 import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { TodoReminderComponent } from "@oh-my-pi/pi-tui/chat/todo-reminder";
@@ -47,6 +46,7 @@ import {
 import { formatApprovalPrompt, resolveApproval, sessionApprovalScope } from "../../tools/approval";
 import { getApprovalGrants } from "../../tools/approval-cache";
 import { recoverAskQuestions } from "../../tools/ask";
+import { previewLine, PREVIEW_LIMITS, TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 import { writeDeviceDispatch } from "../../tools/resolve";
 import { nextActionableTask } from "../../tools/todo";
@@ -282,8 +282,6 @@ export class EventController {
 	// Insertion-ordered IRC cards not yet retired; values are the transcript
 	// components each card contributed (see #retireIrcCard for the guard).
 	#liveIrcCards = new Map<string, Component[]>();
-	#completionNotificationDeferred = false;
-	#pendingCompletionEvent: Extract<AgentSessionEvent, { type: "agent_end" }> | undefined;
 	// Most recent `wait` tool block whose result still had every watched job
 	// running. Kept un-finalized (live) so the next `wait` call displaces it —
 	// one persistent poll instead of a stack of "waiting on N jobs" frames —
@@ -490,8 +488,6 @@ export class EventController {
 		}
 		this.#ircExpiryTimers.clear();
 		this.#liveIrcCards.clear();
-		this.#completionNotificationDeferred = false;
-		this.#pendingCompletionEvent = undefined;
 	}
 
 	#resetReadGroup(): void {
@@ -1136,8 +1132,6 @@ export class EventController {
 			this.ctx.statusContainer.disposeChildren();
 		}
 		this.#cancelIdleCompaction();
-		this.#completionNotificationDeferred = false;
-		this.ctx.refreshBackgroundJobs();
 		this.#cancelIdleRecap();
 		this.composerPrediction.cancel();
 		this.ctx.statusLine.markActivityStart();
@@ -2109,8 +2103,6 @@ export class EventController {
 	}
 
 	async #handleToolExecutionEnd(event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>): Promise<void> {
-		// An async tool registers its background job during execution.
-		this.ctx.refreshBackgroundJobs();
 		// `createAbortedToolResult` emits start/end after an error/aborted
 		// assistant message. The matching card was deliberately retracted at
 		// message_end; consume the completion instead of recreating/updating UI.
@@ -2445,8 +2437,7 @@ export class EventController {
 		this.#scheduleIdleRecap();
 		if (this.#settledRunStatus(event).state === "done") this.composerPrediction.request();
 		this.sendErrorNotification(event);
-		this.#scheduleCompletionNotification(event);
-		this.ctx.refreshBackgroundJobs();
+		this.sendCompletionNotification(event);
 	}
 
 	/**
@@ -2920,52 +2911,6 @@ export class EventController {
 
 	#currentContextTokens(): number {
 		return this.ctx.viewSession.getContextUsage()?.tokens ?? 0;
-	}
-
-	/**
-	 * Defer completion notification while any process-global async work can still
-	 * wake the session (including jobs owned by nested subagents). The latest
-	 * terminal event is retained for the eventual notification after the anchored
-	 * jobs HUD settles.
-	 */
-	#scheduleCompletionNotification(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
-		if (event.isTerminal === false) {
-			this.#completionNotificationDeferred = false;
-			this.#pendingCompletionEvent = undefined;
-			return;
-		}
-		this.#pendingCompletionEvent = event;
-		if (this.#isWaitingForUserInput()) {
-			this.#completionNotificationDeferred = false;
-			this.#pendingCompletionEvent = undefined;
-			this.sendCompletionNotification(event);
-			return;
-		}
-		this.#completionNotificationDeferred = this.#hasPendingAsyncWork();
-	}
-
-	#hasPendingAsyncWork(): boolean {
-		return this.ctx.session.hasPendingAsyncWork();
-	}
-
-	#isWaitingForUserInput(): boolean {
-		if (this.ctx.session.queuedMessageCount > 0 || this.ctx.session.isStreaming) return false;
-		if (this.ctx.session.isCompacting || this.ctx.session.isGeneratingHandoff) return false;
-		return !this.#hasPendingAsyncWork();
-	}
-
-	/**
-	 * Deliver a completion notification that was deferred because background
-	 * work could still wake the session. The Background Jobs panel calls this as
-	 * it tears down, which is the moment nothing can wake the session any more.
-	 */
-	flushDeferredCompletion(): void {
-		if (!this.#completionNotificationDeferred) return;
-		if (!this.#isWaitingForUserInput()) return;
-		this.#completionNotificationDeferred = false;
-		const event = this.#pendingCompletionEvent;
-		this.#pendingCompletionEvent = undefined;
-		if (event) this.sendCompletionNotification(event);
 	}
 
 	sendErrorNotification(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {

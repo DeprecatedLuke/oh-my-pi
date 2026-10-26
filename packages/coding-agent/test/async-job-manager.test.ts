@@ -1104,16 +1104,16 @@ describe("AsyncJobManager", () => {
 		});
 
 		// A job that never calls reportProgress (mirrors the slash-command-spawned
-		// knowledge pass): the panel must still learn it started, then finished.
+		// knowledge pass): subscribers must still learn it started, then finished.
 		manager.register("task", "KnowledgeCompact", async () => "done");
-		// Registration notifies synchronously so the panel kicks immediately.
+		// Registration notifies synchronously so subscribers kick immediately.
 		expect(changes).toBe(1);
 
 		await manager.waitForAll();
 		// The terminal transition (completed) notifies too.
 		expect(changes).toBe(2);
 
-		// Cancel notifies as well, so a hidden panel still re-evaluates once the
+		// Cancel notifies as well, so a subscriber still re-evaluates once the
 		// last job ends.
 		const { promise: hold, resolve } = Promise.withResolvers<string>();
 		const id = manager.register("bash", "held", () => hold);

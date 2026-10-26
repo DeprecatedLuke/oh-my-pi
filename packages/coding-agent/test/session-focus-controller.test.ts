@@ -94,7 +94,6 @@ function makeHarness(options: { renderInitialMessages?: () => void | Promise<voi
 		unsubscribe: () => {
 			mainUnsubscribe++;
 		},
-		refreshBackgroundJobs: () => {},
 		eventController: {
 			handleEvent: async (event: unknown) => {
 				handledEvents.push(event);

@@ -29,7 +29,7 @@ import { ensureThemeSync, getEditorTheme, theme } from "../theme/theme";
 const DOUBLE_INTERRUPT_MS = 500;
 // How long idle chrome must hold its height after a turn before it is treated as permanent.
 const IDLE_CHROME_SETTLE_MS = 250;
-// Self-clearing HUDs (todos, background jobs) usually vanish shortly after a turn, but a todo plan
+// Self-clearing HUDs (todos, subagents) usually vanish shortly after a turn, but a todo plan
 // lingers for its auto-clear delay (or indefinitely while tasks stay open). Rows such a HUD displaces
 // are clipped, not retired, so one that outlives this window is promoted like persistent chrome.
 const SELF_CLEARING_CHROME_SETTLE_MS = 1000;
@@ -160,8 +160,8 @@ export interface ViewportClickSpan {
 }
 
 /**
- * Row-level click target: maps rendered rows to subagent ids. Detected
- * structurally by `rowTargetCandidates`, so implementers stay decoupled.
+ * Row-level click target: maps rendered rows to subagent ids. Implemented by
+ * the subagent HUD, whose rows are fixed 1:1 with visible sessions.
  */
 export interface ViewportClickRowTarget {
 	getClickAgentAtRow(row: number): string | undefined;
@@ -180,6 +180,13 @@ export function routeViewportClick(spans: readonly ViewportClickSpan[], index: n
 	}
 	return [];
 }
+
+/**
+ * Reserved click-candidate id for the pinned HUD expander row. Checked before
+ * any registry lookup: its `@…:…` charset cannot collide with generated agent
+ * ids (word names, numeric and `-N` suffixes, dotted nesting).
+ */
+export const PINNED_HUD_TOGGLE_ID = "@omp:toggle-pinned-hud";
 
 /**
  * Nested background opens inside a hovered row. The band wraps the line, so a
@@ -564,8 +571,9 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	 * for its row targets in `after` coordinates.
 	 *
 	 * Row targets usually nest one level down: chrome roots are plain
-	 * containers, and `Container.render` is a pure concatenation, so child
-	 * spans tile the root span exactly. Render those children once and share the rows for
+	 * containers (the HUD lives inside `subagentContainer`), and
+	 * `Container.render` is a pure concatenation, so child spans tile the root
+	 * span exactly. Render those children once and share the rows for
 	 * composition and measurement — a second render per frame would duplicate
 	 * render-time side effects (image placement registration). Roots with a
 	 * custom render keep the composed output as the source of truth and measure

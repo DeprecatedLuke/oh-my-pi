@@ -114,7 +114,7 @@ export interface AsyncJob {
 	/**
 	 * For `type: "task"` jobs: the subagent type (e.g. "solver", "explore",
 	 * "task") selected via the `agent` parameter. Used to render a more
-	 * informative tag in the background-jobs panel (e.g. `[solver]` instead
+	 * informative tag in job listings (e.g. `[solver]` instead
 	 * of the generic `[task]`). Undefined for bash jobs and legacy callers.
 	 */
 	agentType?: string;
@@ -462,7 +462,7 @@ export class AsyncJobManager {
 	/**
 	 * Subscribe to job-set changes: a job is registered, or reaches a terminal
 	 * state (completed/failed/cancelled). Fires regardless of whether the job
-	 * streamed progress, so UI surfaces (the anchored Background Jobs panel) can
+	 * streamed progress, so consumers (extension bridge) can
 	 * refresh for jobs started outside a turn — e.g. slash-command spawns.
 	 * Returns an unsubscribe function.
 	 */

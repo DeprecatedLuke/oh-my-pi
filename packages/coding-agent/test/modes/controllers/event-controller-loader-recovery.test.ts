@@ -37,9 +37,6 @@ function createContext(options: { terminalProgress?: boolean } = {}) {
 				return streamState.isStreaming;
 			},
 			getToolByName: () => undefined,
-			// The fork's Background Jobs panel refreshes on agent_start; with no async
-			// manager the snapshot is null and the panel stays clear.
-			getAsyncJobSnapshot: () => null,
 			hasPendingAsyncWork: () => false,
 			get hasPostPromptWork() {
 				return streamState.continuation !== undefined;

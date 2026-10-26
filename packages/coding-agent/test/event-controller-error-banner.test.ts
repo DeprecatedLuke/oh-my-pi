@@ -90,7 +90,6 @@ function createFixture(streamingMessage?: AssistantMessage) {
 			get isStreaming() {
 				return sessionState.isStreaming;
 			},
-			getAsyncJobSnapshot: () => null,
 		},
 		noteDisplayableThinkingContent,
 		get hasDisplayableThinkingContent() {
