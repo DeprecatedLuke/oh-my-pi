@@ -32,6 +32,7 @@ import type { AgentRegistry } from "../registry/agent-registry";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import type { ArtifactManager } from "../session/artifacts";
 import type { ClientBridge } from "../session/client-bridge";
+import type { CostGate } from "../session/cost-gate";
 import type { CustomMessage } from "../session/messages";
 import type { UsageStatistics } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";
@@ -212,6 +213,8 @@ export interface DeferredDiagnosticsEntry {
 export interface ToolSession {
 	/** Current working directory */
 	cwd: string;
+	/** Cost gate of the session tree, forwarded to subagents. */
+	costGate?: CostGate;
 	/** Additional workspace directories beyond cwd (multi-root), forwarded to subagents. */
 	additionalDirectories?: string[];
 	/** Whether UI is available */
@@ -256,6 +259,8 @@ export interface ToolSession {
 	skipPythonPreflight?: boolean;
 	/** Pre-loaded context files (AGENTS.md, etc) */
 	contextFiles?: ContextFileEntry[];
+	/** No context files beyond `contextFiles`, not even for additional workspace roots (forwarded to subagents) */
+	noContextFiles?: boolean;
 	/** Pre-loaded workspace tree (forwarded to subagents to skip re-scanning) */
 	workspaceTree?: WorkspaceTree;
 	/** Pre-loaded skills */
@@ -377,7 +382,7 @@ export interface ToolSession {
 	getMnemopiSessionState?: () => MnemopiSessionState | undefined;
 	/** Agent identity used for IRC routing. Returns the registry id (e.g. "Main", "AuthLoader"). */
 	getAgentId?: () => string | null;
-	/** Parent cache identity for sibling sharing, only when the parent model opts in. */
+	/** Parent cache identity for sibling sharing; the child stores it independently of its initial model, and each request consumes it only when its own model opts in. */
 	getPromptCacheKey?: () => string | undefined;
 	/** Look up a registered tool by name (used by the eval js backend's tool bridge). */
 	getToolByName?: (name: string) => AgentTool | undefined;

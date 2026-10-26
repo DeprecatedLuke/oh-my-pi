@@ -28,6 +28,7 @@ import {
 	createMCPProxyTools,
 	createSubagentSettings,
 	followMCPTools,
+	replayRevivedAgentStart,
 	subagentRetryFallbackRole,
 } from "./executor";
 import { isCompletionProbeEnabled } from "./completion-probe";
@@ -229,6 +230,7 @@ export function createPersistedSubagentReviverFactory(
 					cwd: restoredSeance?.cwd ?? ctx.session.sessionManager.getCwd(),
 					// A revived agent redacts with the root session's secret set, not its own cwd's.
 					obfuscator: ctx.session.obfuscator,
+					costGate: ctx.session.costGate,
 					authStorage: ctx.authStorage,
 					// Revived agents join the root session tree, so their observability
 					// frames ride the same bus the RPC/collab surfaces subscribed to.
@@ -316,6 +318,7 @@ export function createPersistedSubagentReviverFactory(
 				reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
 				reportRuntimeError: err => logger.error("Extension error", { path: err.extensionPath, error: err.error }),
 			});
+			await replayRevivedAgentStart(session);
 			// Cold revives must drive registry status themselves — createAgentSession
 			// doesn't wire this generically (the live path does it in the executor).
 			// The internal run-state signal precedes deferrable public `agent_end`,

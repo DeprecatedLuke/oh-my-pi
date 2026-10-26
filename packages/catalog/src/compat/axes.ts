@@ -248,6 +248,7 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	]),
 	"effort-beta": wire("effortBeta", ["anthropic"]),
 	"escape-builtin-tool-names": wire("escapeBuiltinToolNames", ["anthropic"]),
+	"extended-cache-ttl-beta": wire("extendedCacheTtlBeta", ["anthropic"]),
 	"fast-mode": wire("fastMode", ["anthropic"]),
 	"first-party-provider": wire("firstPartyProvider", ["anthropic"]),
 	"honors-claude-code-beta-kill-switch": wire("honorsClaudeCodeBetaKillSwitch", ["anthropic"]),
@@ -548,8 +549,13 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"max-tokens-ceiling": { key: "maxTokensCeiling", set: "catalog", shape: "scalar" },
 	"long-context-cost": { key: "longContext", set: "catalog", shape: "object" },
 	"prompt-cache": { key: "promptCache", set: "catalog", shape: "object" },
-	"task-sibling-prompt-cache": {
-		key: "taskSiblingPromptCache",
+	/**
+	 * The lane rewards routing related requests — Task siblings, forks, explicit
+	 * `--prompt-cache-key` callers — under one shared prompt-cache key instead of
+	 * each conversation's own identity. Unassigned: per-conversation routing.
+	 */
+	"shared-prompt-cache": {
+		key: "sharedPromptCache",
 		set: "catalog",
 		shape: "scalar",
 		values: [true, false],
@@ -560,6 +566,13 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	 * Unassigned: no known lookback bound.
 	 */
 	"prompt-cache-lookback": { key: "promptCacheLookback", set: "catalog", shape: "scalar" },
+	/**
+	 * The provider's own endpoint keeps prompt-cache entries indefinitely
+	 * (logged-in Codex subscriptions): an idle gap never cools the prefix, so
+	 * rewriting it while idle only discards a warm cache. Read through
+	 * `compat/prompt-cache-persistent.ts`. Unassigned: entries expire.
+	 */
+	"prompt-cache-persistent": { key: "promptCachePersistent", set: "catalog", shape: "scalar", values: [true, false] },
 	"long-usage-limit-fallback": { key: "longUsageLimitFallback", set: "catalog", shape: "scalar" },
 	"max-context-window": { key: "maxContextWindow", set: "catalog", shape: "scalar" },
 	/**

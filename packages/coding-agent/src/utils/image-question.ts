@@ -134,6 +134,7 @@ export async function askImageQuestion(
 	);
 	const reasoning = toReasoningEffort(resolveThinkingLevelForModel(model, configuredThinking));
 
+	session.costGate?.admit();
 	let response: AssistantMessage;
 	try {
 		response = await instrumentedCompleteSimple(
@@ -161,6 +162,7 @@ export async function askImageQuestion(
 			},
 			{ telemetry, oneshotKind: "image_question", completeImpl },
 		);
+		session.costGate?.record(response.usage.cost.total);
 	} catch (error) {
 		if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) {
 			if (timedOut()) throw new ToolError(formatTimeoutMessage());
