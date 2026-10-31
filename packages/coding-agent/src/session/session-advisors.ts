@@ -131,7 +131,7 @@ import {
 } from "../advisor/settings";
 import { cfgCompaction, cfgContextPromotionEnabled } from "./context-settings";
 import { resolveModelCompactionSettings } from "./model-compaction-threshold";
-import { cfgRetry, cfgTierAdvisor } from "./settings";
+import { cfgProvidersOpenaiCodexDaybreak, cfgRetry, cfgTierAdvisor } from "./settings";
 
 const ADVISOR_CODEX_SSE_MAX_ATTEMPTS = 1;
 
@@ -310,6 +310,8 @@ interface AdvisorRetryFallbackState {
 	originalSelector: string;
 	originalThinkingLevel: ThinkingLevel;
 	lastAppliedThinkingLevel: ThinkingLevel;
+	/** Whether the active fallback selector explicitly follows the primary's effort. */
+	autoThinking: boolean;
 	/** Set by a classifier refusal: no cooldown restore until a compaction or new conversation replaces the context. */
 	pinned: boolean;
 }
@@ -348,8 +350,13 @@ interface ActiveAdvisor {
 	pendingCoveredTurn: number;
 	retryFallback?: AdvisorRetryFallbackState;
 	retryFallbackPendingSuccess: boolean;
-	/** Count of consecutive usage-limit block waits, bounded by retry.maxRetries; reset on turn success. */
-	usageLimitRetries: number;
+	/**
+	 * Consecutive provider-block waits (usage limit or timed rate limit), bounded
+	 * by retry.maxRetries. Reset on turn success, abandonment, and conversation
+	 * reset — never on exhaustion of a non-latching rate limit, so the runtime's
+	 * 3-strike drop can fire.
+	 */
+	providerWaitRetries: number;
 	signature: string;
 	reviewInProgress: boolean | undefined;
 }
@@ -450,7 +457,8 @@ export interface SessionAdvisorsOptions {
 	/** WATCHDOG.yml problems found during discovery; surfaced once as a warning. */
 	configWarnings?: string[];
 	streamFn?: StreamFn;
-	transformProviderContext?: (context: Context, model: Model) => Context | Promise<Context>;
+	/** Builds each advisor's provider request transform; called once per advisor agent. */
+	createTransformProviderContext?: () => (context: Context, model: Model) => Context | Promise<Context>;
 }
 
 /** Options accepted when an advisor injects a primary-session message. */
@@ -520,17 +528,21 @@ export interface SessionAdvisorsHost {
 	sessionId(): string;
 	/** Put an advisor's provider session under the primary session's account pools. */
 	restrictOAuthAccounts(providerSessionId: string): void;
+	/** Whether the owning session is the top-level main session or a spawned subagent (`"main"` when omitted). */
+	agentKind?(): "main" | "sub";
 }
 
 /**
- * One advisor's status-line slice: runtime status plus whether it has
- * finished reviewing the current yield — i.e. it is not going to add any
- * more comments until a new primary turn starts (or an explicit reset).
+ * One advisor's status-line slice: runtime status, whether it has finished
+ * reviewing the current yield, its queued or in-flight review backlog, and
+ * whether the live runtime is parked at the pause boundary.
  */
 export interface AdvisorStatusOverviewEntry {
 	name: string;
 	status: AdvisorRuntimeStatus;
 	yielded: boolean;
+	backlog: number;
+	isPaused: boolean;
 }
 
 /** Owns advisor runtimes, delivery policy, context maintenance, and status reporting. */
@@ -548,7 +560,7 @@ export class SessionAdvisors {
 	#advisorContextPrompt: string | undefined;
 	#advisorMemoryPrompt: string | undefined;
 	#advisorStreamFn: StreamFn | undefined;
-	#transformProviderContext: ((context: Context, model: Model) => Context | Promise<Context>) | undefined;
+	#createTransformProviderContext: (() => (context: Context, model: Model) => Context | Promise<Context>) | undefined;
 	#advisors: ActiveAdvisor[] = [];
 	#advisorConfigs: AdvisorConfig[] | undefined;
 	#advisorConfigWarnings: string[];
@@ -623,7 +635,7 @@ export class SessionAdvisors {
 		this.#advisorConfigs = options.configs;
 		this.#advisorConfigWarnings = options.configWarnings ?? [];
 		this.#advisorStreamFn = options.streamFn;
-		this.#transformProviderContext = options.transformProviderContext;
+		this.#createTransformProviderContext = options.createTransformProviderContext;
 		if (this.#advisorEnabled) this.#buildAdvisorRuntime();
 	}
 
@@ -1064,9 +1076,9 @@ export class SessionAdvisors {
 			a.agentUnsubscribe = undefined;
 			a.runtime.reset("conversation-boundary");
 			a.reviewInProgress = undefined;
-			// A reset aborts any pending usage-limit wait; clear its budget so the new
+			// A reset aborts any pending provider-block wait; clear its budget so the new
 			// conversation starts with a fresh retry allowance (issue #11947).
-			a.usageLimitRetries = 0;
+			a.providerWaitRetries = 0;
 			this.#releaseRefusalPin(a);
 			// Resets the emission guard and every tool-side note state together.
 			a.adviseTool.resetDeliveredNotes();
@@ -1090,7 +1102,14 @@ export class SessionAdvisors {
 		const roster: AdvisorConfig[] = legacy ? [{ name: "default" }] : this.#advisorConfigs!;
 		const descriptors: AdvisorRuntimeDescriptor[] = [];
 		const usedSlugs = new Set<string>();
+		const sessionKind = this.#host.agentKind?.() ?? "main";
 		for (const config of roster) {
+			if (
+				(config.scope === "main" && sessionKind !== "main") ||
+				(config.scope === "subagent" && sessionKind !== "sub")
+			) {
+				continue;
+			}
 			let slug = legacy ? "" : slugifyAdvisorName(config.name);
 			if (slug) {
 				let candidate = slug;
@@ -1226,6 +1245,8 @@ export class SessionAdvisors {
 		const budget = this.#advisorMaxNotesPerUpdate(config);
 		// The service tier is bound at build time, so a `tier.advisor` edit must rebuild.
 		const tier = cfgTierAdvisor.get(this.#host.settings);
+		const scope = config.scope ?? "all";
+		const includeReasoning = config.includeReasoning !== false ? "1" : "0";
 		return [
 			config.name,
 			slug,
@@ -1235,6 +1256,8 @@ export class SessionAdvisors {
 			instructions,
 			budget,
 			tier,
+			scope,
+			includeReasoning,
 		].join("\u001f");
 	}
 
@@ -1447,7 +1470,9 @@ export class SessionAdvisors {
 				onPayload: this.#host.onPayload,
 				onResponse: this.#host.onResponse,
 				onSseEvent: this.#host.onSseEvent,
-				transformProviderContext: this.#transformProviderContext,
+				// Built per advisor: the transform keeps per-conversation state (the
+				// date/cwd reminder), and each advisor is a conversation of its own.
+				transformProviderContext: this.#createTransformProviderContext?.(),
 				intentTracing: false,
 				transformAssistantMessage: message => {
 					quarantinedAdvisorOutput = quarantineAdvisorUnsafeOutput(
@@ -1569,6 +1594,7 @@ export class SessionAdvisors {
 				snapshotMessages: () => this.#host.agent.state.messages,
 				maintainContext: (incoming, signal) => this.#maintainAdvisorContext(advisorRef, incoming, signal),
 				getObfuscator: () => this.#host.obfuscator(),
+				includeReasoning: descriptor.config.includeReasoning,
 				getModelIdentity: () => formatModelString(advisorRef.agent.state.model),
 				beginAdvisorUpdate: inProgress => {
 					advisorRef.reviewInProgress = inProgress;
@@ -1596,9 +1622,9 @@ export class SessionAdvisors {
 						// Commit the delivered batch so retries of a failed turn stay deduped
 						// while this successful turn's context is persisted once (issue #9553).
 						advisorRef.recorder.commitTurn();
-						// A completed turn ended the usage-limit episode — start the next
+						// A completed turn ended the provider-block episode — start the next
 						// block's bounded wait budget fresh.
-						advisorRef.usageLimitRetries = 0;
+						advisorRef.providerWaitRetries = 0;
 						const fallback = advisorRef.retryFallback;
 						if (!advisorRef.retryFallbackPendingSuccess || !fallback) return;
 						advisorRef.retryFallbackPendingSuccess = false;
@@ -1611,7 +1637,11 @@ export class SessionAdvisors {
 						advisorRef.reviewInProgress = undefined;
 					}
 				},
-				onTurnAbandoned: () => advisorRef.recorder.abandonTurn(),
+				onTurnAbandoned: () => {
+					advisorRef.recorder.abandonTurn();
+					// The dropped batch ends this episode; the next batch gets a fresh budget.
+					advisorRef.providerWaitRetries = 0;
+				},
 				notifyFailure: error => {
 					this.#advisorStatuses.set(slug, { name: advisorName, status: "error" });
 					const message = error instanceof Error ? error.message : String(error);
@@ -1660,7 +1690,7 @@ export class SessionAdvisors {
 				eligibleUpdates: carried?.get(slug)?.eligibleUpdates ?? 0,
 				pendingCoveredTurn: 0,
 				retryFallbackPendingSuccess: false,
-				usageLimitRetries: 0,
+				providerWaitRetries: 0,
 				signature,
 				reviewInProgress: undefined,
 			};
@@ -1896,8 +1926,8 @@ export class SessionAdvisors {
 			a.runtime.reset(reason);
 			a.reviewInProgress = undefined;
 			// Match the conversation-boundary re-prime: a reset must not carry a
-			// pending wait's usage-limit budget into the reset conversation.
-			a.usageLimitRetries = 0;
+			// pending wait's provider-block budget into the reset conversation.
+			a.providerWaitRetries = 0;
 			if (compacted) this.#releaseRefusalPin(a);
 		}
 	}
@@ -1944,7 +1974,11 @@ export class SessionAdvisors {
 	}
 
 	/** Switch one advisor model while preserving its context and effort invariants. */
-	#setAdvisorModel(advisor: ActiveAdvisor, model: Model, requestedThinkingLevel: ThinkingLevel): ThinkingLevel {
+	#setAdvisorModel(
+		advisor: ActiveAdvisor,
+		model: Model,
+		requestedThinkingLevel: ThinkingLevel | undefined,
+	): ThinkingLevel {
 		const resolvedThinkingLevel = resolveThinkingLevelForModel(model, requestedThinkingLevel);
 		const nextThinkingLevel = resolvedThinkingLevel ?? ThinkingLevel.Inherit;
 		advisor.agent.setModel(model);
@@ -1980,9 +2014,9 @@ export class SessionAdvisors {
 	#retuneAutoThinkingAdvisors(): void {
 		const requested = this.#autoAdvisorThinkingLevel();
 		for (const advisor of this.#advisors) {
-			// A retry-fallback selector pinned its own effort for the fallback
-			// model; the retune resumes once the configured model is restored.
-			if (!advisor.autoThinking || advisor.runtime.disposed || advisor.retryFallback) continue;
+			// Concrete and bare fallback selectors keep their applied effort.
+			const autoThinking = advisor.retryFallback?.autoThinking ?? advisor.autoThinking;
+			if (!autoThinking || advisor.runtime.disposed) continue;
 			const next =
 				resolveThinkingLevelForModel(advisor.model, automaticThinkingLevel(advisor.model, requested)) ??
 				ThinkingLevel.Inherit;
@@ -1990,6 +2024,7 @@ export class SessionAdvisors {
 			advisor.agent.setThinkingLevel(toReasoningEffort(next));
 			advisor.agent.setDisableReasoning(shouldDisableReasoning(next));
 			advisor.thinkingLevel = next;
+			if (advisor.retryFallback) advisor.retryFallback.lastAppliedThinkingLevel = next;
 		}
 	}
 
@@ -2041,8 +2076,8 @@ export class SessionAdvisors {
 		if (!apiKey) return;
 		signal.throwIfAborted();
 
-		// An `auto` advisor skipped the retune while on the fallback: rejoin the
-		// primary's live level now, not the level it had when it fell back.
+		// Rejoin the primary's live level for an auto advisor, or restore the
+		// fixed effort it had before falling back.
 		const thinkingToApply = advisor.autoThinking
 			? this.#autoAdvisorThinkingLevel()
 			: advisor.thinkingLevel === fallback.lastAppliedThinkingLevel
@@ -2133,20 +2168,26 @@ export class SessionAdvisors {
 			usagePriorBlockedUntilMs = outcome.priorBlockedUntilMs;
 			usagePriorBlockedUntilTimed = outcome.priorBlockedUntilTimed;
 		}
-		if (!assistantFailure && !accountPolicyDenial && !usageLimit) return false;
+		// A provider-timed transient rejection (Codex `turn_rate_limit_exceeded`
+		// "Codex is at capacity" with Retry-After) clears on its own: wait out the
+		// stated window like the primary retry loop instead of burning the
+		// runtime's three 1s retries and dropping the batch.
+		const timedRateLimit = !usageLimit && retryAfterMs !== undefined && AIError.is(errorId, AIError.Flag.Transient);
+		if (!assistantFailure && !accountPolicyDenial && !usageLimit && !timedRateLimit) return false;
 
 		const currentSelector = formatRetryFallbackSelector(currentModel, advisor.thinkingLevel);
 
 		const retrySettings = cfgRetry.get(this.#host.settings);
-		// A usage-limit error with no sibling credential and no usable model
-		// fallback is not automatically fatal: wait out a transient credential
-		// block and retry, mirroring the primary turn-recovery. Only a wait past
-		// retry.maxDelayMs / an exhausted budget falls through to the latch.
-		const declineUsageLimit = (): Promise<boolean> =>
-			usageLimit
-				? this.#waitOutAdvisorUsageLimit(
+		// A usage-limit or timed rate-limit error with no sibling credential and no
+		// usable model fallback is not automatically fatal: wait out the block and
+		// retry, mirroring the primary turn-recovery. Only a wait past
+		// retry.maxDelayMs / an exhausted budget falls through to the runtime.
+		const waitOrDecline = (): Promise<boolean> =>
+			usageLimit || timedRateLimit
+				? this.#waitOutAdvisorProviderBlock(
 						advisor,
 						retrySettings,
+						usageLimit,
 						{
 							retryAtMs: usageRetryAtMs,
 							blockedUntilMs: usageBlockedUntilMs,
@@ -2159,8 +2200,8 @@ export class SessionAdvisors {
 						signal,
 					)
 				: Promise.resolve(false);
-		if (!retrySettings.enabled || !retrySettings.modelFallback) return declineUsageLimit();
-		if (!retryFallbackAdmits(retrySettings.fallbackOn, usageLimit)) return declineUsageLimit();
+		if (!retrySettings.enabled || !retrySettings.modelFallback) return waitOrDecline();
+		if (!retryFallbackAdmits(retrySettings.fallbackOn, usageLimit)) return waitOrDecline();
 		// Same two-key walk the main loop uses: the chain that owns this advisor's
 		// active fallback, then the chain the current model owns. Without the
 		// second key an advisor that lands on the last entry of one chain never
@@ -2172,7 +2213,7 @@ export class SessionAdvisors {
 		if (
 			!chainKeys.some(role => this.#host.findRetryFallbackCandidates(role, currentSelector, currentModel).length > 0)
 		) {
-			return declineUsageLimit();
+			return waitOrDecline();
 		}
 
 		// A refusal by the advisor's primary judges this context, not the model's health:
@@ -2194,10 +2235,15 @@ export class SessionAdvisors {
 				signal.throwIfAborted();
 
 				const originalThinkingLevel = advisor.thinkingLevel;
-				const requestedThinkingLevel = selector.thinkingLevel ?? originalThinkingLevel;
+				// A `:auto` fallback entry follows the primary's resolved effort, like an `auto` advisor.
+				const requestedThinkingLevel =
+					selector.thinkingLevel === AUTO_THINKING
+						? automaticThinkingLevel(candidate, this.#autoAdvisorThinkingLevel())
+						: (selector.thinkingLevel ?? originalThinkingLevel);
 				const nextThinkingLevel = this.#setAdvisorModel(advisor, candidate, requestedThinkingLevel);
 				if (advisor.retryFallback) {
 					advisor.retryFallback.lastAppliedThinkingLevel = nextThinkingLevel;
+					advisor.retryFallback.autoThinking = selector.thinkingLevel === AUTO_THINKING;
 					advisor.retryFallback.pinned ||= primaryRefused;
 				} else {
 					advisor.retryFallback = {
@@ -2205,6 +2251,7 @@ export class SessionAdvisors {
 						originalSelector: currentSelector,
 						originalThinkingLevel,
 						lastAppliedThinkingLevel: nextThinkingLevel,
+						autoThinking: selector.thinkingLevel === AUTO_THINKING,
 						pinned: primaryRefused,
 					};
 				}
@@ -2220,18 +2267,22 @@ export class SessionAdvisors {
 				return true;
 			}
 		}
-		return declineUsageLimit();
+		return waitOrDecline();
 	}
 
 	/**
-	 * Wait out a transient usage-limit credential block and signal a retry, or
-	 * decline so {@link AdvisorRuntime} latches its permanent quota state.
-	 * See {@link planAdvisorUsageLimitWait} for the wait-vs-latch decision; the
-	 * wait is abortable via `signal` (reset/dispose/session transition).
+	 * Wait out a transient provider block (usage limit or timed rate limit) and
+	 * signal a retry, or decline. A declined usage limit latches
+	 * {@link AdvisorRuntime}'s quota state; a declined rate limit falls to the
+	 * runtime's generic 3-strike retry, so its spent budget is kept until the
+	 * batch succeeds or is abandoned. See {@link planAdvisorUsageLimitWait} for
+	 * the wait-vs-decline decision; the wait is abortable via `signal`
+	 * (reset/dispose/session transition).
 	 */
-	async #waitOutAdvisorUsageLimit(
+	async #waitOutAdvisorProviderBlock(
 		advisor: ActiveAdvisor,
 		retry: { enabled: boolean; baseDelayMs: number; maxDelayMs: number; maxRetries: number },
+		latchesOnDecline: boolean,
 		timing: {
 			retryAtMs?: number;
 			blockedUntilMs?: number;
@@ -2252,18 +2303,19 @@ export class SessionAdvisors {
 			priorBlockedUntilMs: timing.priorBlockedUntilMs,
 			priorBlockedUntilTimed: timing.priorBlockedUntilTimed,
 			retry,
-			attempt: advisor.usageLimitRetries,
+			attempt: advisor.providerWaitRetries,
 			nowMs: Date.now(),
 		});
 		if (waitMs === undefined) {
-			// A genuine long quota window (wait past retry.maxDelayMs) or an
-			// exhausted retry budget — reset the counter so a fresh episode after a
-			// reset starts over, then decline so the runtime latches.
-			advisor.usageLimitRetries = 0;
+			// A wait past retry.maxDelayMs or an exhausted budget. A latching usage
+			// limit resets the counter so a fresh episode after a reset starts over.
+			// A rate limit keeps it spent: resetting would grant a new budget on the
+			// runtime's next retry and the batch would never be dropped.
+			if (latchesOnDecline) advisor.providerWaitRetries = 0;
 			return false;
 		}
-		const attempt = advisor.usageLimitRetries + 1;
-		logger.debug("advisor waiting out usage-limit block", {
+		const attempt = advisor.providerWaitRetries + 1;
+		logger.debug("advisor waiting out provider block", {
 			advisor: advisor.name,
 			waitMs,
 			attempt,
@@ -2271,7 +2323,7 @@ export class SessionAdvisors {
 		await scheduler.wait(waitMs, { signal });
 		// An aborted pause/reset did not reach a provider retry and must not
 		// consume budget in the resumed/reset conversation.
-		advisor.usageLimitRetries = attempt;
+		advisor.providerWaitRetries = attempt;
 		return true;
 	}
 
@@ -2368,12 +2420,10 @@ export class SessionAdvisors {
 			compactionContextTokens(
 				providerContextTokens,
 				fixedPromptTokens +
-					estimateContextToolSchemaTokens(
-						agent.state.tools,
-						agent.tokenizer,
-						model,
-						this.#host.settings.revision,
-					) +
+					estimateContextToolSchemaTokens(agent.state.tools, agent.tokenizer, model, {
+						sourceRevision: this.#host.settings.revision,
+						pruneDescriptions: agent.prunesToolDescriptions(model),
+					}) +
 					storedConversationTokens +
 					incomingTokens,
 			);
@@ -2541,6 +2591,7 @@ export class SessionAdvisors {
 						metadata: advisorMetadata,
 						providerSessionState: this.#host.providerSessionState,
 						preferWebsockets: this.#host.preferWebsockets(),
+						codexAccessPrograms: cfgProvidersOpenaiCodexDaybreak.get(this.#host.settings),
 						codexCompaction,
 					},
 				);
@@ -2835,8 +2886,8 @@ export class SessionAdvisors {
 	}
 
 	/**
-	 * Lightweight advisor status for the status line: returns just the configured
-	 * flag and per-advisor name/status without computing token/cost breakdowns.
+	 * Lightweight advisor status for the status line and pause screen: the
+	 * configured flag and each advisor's status, yield and pause state, and review backlog.
 	 * Avoids re-tokenizing the advisor transcript on every render frame.
 	 */
 	getAdvisorStatusOverview(): { configured: boolean; advisors: AdvisorStatusOverviewEntry[] } {
@@ -2844,13 +2895,15 @@ export class SessionAdvisors {
 		// clear on reset() but #advisorStatuses lags until the next build.
 		const liveStatusBySlug = new Map<
 			string,
-			{ status: AdvisorRuntimeStatus; yielded: boolean; canReview: boolean }
+			{ status: AdvisorRuntimeStatus; yielded: boolean; canReview: boolean; backlog: number; isPaused: boolean }
 		>();
 		for (const a of this.#advisors) {
 			liveStatusBySlug.set(a.slug, {
 				status: a.runtime.quotaExhausted ? "quota_exhausted" : a.runtime.failureNotified ? "error" : "running",
+				backlog: a.runtime.backlog,
 				yielded: a.runtime.yielded,
 				canReview: !a.runtime.quotaExhausted && !a.runtime.halted && !a.runtime.disposed,
+				isPaused: a.agent.isPaused,
 			});
 		}
 		const advisors = [...this.#advisorStatuses.entries()].map(([slug, { name, status }]) => {
@@ -2858,6 +2911,8 @@ export class SessionAdvisors {
 			return {
 				name,
 				status: live?.status ?? status,
+				backlog: live?.backlog ?? 0,
+				isPaused: live?.isPaused ?? false,
 				// The eye only closes after the primary itself has yielded: while it
 				// is streaming, an advisor that can still accept review work may
 				// receive (and comment on) new deltas even when its backlog is

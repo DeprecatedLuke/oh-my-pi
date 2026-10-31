@@ -46,7 +46,7 @@ if [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_SOCKET_PATH:-}" ]; then
 fi
 
 launch_dir=${OMP_DEV_LAUNCH_DIR:-${HOME}/.omp/.dev-cwd}
-mkdir -p "$launch_dir"
+[ -d "$launch_dir" ] || mkdir -p "$launch_dir"
 
 OMP_LAUNCH_CWD=$PWD
 export OMP_LAUNCH_CWD

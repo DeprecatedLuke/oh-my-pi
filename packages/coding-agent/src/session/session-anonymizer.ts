@@ -263,6 +263,7 @@ const FIELD_RULES: Record<string, Rule> = {
 	...fields("id", [
 		"id",
 		"parentId",
+		"continuationOf",
 		"toolCallId",
 		"call_id",
 		"responseId",
@@ -1405,6 +1406,8 @@ export class SessionAnonymizer {
 		for (const [key, value] of Object.entries(block)) {
 			const rule = allowed.has(key) && Object.hasOwn(FIELD_RULES, key) ? FIELD_RULES[key] : undefined;
 			if (rule === undefined) out[this.placeholder(key)] = this.#opaque(value);
+			// The block type is already allowlisted; replay consumers use it to distinguish text from images.
+			else if (key === "type") out[key] = value;
 			// A tool call is the model's own request (its id must stay joinable with the result).
 			else out[key] = this.#field(rule, value, block, key, fromTool && block.type !== "toolCall");
 		}
@@ -1792,7 +1795,9 @@ export async function anonymizeSessionTranscripts(session: AnonymizeSessionInput
 	let subagentError: string | undefined;
 	try {
 		if (session.sessionFile) {
-			subSessions = await collectSubSessions(session.sessionFile, key => unreadable.push(memberFor(key)));
+			subSessions = await collectSubSessions(session.sessionFile, {
+				onUnreadable: key => unreadable.push(memberFor(key)),
+			});
 		}
 	} catch (error) {
 		subagentError = error instanceof Error ? error.message : String(error);

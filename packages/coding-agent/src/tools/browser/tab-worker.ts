@@ -13,7 +13,6 @@ import type {
 	HTTPRequest,
 	HTTPResponse,
 	JSHandle,
-	KeyboardTypeOptions,
 	KeyInput,
 	Page,
 	Protocol,
@@ -143,8 +142,7 @@ import {
 	BrowserTracingController,
 } from "./tracing";
 import {
-	installWebMcp,
-	type WebMcpController,
+	WebMcpController,
 	type WebMcpEventsOptions,
 	type WebMcpEventsResult,
 	type WebMcpInvokeOptions,
@@ -173,7 +171,6 @@ import {
 	composedContains,
 	clickQueryHandlerText,
 	fillViaHandle,
-	focusTextEntryTarget,
 	highlightElement,
 	type HighlightOptions,
 	type InteractionHandle,
@@ -188,6 +185,8 @@ import {
 	type PreparedUpload,
 	prepareElementUpload,
 	type ScrollOptions,
+	TypingInterruptedError,
+	typeIntoElement,
 	wheel,
 } from "./interactions";
 import {
@@ -596,7 +595,6 @@ type RawHandleMethod = (...args: unknown[]) => Promise<unknown>;
 
 interface RawHandleMethods {
 	interactive: Partial<Record<GuardedHandleMethod, RawHandleMethod>>;
-	type: ElementHandle["type"];
 	invalidatedBy?: string;
 }
 
@@ -641,8 +639,10 @@ async function runGuardedHandleAction<T>(
 			HANDLE_ACTION_INVALIDATION_TIMEOUT_MS,
 			`Timed out invalidating ${label}`,
 		).catch(() => undefined);
-		// A click still refused when the deadline hit carries the reason on its own abort error.
-		throw actionError instanceof ClickRefusedError ? actionError : error;
+		// A click still refused, or typing cut short, when the deadline hit carries that on its own abort error.
+		throw actionError instanceof ClickRefusedError || actionError instanceof TypingInterruptedError
+			? actionError
+			: error;
 	}
 }
 
@@ -765,7 +765,7 @@ export function toActionableHandle(
 				if (original) methods[method] = original;
 			}
 		}
-		enriched.fill = value => fillViaHandle(enriched, value, undefined, preserved?.type);
+		enriched.fill = value => fillViaHandle(enriched, value);
 		enriched.click = options =>
 			clickElement(enriched, "handle.click()", undefined, {
 				button: options?.button,
@@ -797,7 +797,7 @@ export function toActionableHandle(
 			};
 			interactive.press = press as RawHandleMethod;
 		}
-		originals = { interactive, type: enriched.type.bind(enriched) };
+		originals = { interactive };
 		enriched[RAW_HANDLE_METHODS] = originals;
 	}
 
@@ -824,7 +824,7 @@ export function toActionableHandle(
 				originals,
 				"handle.type()",
 				signal,
-				() => typeViaHandle(enriched, text, options, signal),
+				() => typeIntoElement(enriched, text, signal, options),
 				invalidate,
 			),
 		);
@@ -835,7 +835,7 @@ export function toActionableHandle(
 				originals,
 				"handle.fill()",
 				signal,
-				() => fillViaHandle(enriched, value, signal, text => typeViaHandle(enriched, text, { delay: 0 }, signal)),
+				() => fillViaHandle(enriched, value, signal),
 				invalidate,
 			),
 		);
@@ -921,20 +921,6 @@ export function toActionableHandle(
 		};
 	}
 	return enrichElementQueries(enriched, guard);
-}
-
-/** Focus once, then type one code point at a time so abort stops before the next key dispatch. */
-async function typeViaHandle(
-	handle: ElementHandle,
-	text: string,
-	options: Readonly<KeyboardTypeOptions> | undefined,
-	signal: AbortSignal,
-): Promise<void> {
-	await focusTextEntryTarget(handle, "type into", signal);
-	for (const character of text) {
-		throwIfAborted(signal);
-		await untilAborted(signal, () => handle.frame.page().keyboard.type(character, options));
-	}
 }
 
 /**
@@ -1545,7 +1531,11 @@ export class WorkerCore {
 	#emulation?: BrowserEmulationController;
 	#screenshotHistory = new Map<string, ScreenshotHistory>();
 	#webmcp?: WebMcpController;
+	/** Session holding `ignore_https_errors`; Chromium drops the override once it detaches. */
+	#certificateOverride?: CDPSession;
 	readonly #recording = new RecordingController();
+	/** Set once the core stops for good: by {@link terminate}, or by a close. */
+	#stopped = false;
 	/**
 	 * The page asked to navigate its main frame (a link, a submit button, a script setting `location`) and the new
 	 * document has neither committed nor been abandoned. Chromium reports the request before the click that caused it
@@ -1735,6 +1725,11 @@ export class WorkerCore {
 				defaultViewport: null,
 				protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
 			});
+			// Terminated while it connected: nothing will drop this connection later.
+			if (this.#stopped) {
+				void this.#browser.disconnect();
+				return;
+			}
 
 			// Realm setup is done: puppeteer loaded and browser connected. Sent before
 			// page acquisition so the supervisor's cold-start budget bounds only the
@@ -1786,10 +1781,10 @@ export class WorkerCore {
 				// interactive without raising a window; explicit settle-freeze still applies.
 				await this.#page.emulateFocusedPage(true);
 			}
-			this.#webmcp = await installWebMcp(this.#page);
+			this.#webmcp = new WebMcpController(this.#page);
 			await installVitalsObservers(this.#page);
 			if (payload.userAgent !== undefined) await applyUserAgentOverride(this.#page, payload.userAgent);
-			if (payload.ignoreHttpsErrors) await applyIgnoreHttpsErrors(this.#page);
+			if (payload.ignoreHttpsErrors) this.#certificateOverride = await applyIgnoreHttpsErrors(this.#page);
 			this.#targetId = await targetIdForPage(this.#page);
 			this.#initScripts = new InitScriptManager(this.#page);
 			for (const source of payload.initScripts ?? []) await this.#initScripts.add(source);
@@ -2261,7 +2256,9 @@ export class WorkerCore {
 			// Cell-budget aborts and uncapped helpers (goto/evaluate) keep their native errors.
 			if (capped && !cellSignal.aborted && (opTimeout?.aborted || isPuppeteerTimeout(err))) {
 				const refusal = err instanceof ClickRefusedError ? err.refusal : undefined;
-				const probe = selector ? await this.#selectorMatchCount(selector) : undefined;
+				// Typing that had started proves the element was actionable; the match count would only mislead.
+				const interrupted = err instanceof TypingInterruptedError ? err : undefined;
+				const probe = selector && !interrupted ? await this.#selectorMatchCount(selector) : undefined;
 				const countNote =
 					probe === undefined
 						? undefined
@@ -2269,7 +2266,8 @@ export class WorkerCore {
 							? `selector matches ${probe.count} element(s)`
 							: `could not count matches: ${probe.failure}`;
 				let hint = "";
-				if (refusal)
+				if (interrupted) hint = `; ${interrupted.progress}`;
+				else if (refusal)
 					hint = `; the element never became clickable (last check: ${refusal}${countNote ? `; ${countNote}` : ""})`;
 				else if (probe && "count" in probe) hint = formatSelectorMatchHint(probe.count);
 				else if (countNote) hint = `; ${countNote}`;
@@ -2533,8 +2531,7 @@ export class WorkerCore {
 					async sig => {
 						const handle = await this.#resolveActionHandle(selector, actionOpMs, sig);
 						try {
-							await focusTextEntryTarget(handle, "type into", sig);
-							await untilAborted(sig, () => handle.type(text, { delay: 0 }));
+							await typeIntoElement(handle, text, sig);
 						} finally {
 							await handle.dispose().catch(() => undefined);
 						}
@@ -2752,14 +2749,15 @@ export class WorkerCore {
 					}),
 				),
 			recording: () => op("tab.recording()", quickOpMs, () => Promise.resolve(this.#recording.status())),
-			webmcpList: opts => op("tab.webmcpList()", quickOpMs, sig => untilAborted(sig, () => webmcp.list(opts))),
+			webmcpList: opts => op("tab.webmcpList()", quickOpMs, sig => untilAborted(sig, () => webmcp.list(opts, sig))),
 			webmcpInvoke: (toolName, params, opts) => {
 				const w = waitMs(opts?.timeout);
 				return op(`tab.webmcpInvoke(${JSON.stringify(toolName)})`, w, sig =>
-					untilAborted(sig, () => webmcp.invoke(toolName, params, opts)),
+					untilAborted(sig, () => webmcp.invoke(toolName, params, opts, sig)),
 				);
 			},
-			webmcpEvents: opts => op("tab.webmcpEvents()", quickOpMs, sig => untilAborted(sig, () => webmcp.events(opts))),
+			webmcpEvents: opts =>
+				op("tab.webmcpEvents()", quickOpMs, sig => untilAborted(sig, () => webmcp.events(opts, sig))),
 			a11y: opts =>
 				read("tab.a11y()", budgetBound, async sig => {
 					const result = await untilAborted(sig, () => runA11yAudit(page, opts));
@@ -3551,9 +3549,27 @@ export class WorkerCore {
 		}
 	}
 
-	async #close(): Promise<void> {
+	/**
+	 * Inline counterpart of `Worker.terminate()`: stop taking messages, abort the active run, and drop the browser
+	 * connection (a connected core keeps Chrome's debugger attached to the tab), even under a close in progress.
+	 */
+	terminate(): void {
+		this.#stop();
+		this.#active?.ac.abort(postmortem.markExpectedCleanupError(new ToolAbortError("Tab worker terminated")));
+		if (this.#browser?.connected) void this.#browser.disconnect();
+	}
+
+	/** Stop taking messages; false when the core had already stopped. */
+	#stop(): boolean {
+		if (this.#stopped) return false;
+		this.#stopped = true;
 		this.#unsub();
 		this.#uninstallRejectionGuard();
+		return true;
+	}
+
+	async #close(): Promise<void> {
+		if (!this.#stop()) return;
 		this.#clearElementCache();
 		const page = this.#page;
 		await this.#recording.close().catch(error => {
@@ -3568,6 +3584,9 @@ export class WorkerCore {
 		await this.#downloads?.close();
 		await this.#tracing?.dispose();
 		await this.#consoleCapture.detach();
+		// A borrowed page outlives this tab; detaching restores its certificate checks.
+		await this.#certificateOverride?.detach().catch(() => undefined);
+		this.#certificateOverride = undefined;
 		this.#emulation?.dispose();
 		if (this.#ownsPage && page && !page.isClosed()) await page.close().catch(() => undefined);
 		if (this.#browser?.connected) this.#browser.disconnect();

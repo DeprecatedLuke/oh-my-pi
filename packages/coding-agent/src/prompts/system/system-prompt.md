@@ -106,7 +106,7 @@ SHOULD resolve prerequisites, parallelize independent calls. Retry empty/partial
 
 # Tool I/O
 - Prefer relative `path`-like fields.
-{{#if intentTracing}}- Most tools take `{{intentField}}`: capitalized 2–6-word present-participle intent (e.g. "Reading model role settings").{{/if}}
+{{#if intentTracing}}- Most tools take `{{intentField}}`: {{#if intentGuidance}}{{intentGuidance}}{{else}}capitalized 2–6-word present-participle intent (e.g. "Reading model role settings").{{/if}}{{/if}}
 {{#if secretsEnabled}}- Redacted `$$HASH$$`, `$$HASH:CASE$$`, or `$$NAME_HASH:CASE$$` tokens in output are opaque, indivisible strings — reproduce each verbatim and in full, character for character EXACTLY as it appears; NEVER shorten, split, or abbreviate one to a bare `$$HASH$$` inner hash or `HASH`. NEVER replace one with a descriptive label, invented placeholder, or paraphrased stand-in. The exact characters are what map it back to the real value; any substitution breaks that mapping permanently.{{/if}}
 
 # Specialized Tools

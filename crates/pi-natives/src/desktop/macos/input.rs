@@ -1352,8 +1352,8 @@ fn activate_then_await(
 enum FrontTarget {
 	/// Another application is frontmost.
 	Background,
-	/// The target already was the key window of the frontmost application
-	/// when the input began.
+	/// The frontmost application's keys already went to the target when the
+	/// input began ([`ax::KeyFocus::destination`]).
 	Key,
 	/// The target's application came to the front after the input began, so
 	/// the user may just have selected another of its windows.
@@ -1447,16 +1447,28 @@ fn front_target(
 	entry_front: EntryFront,
 	front: Option<libc::pid_t>,
 	pid: libc::pid_t,
-	wid: u32,
-	focused: impl FnOnce() -> Option<u32>,
+	takes_keys: impl FnOnce() -> bool,
 ) -> FrontTarget {
 	match front {
 		None => FrontTarget::Unknown,
 		Some(front) if front != pid => FrontTarget::Background,
 		Some(_) if entry_front.came_forward(front, pid) => FrontTarget::CameForward,
-		Some(_) if focused() == Some(wid) => FrontTarget::Key,
+		Some(_) if takes_keys() => FrontTarget::Key,
 		Some(_) => FrontTarget::UserSibling,
 	}
+}
+
+/// Whether keys posted to `pid` now reach window `wid`, as `focus` shows
+/// ([`ax::KeyFocus::destination`]): the window it reports focused or, while it
+/// reports none, as Finder does during an inline rename, the window holding
+/// the focused element or the overlay holding it.
+fn keys_reach(
+	focus: ax::KeyFocus,
+	pid: libc::pid_t,
+	wid: u32,
+	parent_of: impl Fn(u32) -> Option<u32>,
+) -> bool {
+	focus.destination(pid, wid, parent_of) == ax::KeyDestination::Target(pid)
 }
 
 /// Makes `wid` the key window of its background application, as that
@@ -1471,19 +1483,20 @@ fn front_target(
 /// of its controls.
 /// `WindowServer`'s front process and key-focus application, which route the
 /// user's keystrokes and key equivalents, stay with the user's app. In the
-/// frontmost application itself, nothing is posted: the target already is
-/// key, or making it key would move the user's typing, so the input refuses.
+/// frontmost application itself, nothing is posted: the target already takes
+/// its keys, or making it key would move the user's typing, so the input
+/// refuses.
 /// `entry_front` is the front process read as the input began
 /// ([`EntryFront`]); a target that has come forward since then refuses,
 /// because the user may have just picked the window that would receive the
 /// input.
 ///
 /// `focus_in_overlay` says the caller has seen the application's keyboard
-/// focus in an overlay window attached to `wid`, such as Finder's inline
-/// rename field or a popover: the target then counts as the frontmost
-/// application's key window, and in a background application the activation
-/// goes out without the press, which would make `wid` key and so end that
-/// overlay's editing.
+/// focus in an overlay window attached to `wid`, or in `wid` as one, such as
+/// Finder's inline rename field or a popover: the target then counts as the
+/// frontmost application's key window, and in a background application the
+/// activation goes out without the press, which would make `wid` key and so
+/// end that overlay's editing.
 ///
 /// Returns whether the activation step ran. The user can bring the target app
 /// forward at any moment, which would turn the step into a key-window switch
@@ -1500,14 +1513,9 @@ pub(super) fn make_key_in_background(
 	focus_in_overlay: bool,
 	visit: skylight::TargetVisit<'_>,
 ) -> CoreResult<bool> {
-	let focused = || {
-		if focus_in_overlay {
-			Some(wid)
-		} else {
-			ax::focused_window_id(pid)
-		}
-	};
-	match front_target(entry_front, skylight::front_pid(), pid, wid, focused) {
+	let takes_keys =
+		|| focus_in_overlay || keys_reach(ax::key_focus(pid), pid, wid, skylight::window_parent);
+	match front_target(entry_front, skylight::front_pid(), pid, takes_keys) {
 		FrontTarget::Background => {},
 		FrontTarget::Key => return Ok(false),
 		refused => return Err(front_refusal(refused, wid)),
@@ -1948,9 +1956,10 @@ fn refuse_drag_source(
 ) -> CoreResult<()> {
 	let (x, y) = match event {
 		PointerEvent::Hold { x, y, button: MouseButton::Left, .. } => (*x, *y),
-		PointerEvent::Drag { path, button: MouseButton::Left, .. } => match path.first() {
-			Some(&start) => start,
-			None => return Ok(()),
+		PointerEvent::Drag { path, button: MouseButton::Left, .. }
+			if let Some(&start) = path.first() =>
+		{
+			start
 		},
 		_ => return Ok(()),
 	};
@@ -2278,7 +2287,7 @@ fn guarded_keys<'a>(
 				})
 			};
 			post_guarded(event, checked, |event| post(posted, to, event))?;
-			pressed.set(pressed.get() || is_key_press(event));
+			pressed.update(|v| v || is_key_press(event));
 			Ok(())
 		},
 	}
@@ -3834,7 +3843,7 @@ fn uncover(
 		match covering()? {
 			None => return Ok(()),
 			Some(owner) if Instant::now() >= deadline => {
-				let raise = raise_error.map_or_else(String::new, |error| format!(" ({error})"));
+				let raise = raise_error.map_or_default(|error| format!(" ({error})"));
 				return Err(DesktopError::input_failed(format!(
 					"window {wid} stays covered by process {} at the takeover input point{raise}, so \
 					 the input would land on the covering window; no input was sent",
@@ -4550,7 +4559,7 @@ mod tests {
 			},
 			|event| {
 				let typed = typed_event(event);
-				lost.set(lost.get() || (typed.0, typed.1) == (lose_after.0 as u32, lose_after.1));
+				lost.update(|v| v || (typed.0, typed.1) == (lose_after.0 as u32, lose_after.1));
 				posted.push((typed.0, typed.1, typed.2));
 				Ok(())
 			},
@@ -4647,7 +4656,7 @@ mod tests {
 			},
 			|code, down| {
 				posted.borrow_mut().push((code, down));
-				lost.set(lost.get() || lose_after == Some((code, down)));
+				lost.update(|v| v || lose_after == Some((code, down)));
 				Ok(())
 			},
 		);
@@ -4842,7 +4851,7 @@ mod tests {
 					failed = true;
 					return Err(DesktopError::input_failed("post failed"));
 				}
-				lost.set(lost.get() || lose_after == Some((code, down)));
+				lost.update(|v| v || lose_after == Some((code, down)));
 				Ok(())
 			},
 		);
@@ -5811,7 +5820,7 @@ mod tests {
 		}
 
 		fn advance(&self, by: Duration) {
-			self.0.set(self.0.get() + by);
+			self.0.update(|v| v + by);
 		}
 
 		fn remaining(&self) -> Option<Duration> {
@@ -5870,7 +5879,7 @@ mod tests {
 			|| Ok(()),
 			|| clock.remaining(),
 			|_| {
-				reads.set(reads.get() + 1);
+				reads.update(|v| v + 1);
 				focused_box.get() == 0
 			},
 			|_| panic!("the first box has focus at once"),
@@ -5885,7 +5894,7 @@ mod tests {
 						match event.get_type() {
 							CGEventType::KeyDown => boxes.push(focused_box.get()),
 							// Each box hands focus to the next once its digit lands.
-							CGEventType::KeyUp => focused_box.set(focused_box.get() + 1),
+							CGEventType::KeyUp => focused_box.update(|v| v + 1),
 							_ => {},
 						}
 						Ok(())
@@ -5907,7 +5916,7 @@ mod tests {
 			|| clock.remaining(),
 			|_| false,
 			|left| {
-				polls.set(polls.get() + 1);
+				polls.update(|v| v + 1);
 				clock.advance(ELEMENT_FOCUS_POLL.min(left));
 				Ok(())
 			},
@@ -5947,7 +5956,7 @@ mod tests {
 				},
 				|_| panic!("the first read answers"),
 				|| {
-					fresh_reads.set(fresh_reads.get() + 1);
+					fresh_reads.update(|v| v + 1);
 					KeyboardFocus::default()
 				},
 				|| {
@@ -5977,7 +5986,7 @@ mod tests {
 			|| Err(DesktopError::ax_failed("setting AXFocused=true failed")),
 			|| (reads.get() < 3).then_some(ELEMENT_FOCUS_TIMEOUT),
 			|_| {
-				reads.set(reads.get() + 1);
+				reads.update(|v| v + 1);
 				false
 			},
 			|_| Ok(()),
@@ -6367,8 +6376,8 @@ mod tests {
 		.unwrap();
 		let returned = Instant::now();
 		assert_eq!(posted.len(), 4);
-		for pair in posted.windows(2) {
-			assert!(pair[1].duration_since(pair[0]) >= gap);
+		for &[earlier, later] in posted.array_windows() {
+			assert!(later.duration_since(earlier) >= gap);
 		}
 		assert!(returned.duration_since(posted[3]) >= gap);
 	}
@@ -6833,41 +6842,40 @@ mod tests {
 
 	#[test]
 	fn held_keys_need_the_proof_typing_needs_whatever_the_button() {
-		let ready = |button, holds_keys, in_overlay, conflict: Option<KeyboardConflict>, proven| {
-			let steps = std::cell::RefCell::new(Vec::new());
-			let result = ready_press(
-				42,
-				button,
-				holds_keys,
-				in_overlay,
-				|| conflict,
-				|in_overlay| {
-					steps
-						.borrow_mut()
-						.push(format!("make key, overlay {in_overlay}"));
-					Ok(true)
-				},
-				|| {
-					steps.borrow_mut().push("await key".to_string());
-					Ok(())
-				},
-				|seen| {
-					steps.borrow_mut().push(format!("prove keys {seen:?}"));
-					if proven {
+		let ready =
+			|button, holds_keys, in_overlay, conflict: Option<KeyboardConflict>, proven: bool| {
+				let steps = std::cell::RefCell::new(Vec::new());
+				let result = ready_press(
+					42,
+					button,
+					holds_keys,
+					in_overlay,
+					|| conflict,
+					|in_overlay| {
+						steps
+							.borrow_mut()
+							.push(format!("make key, overlay {in_overlay}"));
+						Ok(true)
+					},
+					|| {
+						steps.borrow_mut().push("await key".to_string());
 						Ok(())
-					} else {
-						Err(DesktopError::invalid_target("a sheet attached to window 42 has focus"))
-					}
-				},
-				|| Ok(()),
-			);
-			(
-				result
-					.map(|proof| proof.is_some())
-					.map_err(|error| error.code.as_str()),
-				steps.into_inner(),
-			)
-		};
+					},
+					|seen| {
+						steps.borrow_mut().push(format!("prove keys {seen:?}"));
+						proven.ok_or_else(|| {
+							DesktopError::invalid_target("a sheet attached to window 42 has focus")
+						})
+					},
+					|| Ok(()),
+				);
+				(
+					result
+						.map(|proof| proof.is_some())
+						.map_err(|error| error.code.as_str()),
+					steps.into_inner(),
+				)
+			};
 		let made = "make key, overlay false".to_string();
 		// A right or middle press without keys needs no key window.
 		assert_eq!(ready(MouseButton::Right, false, false, None, false), (Ok(false), Vec::new()));
@@ -6938,20 +6946,18 @@ mod tests {
 		let downs = std::cell::Cell::new(0);
 		let post = |_: Posted, _, event: &CGEvent| {
 			if event.get_type() as u32 == CGEventType::KeyDown as u32 {
-				downs.set(downs.get() + 1);
+				downs.update(|v| v + 1);
 			}
 			Ok(())
 		};
 		// The user brings the target forward after Space went down.
 		let refused = || {
-			if downs.get() == 0 {
-				Ok(())
-			} else {
-				Err(DesktopError::background_unavailable(
+			(downs.get() == 0).ok_or_else(|| {
+				DesktopError::background_unavailable(
 					"window 42 of TextEdit: it came to the front during background input; nothing was \
 					 sent",
-				))
-			}
+				)
+			})
 		};
 		let guarded = guarded_keys(&post, &refused);
 		let window = background_window("TextEdit");
@@ -7126,7 +7132,7 @@ mod tests {
 		// to 5: carried on, the item would drop wherever the user's pointer is.
 		let checks = std::cell::Cell::new(0);
 		let picked_up = || {
-			checks.set(checks.get() + 1);
+			checks.update(|v| v + 1);
 			checks.get() > 1
 		};
 		let mut posted = Vec::new();
@@ -7155,7 +7161,7 @@ mod tests {
 				7,
 				|| {
 					let count = reads[next.get()];
-					next.set(next.get() + 1);
+					next.update(|v| v + 1);
 					log.borrow_mut().push(format!("read {count}"));
 					count
 				},
@@ -7191,28 +7197,48 @@ mod tests {
 	fn key_window_step_never_moves_the_frontmost_applications_key_window() {
 		// A non-key window of the frontmost app shares the user's key window:
 		// preparing it would send the user's next keystrokes and pastes there.
-		let unread =
-			|| -> Option<u32> { panic!("a background process's focused window is not read") };
+		let unread = || -> bool { panic!("a background process's focus is not read") };
 		let (user, target) = (EntryFront(Some(9)), EntryFront(Some(7)));
-		assert_eq!(front_target(user, Some(9), 7, 42, unread), FrontTarget::Background);
-		assert_eq!(front_target(user, None, 7, 42, unread), FrontTarget::Unknown);
-		assert_eq!(front_target(target, Some(7), 7, 42, || Some(42)), FrontTarget::Key);
-		assert_eq!(front_target(target, Some(7), 7, 42, || Some(43)), FrontTarget::UserSibling);
-		assert_eq!(front_target(target, Some(7), 7, 42, || None), FrontTarget::UserSibling);
+		assert_eq!(front_target(user, Some(9), 7, unread), FrontTarget::Background);
+		assert_eq!(front_target(user, None, 7, unread), FrontTarget::Unknown);
+		assert_eq!(front_target(target, Some(7), 7, || true), FrontTarget::Key);
+		assert_eq!(front_target(target, Some(7), 7, || false), FrontTarget::UserSibling);
+	}
+
+	#[test]
+	fn the_frontmost_applications_key_window_is_where_its_keys_go() {
+		use ax::FocusedWindow::{Id, Unmapped, Unreadable, Unreported};
+
+		let front = |focus, wid| {
+			let rename = |id| (id == 12).then_some(7);
+			front_target(EntryFront(Some(41)), Some(41), 41, || keys_reach(focus, 41, wid, rename))
+		};
+		// Finder reports no focused window while its rename field, overlay 12
+		// on window 7, has focus: keys for either window reach the field, and
+		// another Finder window would take them from it.
+		let renaming = ax::KeyFocus {
+			window:         Unreported,
+			element_window: Some(12),
+			element_mapped: true,
+		};
+		assert_eq!(front(renaming, 7), FrontTarget::Key);
+		assert_eq!(front(renaming, 12), FrontTarget::Key);
+		assert_eq!(front(renaming, 9), FrontTarget::UserSibling);
+		// A reported focused window decides; one that cannot be mapped or read
+		// proves nothing.
+		let focused = |window| ax::KeyFocus { window, element_window: Some(9), element_mapped: true };
+		assert_eq!(front(focused(Id(9)), 9), FrontTarget::Key);
+		assert_eq!(front(focused(Id(9)), 7), FrontTarget::UserSibling);
+		assert_eq!(front(focused(Unmapped), 9), FrontTarget::UserSibling);
+		assert_eq!(front(focused(Unreadable), 9), FrontTarget::UserSibling);
 	}
 
 	#[test]
 	fn a_target_brought_forward_before_its_key_window_step_refuses_even_as_key() {
 		// The user brought the background target forward and picked its window:
 		// delivering now would type into the window they just selected.
-		assert_eq!(
-			front_target(EntryFront(Some(9)), Some(7), 7, 42, || Some(42)),
-			FrontTarget::CameForward
-		);
-		assert_eq!(
-			front_target(EntryFront(None), Some(7), 7, 42, || Some(42)),
-			FrontTarget::CameForward
-		);
+		assert_eq!(front_target(EntryFront(Some(9)), Some(7), 7, || true), FrontTarget::CameForward);
+		assert_eq!(front_target(EntryFront(None), Some(7), 7, || true), FrontTarget::CameForward);
 	}
 
 	#[test]
@@ -7229,7 +7255,7 @@ mod tests {
 		)
 		.unwrap();
 		assert_eq!(entry, EntryFront(Some(9)));
-		assert_eq!(front_target(entry, Some(7), 7, 42, || Some(42)), FrontTarget::CameForward);
+		assert_eq!(front_target(entry, Some(7), 7, || true), FrontTarget::CameForward);
 	}
 
 	#[test]

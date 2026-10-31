@@ -55,7 +55,7 @@ export async function generateTaskLabel(
 		return options.deobfuscate?.(label) ?? label;
 	} catch (err) {
 		logger.debug("task-label: generation failed", {
-			sessionId: options.sessionId,
+			titleSessionId: options.sessionId,
 			error: err instanceof Error ? err.message : String(err),
 		});
 		return null;
