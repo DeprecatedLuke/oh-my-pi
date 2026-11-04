@@ -15,6 +15,7 @@ secrets:
 
 1. On session startup, secrets are collected from:
    - **Environment variables** whose names match common secret patterns (`KEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PASS`, `AUTH`, `CREDENTIAL`, `PRIVATE`, `OAUTH`) with values at least 8 characters long
+   - **Dotenv files directly in the working directory** (`.env`, `.env.*` such as `.env.local`, and `*.env`; templates ending in `.example`, `.sample`, `.template`, `.dist`, or `.default(s)` are skipped). Values pass the same filter as environment variables: secret-shaped names with values at least 8 characters long, plus connection-URL passwords.
    - **`secrets.yml` files** (see below)
    - Built-in reversible regexes for common credential shapes that appear only in session content or tool results: GitHub, GitLab, OpenAI, and Anthropic tokens, AWS access keys, Google API keys, Slack tokens, npm tokens, Stripe secret and restricted keys and webhook secrets, Hugging Face tokens, SendGrid keys, JWTs, Bearer header tokens, and PEM private key blocks
    - Passwords embedded in connection-URL environment values — any variable holding a `scheme://user:password@host`-style value (for example `DATABASE_URL`) has its password registered regardless of the variable name when it is at least 8 characters long. Both raw and percent-decoded forms are collected when they meet that limit.
@@ -22,6 +23,8 @@ secrets:
 2. Provider-visible text has matching values replaced with deterministic placeholders such as `$$3P8W5JH1TK2Q$$`, `$$3P8W5JH1TK2Q:L$$`, or `$$GITHUBTOKEN_3P8W5JH1TK2Q:L$$`.
 
 3. Live model-authored tool arguments are deep-walked and placeholders are restored before the tool executes. Session context restores placeholders for local display/resume and re-obfuscates it before provider replay. Replace-mode substitutions are one-way and are not restored.
+
+Reading a dotenv-shaped file also registers its secret-shaped values for the rest of the session, before the read result is returned. This covers nested paths such as `.secrets/vpn/singapore-2.env`, files created or changed after startup, and dotenv files reached through `local://` URLs. The full file text already buffered for the read is used, so line-range reads still register values outside the selected range. Files above the read tool's 4 MiB in-memory buffer follow the existing bounded streaming path and are not scanned whole. Local read output still shows the original text; only provider-bound text is obfuscated, and Hide Secrets still gates all of it.
 
 Two modes control what happens to each secret:
 

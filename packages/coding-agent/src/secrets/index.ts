@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { parseEnv } from "node:util";
 import { getSecretPlaceholderKeyPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { YAML } from "bun";
@@ -289,8 +290,75 @@ const CONNECTION_URL_PASSWORD_RE = /^[a-z][a-z0-9+.-]*:\/\/[^/:@?#\s]*:([^/?#\s]
 /** Collect environment variable values that look like secrets. */
 export function collectEnvSecrets(): SecretEntry[] {
 	const entries: SecretEntry[] = [];
+	collectSecretsFromEnvRecord(process.env, entries, new Set());
+	return entries;
+}
+
+/** Dotenv templates hold placeholder values, never real secrets. */
+const DOTENV_TEMPLATE_RE = /\.(?:example|sample|template|dist|defaults?)$/i;
+
+/**
+ * Whether a file's base name is dotenv-shaped, so its values may be secrets:
+ * `.env`, `.env.<mode>` (`.env.local`, `.env.production`, …), or `<name>.env`.
+ */
+export function isDotenvSecretsFile(name: string): boolean {
+	if (name !== ".env" && !name.startsWith(".env.") && !name.endsWith(".env")) return false;
+	return !DOTENV_TEMPLATE_RE.test(name);
+}
+
+/**
+ * Collect secret-looking values from the dotenv files directly inside `cwd`
+ * (non-recursive): `.env`, `.env.*`, and `*.env`, skipping templates such as
+ * `.env.example`. Values pass the same filter as process environment
+ * variables — secret-shaped names plus connection-URL passwords — so ordinary
+ * config (`NODE_ENV=development`, `PORT=3000`) is never obfuscated.
+ */
+export async function collectDotenvFileSecrets(cwd: string): Promise<SecretEntry[]> {
+	let names: string[];
+	try {
+		const dirents = await fs.promises.readdir(cwd, { withFileTypes: true });
+		names = dirents.filter(d => d.isFile() && isDotenvSecretsFile(d.name)).map(d => d.name);
+	} catch (err) {
+		if (isEnoent(err)) return [];
+		logger.warn("Failed to scan cwd for dotenv files", { cwd, error: String(err) });
+		return [];
+	}
+	names.sort();
+	const records = await Promise.all(
+		names.map(async name => {
+			const filePath = path.join(cwd, name);
+			try {
+				return parseEnv(await Bun.file(filePath).text());
+			} catch (err) {
+				logger.warn("Failed to read dotenv file for secrets", { path: filePath, error: String(err) });
+				return {};
+			}
+		}),
+	);
+	const entries: SecretEntry[] = [];
 	const seen = new Set<string>();
-	for (const [name, value] of Object.entries(process.env)) {
+	for (const record of records) collectSecretsFromEnvRecord(record, entries, seen);
+	return entries;
+}
+
+/**
+ * Secret entries for already-read dotenv text, using the same selection as the
+ * startup dotenv scan. Callers that read a dotenv file during a session pass
+ * the full raw text here and register the result with the live obfuscator.
+ */
+export function collectDotenvSecrets(text: string): SecretEntry[] {
+	const entries: SecretEntry[] = [];
+	collectSecretsFromEnvRecord(parseEnv(text), entries, new Set());
+	return entries;
+}
+
+/** Append secret-looking values from `env` to `entries`, skipping values already in `seen`. */
+function collectSecretsFromEnvRecord(
+	env: Record<string, string | undefined>,
+	entries: SecretEntry[],
+	seen: Set<string>,
+): void {
+	for (const [name, value] of Object.entries(env)) {
 		if (!value || value.length < MIN_ENV_VALUE_LENGTH) continue;
 		if (!SECRET_ENV_PATTERNS.test(name)) continue;
 		if (seen.has(value)) continue;
@@ -299,7 +367,7 @@ export function collectEnvSecrets(): SecretEntry[] {
 	}
 	// Second pass: extract passwords embedded in connection-URL values
 	// (e.g. scheme://user:password@host) regardless of the variable name.
-	for (const [, value] of Object.entries(process.env)) {
+	for (const value of Object.values(env)) {
 		const match = CONNECTION_URL_PASSWORD_RE.exec(value ?? "");
 		if (!match) continue;
 		const password = match[1];
@@ -317,7 +385,6 @@ export function collectEnvSecrets(): SecretEntry[] {
 			// Malformed percent-encoding — the raw password is already registered.
 		}
 	}
-	return entries;
 }
 
 /**
@@ -347,8 +414,9 @@ export function builtinCredentialSecretEntries(): SecretEntry[] {
 
 /**
  * Build the session secret obfuscator from every configured source: secrets.yml
- * (project + global), secret-shaped environment variables, and the built-in
- * credential patterns. Callers gate on `secrets.enabled`.
+ * (project + global), secret-shaped environment variables, secret-shaped values
+ * from dotenv files in `cwd`, and the built-in credential patterns. Callers gate
+ * on `secrets.enabled`.
  *
  * Only CONFIGURED entries force startup key creation: a configured
  * obfuscate-mode secret — or a default (no custom `replacement`) replace-mode
@@ -371,12 +439,22 @@ export async function buildSecretObfuscator(
 	agentDir: string,
 	keyDir?: string,
 ): Promise<SecretObfuscator | undefined> {
-	const fileEntries = await logger.time("loadSecrets", loadSecrets, cwd, agentDir);
+	const [fileEntries, dotenvEntries] = await Promise.all([
+		logger.time("loadSecrets", loadSecrets, cwd, agentDir),
+		collectDotenvFileSecrets(cwd),
+	]);
 	const envEntries = collectEnvSecrets();
+	// Bun autoloads `.env` into the process environment, so drop values already collected there.
+	const envValues = new Set(envEntries.map(entry => entry.content));
+	const configuredEntries = [
+		...envEntries,
+		...dotenvEntries.filter(entry => !envValues.has(entry.content)),
+		...fileEntries,
+	];
 	// Built-in credential-pattern entries come last so user-configured entries
 	// (plain literals, custom regexes) take precedence in the scan order.
-	const allEntries = [...envEntries, ...fileEntries, ...builtinCredentialSecretEntries()];
-	const needsPlaceholderKey = secretEntriesNeedPlaceholderKey([...envEntries, ...fileEntries]);
+	const allEntries = [...configuredEntries, ...builtinCredentialSecretEntries()];
+	const needsPlaceholderKey = secretEntriesNeedPlaceholderKey(configuredEntries);
 	const placeholderKey = needsPlaceholderKey
 		? await getSecretPlaceholderKey(keyDir)
 		: await getExistingSecretPlaceholderKey(keyDir);

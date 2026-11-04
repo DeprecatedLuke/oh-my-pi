@@ -255,10 +255,7 @@ export class SecretObfuscator {
 		// order — same reasoning as the base-collision guard below, extended to
 		// the friendly-name collision guard.
 		for (const entry of entries) {
-			if (entry.type === "plain") {
-				this.#configuredSecretValues.add(entry.content);
-				continue;
-			}
+			if (entry.type === "plain") continue;
 			try {
 				const regex = compileSecretRegex(entry.content, entry.flags);
 				const mode = entry.mode ?? "obfuscate";
@@ -302,8 +299,22 @@ export class SecretObfuscator {
 		if (!foldedProbes.some(probe => NON_ASCII_RE.test(probe))) {
 			this.#asciiFoldedProbeDetector = buildLiteralDetector(foldedProbes, "i");
 		}
-		let index = 0;
-		let hasRealSec = regexEntries.length > 0;
+		this.#nextIndex = 0;
+		this.#hasAny = regexEntries.length > 0;
+		this.#addPlainSecretEntries(entries, false);
+	}
+
+	/**
+	 * Register plain secret entries, first reserving every value so a
+	 * placeholder minted for one entry can never embed another entry's raw
+	 * value. `dedupe` keeps runtime additions from re-minting a placeholder
+	 * for a value that already has one (configured plain or regex-minted);
+	 * construction preserves the configured entry list as given.
+	 */
+	#addPlainSecretEntries(entries: readonly SecretEntry[], dedupe: boolean): void {
+		for (const entry of entries) {
+			if (entry.type === "plain") this.#configuredSecretValues.add(entry.content);
+		}
 		for (const entry of entries) {
 			if (entry.type !== "plain") continue;
 			const mode = entry.mode ?? "obfuscate";
@@ -312,21 +323,40 @@ export class SecretObfuscator {
 					// Tone down short plain secret obfuscation to avoid false matches on small words like "esp".
 					continue;
 				}
+				const existingIndex = dedupe ? this.#findObfuscateIndex(entry.content) : undefined;
+				if (existingIndex !== undefined) {
+					// A regex may have minted this value only in its match context.
+					// Registering it as a plain secret must also make the naked value
+					// a literal, reusing the existing placeholder and mapping.
+					if (!this.#plainMappings.has(entry.content)) {
+						this.#plainMappings.set(entry.content, existingIndex);
+					}
+					continue;
+				}
 				const placeholder = this.#createPlaceholder(entry.content, entry.friendlyName);
-				this.#plainMappings.set(entry.content, index);
-				this.#registerObfuscateMapping(index, entry.content, placeholder);
-				index++;
-				hasRealSec = true;
+				this.#plainMappings.set(entry.content, this.#nextIndex);
+				this.#registerObfuscateMapping(this.#nextIndex, entry.content, placeholder);
+				this.#nextIndex++;
+				this.#hasAny = true;
 			} else {
 				// replace mode
+				if (dedupe && this.#replaceMappings.has(entry.content)) continue;
 				const replacement = entry.replacement ?? this.#generateSecretReplacement(entry.content);
 				this.#replaceMappings.set(entry.content, replacement);
-				hasRealSec = true;
+				this.#hasAny = true;
 			}
 		}
+	}
 
-		this.#nextIndex = index;
-		this.#hasAny = hasRealSec;
+	/**
+	 * Add plain secrets discovered after construction (for example, values from
+	 * a dotenv file read during the session). Existing token mappings,
+	 * replacements, and deobfuscation state are preserved; duplicate values are
+	 * ignored. No-op while outbound obfuscation is switched off.
+	 */
+	registerPlainSecrets(entries: readonly SecretEntry[]): void {
+		if (!this.#obfuscating) return;
+		this.#addPlainSecretEntries(entries, true);
 	}
 
 	/**

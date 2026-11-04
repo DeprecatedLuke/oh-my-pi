@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Secret obfuscation now also masks secret-shaped values from dotenv files in the working directory (`.env`, `.env.*`, `*.env`; templates like `.env.example` are skipped), and registers those values when a dotenv-shaped file is read later in the session, including nested paths, files changed after startup, partial reads, and `local://` files
+
 ## [18.14.1] - 2026-10-31
 
 ### Added

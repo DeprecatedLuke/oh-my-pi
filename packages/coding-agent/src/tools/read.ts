@@ -43,6 +43,7 @@ import { getEditStore, recordFullySeenRows } from "../edit/store";
 import { extractUriScheme, InternalUrlRouter, type SchemeSpec, sessionResolveContext } from "../internal-urls";
 import { isMarkdownPath } from "@oh-my-pi/pi-tui/lang-from-path";
 import readDescription from "../prompts/tools/read.md" with { type: "text" };
+import { collectDotenvSecrets, isDotenvSecretsFile } from "../secrets";
 import type { ToolSession } from "../sdk";
 import { McpResourceNotFoundError } from "../internal-urls/mcp-protocol";
 import { parseInternalUrl } from "../internal-urls/parse";
@@ -1104,6 +1105,23 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		private readonly completeImageRequest: typeof completeSimple = completeSimple,
 	) {}
 
+	/**
+	 * Register secret-looking values from a dotenv-shaped local file's full text
+	 * with the live session obfuscator, so values from paths the startup scan
+	 * never visited (or that changed since startup) are masked before the read
+	 * result reaches a provider. The obfuscator itself honors Hide Secrets.
+	 */
+	#registerDotenvSecrets(absolutePath: string, text: string): void {
+		if (!isDotenvSecretsFile(path.basename(absolutePath))) return;
+		const obfuscator = this.session.getObfuscator?.();
+		if (!obfuscator) return;
+		try {
+			obfuscator.registerPlainSecrets(collectDotenvSecrets(text));
+		} catch (error) {
+			logger.warn("Failed to parse dotenv file for secrets", { path: absolutePath, error: String(error) });
+		}
+	}
+
 	/** Live `read.defaultLimit`, clamped to `[1, DEFAULT_MAX_LINES]`. */
 	get #defaultLimit(): number {
 		return Math.max(1, Math.min(cfgReadDefaultLimit.get(this.session.settings), DEFAULT_MAX_LINES));
@@ -1587,6 +1605,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (bridgePromise !== undefined) {
 			try {
 				const bridgeText = await bridgePromise;
+				this.#registerDotenvSecrets(absolutePath, bridgeText);
 				const bridgeResult = await buildInMemoryMultiRangeResult(this.session, bridgeText, ranges, {
 					details: markMarkdownContentType(
 						this.session,
@@ -2358,7 +2377,10 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			}
 			// Decode only what survived the sniff.
 			const buffered = wholeFileBytes ? deriveBufferedFileText(wholeFileBytes) : undefined;
-			if (buffered) onBufferedFile?.(buffered.bytes);
+			if (buffered) {
+				this.#registerDotenvSecrets(absolutePath, buffered.strippedText);
+				onBufferedFile?.(buffered.bytes);
+			}
 
 			// Unbounded schemes (instruction documents) read whole: no summary, no result limits.
 			if (located?.spec.unbounded) {
@@ -2457,6 +2479,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					if (bridgePromise !== undefined) {
 						try {
 							const bridgeText = await bridgePromise;
+							this.#registerDotenvSecrets(absolutePath, bridgeText);
 							const bridgeResult = await buildInMemoryTextResult(this.session, bridgeText, offset, limit, {
 								details: markMarkdownContentType(
 									this.session,
