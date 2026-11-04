@@ -11,7 +11,7 @@ import { setImmediate } from "node:timers/promises";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { createMockModel, type MockCall, type MockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mock";
-import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
+import { AsyncJobManager, type AsyncJobManagerApi } from "@oh-my-pi/pi-coding-agent/async";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -105,7 +105,7 @@ async function createSession(mock: MockModel, yieldValues: unknown[]): Promise<A
 
 /** Owner-scoped background job whose completion the test controls. */
 function registerGatedWakeJob(
-	manager: AsyncJobManager,
+	manager: AsyncJobManagerApi,
 	jobStarted: PromiseWithResolvers<void>,
 	jobGate: PromiseWithResolvers<string>,
 ): void {

@@ -13,7 +13,7 @@ import { judgeQuestions } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import type { VcsHunkSelection } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger, toError } from "@oh-my-pi/pi-utils";
 import { parseFileDiffs, parseFileHunks } from "../../commit/git/diff";
 import { Settings } from "../../config/settings";
 import { openStandaloneJudge } from "../../judgment/standalone";
@@ -291,7 +291,7 @@ function verdicts(results: readonly (PromiseSettledResult<number> | undefined)[]
 		return 0;
 	});
 	if (results.length > 0 && failures === results.length) {
-		throw firstError instanceof Error ? firstError : new Error(String(firstError));
+		throw toError(firstError);
 	}
 	return out;
 }

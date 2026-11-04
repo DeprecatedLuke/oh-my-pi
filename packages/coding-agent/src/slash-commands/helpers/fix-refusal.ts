@@ -202,7 +202,7 @@ export async function executeFixRefusal(deps: FixRefusalDeps): Promise<FixRefusa
 	const previousObfuscator = session.obfuscator;
 	const nextObfuscator = await buildSecretObfuscator(cwd, agentDir, keyDir);
 	session.setObfuscator(nextObfuscator);
-	AgentRegistry.global().propagateObfuscator(
+	AgentRegistry.global().propagateObfuscator?.(
 		session.getAgentId() ?? MAIN_AGENT_ID,
 		previousObfuscator,
 		nextObfuscator,

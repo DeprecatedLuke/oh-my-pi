@@ -357,6 +357,15 @@ interface ActiveAdvisor {
 	 * 3-strike drop can fire.
 	 */
 	providerWaitRetries: number;
+	/**
+	 * Credential switches spent on the current failing batch, bounded by one
+	 * traversal of `provider`'s account pool. A switch only predicts a free
+	 * sibling; when retries keep landing on the same capped account, the spent
+	 * budget hands recovery to model fallback, a bounded wait, or the quota
+	 * latch (issue #17472). A fallback to another provider starts that provider's
+	 * own budget. Reset with {@link providerWaitRetries}.
+	 */
+	credentialSwitches: { provider: string; count: number } | undefined;
 	signature: string;
 	reviewInProgress: boolean | undefined;
 }
@@ -478,8 +487,8 @@ export interface SessionAdvisorsHost {
 	yieldQueue: YieldQueue;
 	obfuscator(): SecretObfuscator | undefined;
 	providerSessionState: Map<string, ProviderSessionState>;
-	/** Live `providers.openaiWebsockets` hint for provider calls. */
-	preferWebsockets(): boolean | undefined;
+	/** Per-model WebSocket preference from the live transport settings (Codex and standard Responses). */
+	preferWebsockets(model: Model): boolean | undefined;
 	onPayload: SimpleStreamOptions["onPayload"] | undefined;
 	onResponse: SimpleStreamOptions["onResponse"] | undefined;
 	onSseEvent: SimpleStreamOptions["onSseEvent"] | undefined;
@@ -1078,7 +1087,7 @@ export class SessionAdvisors {
 			a.reviewInProgress = undefined;
 			// A reset aborts any pending provider-block wait; clear its budget so the new
 			// conversation starts with a fresh retry allowance (issue #11947).
-			a.providerWaitRetries = 0;
+			this.#resetRecoveryBudgets(a);
 			this.#releaseRefusalPin(a);
 			// Resets the emission guard and every tool-side note state together.
 			a.adviseTool.resetDeliveredNotes();
@@ -1429,10 +1438,10 @@ export class SessionAdvisors {
 			});
 			const baseAdvisorStreamFn = this.#advisorStreamFn ?? streamSimple;
 			const advisorStreamFn: StreamFn = (requestModel, context, streamOptions) => {
-				// Read per request so a mid-session `providers.openaiWebsockets` change reaches advisors.
+				// Read per request so transport setting changes reach existing advisors.
 				const options = {
 					...streamOptions,
-					preferWebsockets: streamOptions?.preferWebsockets ?? this.#host.preferWebsockets(),
+					preferWebsockets: streamOptions?.preferWebsockets ?? this.#host.preferWebsockets(requestModel),
 				};
 				if (requestModel.api === "openai-codex-responses") {
 					return baseAdvisorStreamFn(requestModel, context, {
@@ -1624,7 +1633,7 @@ export class SessionAdvisors {
 						advisorRef.recorder.commitTurn();
 						// A completed turn ended the provider-block episode — start the next
 						// block's bounded wait budget fresh.
-						advisorRef.providerWaitRetries = 0;
+						this.#resetRecoveryBudgets(advisorRef);
 						const fallback = advisorRef.retryFallback;
 						if (!advisorRef.retryFallbackPendingSuccess || !fallback) return;
 						advisorRef.retryFallbackPendingSuccess = false;
@@ -1640,7 +1649,7 @@ export class SessionAdvisors {
 				onTurnAbandoned: () => {
 					advisorRef.recorder.abandonTurn();
 					// The dropped batch ends this episode; the next batch gets a fresh budget.
-					advisorRef.providerWaitRetries = 0;
+					this.#resetRecoveryBudgets(advisorRef);
 				},
 				notifyFailure: error => {
 					this.#advisorStatuses.set(slug, { name: advisorName, status: "error" });
@@ -1691,6 +1700,7 @@ export class SessionAdvisors {
 				pendingCoveredTurn: 0,
 				retryFallbackPendingSuccess: false,
 				providerWaitRetries: 0,
+				credentialSwitches: undefined,
 				signature,
 				reviewInProgress: undefined,
 			};
@@ -1927,7 +1937,7 @@ export class SessionAdvisors {
 			a.reviewInProgress = undefined;
 			// Match the conversation-boundary re-prime: a reset must not carry a
 			// pending wait's provider-block budget into the reset conversation.
-			a.providerWaitRetries = 0;
+			this.#resetRecoveryBudgets(a);
 			if (compacted) this.#releaseRefusalPin(a);
 		}
 	}
@@ -2135,7 +2145,7 @@ export class SessionAdvisors {
 				advisor.providerSessionId,
 				{ error: message, modelId: currentModel.id, signal },
 			);
-			if (rotation.switched) return true;
+			if (rotation.switched && this.#spendCredentialSwitch(advisor, currentModel.provider)) return true;
 		}
 
 		const retryAfterMs = extractProviderRetryHint(currentModel.provider, message);
@@ -2160,7 +2170,7 @@ export class SessionAdvisors {
 					signal,
 				},
 			);
-			if (outcome.switched) return true;
+			if (outcome.switched && this.#spendCredentialSwitch(advisor, currentModel.provider)) return true;
 			usageRetryAtMs = outcome.retryAtMs;
 			usageBlockedUntilMs = outcome.blockedUntilMs;
 			usageRequestedBlockedUntilMs = outcome.requestedBlockedUntilMs;
@@ -2268,6 +2278,26 @@ export class SessionAdvisors {
 			}
 		}
 		return waitOrDecline();
+	}
+
+	/**
+	 * Spend one credential switch from the advisor's one-pool-traversal budget
+	 * (stored accounts minus the failing one), the bound the main agent puts on
+	 * account-policy rotation. Returns false once spent: the auth layer's
+	 * `switched` only says a sibling looks unblocked, not that the next request
+	 * will use it.
+	 */
+	#spendCredentialSwitch(advisor: ActiveAdvisor, provider: string): boolean {
+		const spent = advisor.credentialSwitches?.provider === provider ? advisor.credentialSwitches.count : 0;
+		if (spent >= this.#host.modelRegistry.authStorage.credentials.list(provider).length - 1) return false;
+		advisor.credentialSwitches = { provider, count: spent + 1 };
+		return true;
+	}
+
+	/** Start the next failing batch with fresh provider-wait and credential-switch budgets. */
+	#resetRecoveryBudgets(advisor: ActiveAdvisor): void {
+		advisor.providerWaitRetries = 0;
+		advisor.credentialSwitches = undefined;
 	}
 
 	/**
@@ -2590,7 +2620,7 @@ export class SessionAdvisors {
 						promptCacheKey: advisorProviderSessionId,
 						metadata: advisorMetadata,
 						providerSessionState: this.#host.providerSessionState,
-						preferWebsockets: this.#host.preferWebsockets(),
+						preferWebsockets: this.#host.preferWebsockets(candidate),
 						codexAccessPrograms: cfgProvidersOpenaiCodexDaybreak.get(this.#host.settings),
 						codexCompaction,
 					},

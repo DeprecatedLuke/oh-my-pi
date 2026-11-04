@@ -1024,8 +1024,8 @@ describe("system prompt tool inventory", () => {
 			})
 		).systemPrompt.join("\n\n");
 
-		expect(withTask).toContain("Delegation is preferred here.");
-		expect(withoutTask).not.toContain("Delegation is preferred here.");
+		expect(withTask).toContain("Delegation preferred.");
+		expect(withoutTask).not.toContain("Delegation preferred.");
 	});
 
 	it("omits todo workflow guidance when the todo tool is absent", async () => {
