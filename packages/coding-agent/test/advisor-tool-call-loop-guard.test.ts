@@ -199,8 +199,9 @@ describe("advisor tool-call loop guard", () => {
 		expect(await session.waitForAdvisorCatchup(2_000)).toBe(true);
 
 		// First threshold injects one corrective; ignoring it re-arms the
-		// detector, and the second threshold aborts. The loop checks the abort
-		// before dispatching the next request, bounding twenty repeats at 6.
+		// detector, and the second threshold aborts. The agent loop checks the
+		// abort before issuing its next request, bounding twenty repeats at two
+		// thresholds' worth (6) with no request after the abort.
 		expect(contexts).toHaveLength(6);
 		const delivered = JSON.stringify(contexts[3]!.messages);
 		expect(delivered).toContain("You called `read` 3 consecutive times");
