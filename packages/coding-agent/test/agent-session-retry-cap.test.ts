@@ -1802,6 +1802,113 @@ describe("AgentSession retry delay cap", () => {
 			text: "recovered on cross-provider fallback",
 		});
 	});
+
+	// Fallback cooldowns live on the shared ModelRegistry, so a transient failure in one
+	// session parks the selector for every concurrent session. A chain whose only entry
+	// is cooling must still be walked when the alternative is ending the turn.
+	async function runCoolingFallbackScenario(options: {
+		chain: string[];
+		cooling: string[];
+		failure: MockResponse;
+	}): Promise<{
+		requestedModels: string[];
+		fallbackEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>>;
+		primarySelector: string;
+	}> {
+		const primaryModel = getBundledModel("opencode-go", "deepseek-v4.1-flash");
+		if (!primaryModel) {
+			throw new Error("Expected bundled OpenCode Go DeepSeek test model to exist");
+		}
+		const primarySelector = `${primaryModel.provider}/${primaryModel.id}`;
+		for (const provider of ["opencode-go", "mistral", "openai"]) {
+			authStorage.keys.setRuntime(provider, `${provider}-test-key`);
+		}
+
+		const mock = createMockModel({
+			responses: [options.failure, { content: ["recovered"], stopReason: "stop" }],
+		});
+		const requestedModels: string[] = [];
+		const agent = new Agent({
+			getApiKey: requestedModel => `${requestedModel.provider}-test-key`,
+			initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (requestedModel, context, streamOptions) => {
+				requestedModels.push(`${requestedModel.provider}/${requestedModel.id}`);
+				return mock.stream(requestedModel, context, streamOptions);
+			},
+		});
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"retry.maxDelayMs": 300_000,
+			"retry.maxRetries": 5,
+			"retry.modelFallback": true,
+			"retry.fallbackChains": { default: options.chain },
+		});
+		settings.setModelRole("default", primarySelector);
+
+		session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+		mockSchedulerWaitWithClock();
+		for (const selector of options.cooling) {
+			modelRegistry.suppressSelector(selector, Date.now() + 300_000);
+		}
+		const fallbackEvents: Array<Extract<AgentSessionEvent, { type: "retry_fallback_applied" }>> = [];
+		session.subscribe(event => {
+			if (event.type === "retry_fallback_applied") fallbackEvents.push(event);
+		});
+
+		await session.prompt("Trigger the failure");
+		await session.waitForIdle();
+		expect(lastAssistant(session).content).toContainEqual({ type: "text", text: "recovered" });
+		return { requestedModels, fallbackEvents, primarySelector };
+	}
+
+	const GO_USAGE_LIMIT_PAST_CAP: MockResponse = {
+		throw: "429 Go usage limit exceeded (type=GoUsageLimitError) retry-after-ms=13202000",
+	};
+
+	it("falls back to a cooling chain entry when a usage-limit wait past retry.maxDelayMs would end the turn", async () => {
+		const cooling = "mistral/deepseek-v4-1-flash-1017";
+		const { requestedModels, fallbackEvents, primarySelector } = await runCoolingFallbackScenario({
+			chain: [cooling],
+			cooling: [cooling],
+			failure: GO_USAGE_LIMIT_PAST_CAP,
+		});
+
+		expect(requestedModels).toEqual([primarySelector, cooling]);
+		expect(fallbackEvents).toEqual([
+			{
+				type: "retry_fallback_applied",
+				from: primarySelector,
+				to: cooling,
+				role: "default",
+				reason: expect.stringContaining("Go usage limit exceeded"),
+			},
+		]);
+	});
+
+	it("prefers a later non-cooling chain entry over an earlier cooling one", async () => {
+		const cooling = "mistral/deepseek-v4-1-flash-1017";
+		const ready = "openai/gpt-5.5";
+		const { requestedModels, fallbackEvents, primarySelector } = await runCoolingFallbackScenario({
+			chain: [cooling, ready],
+			cooling: [cooling],
+			failure: GO_USAGE_LIMIT_PAST_CAP,
+		});
+
+		expect(requestedModels).toEqual([primarySelector, ready]);
+		expect(fallbackEvents.map(event => event.to)).toEqual([ready]);
+	});
+
+	it("keeps skipping a cooling chain entry when a same-model retry follows", async () => {
+		const cooling = "mistral/deepseek-v4-1-flash-1017";
+		const { requestedModels, fallbackEvents, primarySelector } = await runCoolingFallbackScenario({
+			chain: [cooling],
+			cooling: [cooling],
+			failure: { throw: "503 service unavailable: overloaded_error retry-after-ms=1000" },
+		});
+
+		expect(requestedModels).toEqual([primarySelector, primarySelector]);
+		expect(fallbackEvents).toEqual([]);
+	});
 	it("waits for a short OpenCode Go sibling credential before model fallback", async () => {
 		const exhaustedModel = getBundledModel("opencode-go", "deepseek-v4-flash");
 		const fallbackModel = getBundledModel("openai", "gpt-5.5");

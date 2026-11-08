@@ -2324,6 +2324,12 @@ export class TurnRecovery {
 			refusalWalk?: boolean;
 			/** The retry policy retries the failed model if this hop does not switch. */
 			sameModelRetryAvailable?: boolean;
+			/**
+			 * Cooldown is advisory: when no same-model retry follows, walk cooling candidates after
+			 * the available ones instead of ending the turn. Withheld once the retry budget is spent,
+			 * so chains naming each other cannot alternate through budget resets.
+			 */
+			cooldownLastResort?: boolean;
 		},
 	): Promise<boolean> {
 		const ceiling = this.#host.thinkingLevelCeiling();
@@ -2355,9 +2361,19 @@ export class TurnRecovery {
 			!!sourceModel &&
 			sourceModel.provider === latestAssistant.provider &&
 			sourceModel.id === latestAssistant.model;
+		// A cooldown recorded by another session (e.g. a transient timeout on the only chain
+		// entry) must not strand this one when a long usage-limit wait would end the turn.
+		const lastResort = options?.cooldownLastResort === true && options.sameModelRetryAvailable !== true;
+		const available: Array<{ role: string; selectors: RetryFallbackSelector[] }> = [];
+		const cooling: Array<{ role: string; selectors: RetryFallbackSelector[] }> = [];
 		for (const role of this.retryFallbackChainKeys(currentSelector)) {
-			for (const selector of this.findRetryFallbackCandidates(role, currentSelector, undefined, options)) {
-				if (this.isRetryFallbackSelectorSuppressed(selector)) continue;
+			const candidates = this.findRetryFallbackCandidates(role, currentSelector, undefined, options);
+			const suppressed = candidates.filter(selector => this.isRetryFallbackSelectorSuppressed(selector));
+			available.push({ role, selectors: candidates.filter(selector => !suppressed.includes(selector)) });
+			if (lastResort) cooling.push({ role, selectors: suppressed });
+		}
+		for (const { role, selectors } of [...available, ...cooling]) {
+			for (const selector of selectors) {
 				// A refusal walk visits any one model at most once per turn. Without this a
 				// pair of chains naming each other alternates: each hop is a model the walk
 				// has already been refused on, and the budget no longer stops it.
@@ -3039,6 +3055,7 @@ export class TurnRecovery {
 					refusalWalk: classifierRefusal,
 					preserveFailedTurn,
 					wrapAround: longUsageLimitFallback,
+					cooldownLastResort: !retryBudgetExhausted,
 					// Deferring a chain candidate only pays when the code below makes
 					// another attempt on this model that can succeed. Each term is a
 					// branch below that, with no switch, ends the turn instead (a spent
