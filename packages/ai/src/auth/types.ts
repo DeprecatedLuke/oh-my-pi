@@ -1228,8 +1228,23 @@ export interface SessionsApi {
 	 * copy restrictions. Restrictions are never evicted, because that would
 	 * widen a live session; the owner passes the returned lease to
 	 * {@link unrestrict} when the session ends.
+	 *
+	 * With `options.exclusive`, the listed accounts are reserved for this
+	 * session while the restriction is installed: no other session — including
+	 * one with no id, such as a bare gateway request — may select, pin, inherit,
+	 * record, rotate onto, or be offered them, so a dedicated account is never
+	 * shared. A reserved account still counts as available for that provider, so
+	 * a provider whose only accounts are reserved resolves for everyone else as
+	 * if it had none. Reservations are lifted by {@link unrestrict} with the
+	 * returned lease, like the restriction itself, and several exclusive
+	 * restrictions reserve the union of their keys.
 	 */
-	restrict(provider: string, sessionId: string, identityKeys: readonly string[]): SessionRestrictionLease;
+	restrict(
+		provider: string,
+		sessionId: string,
+		identityKeys: readonly string[],
+		options?: { exclusive?: boolean },
+	): SessionRestrictionLease;
 	/**
 	 * Lift the restriction that `lease` installed. Once a later {@link restrict}
 	 * call has replaced it for the same provider and session, this does nothing,
@@ -1237,9 +1252,10 @@ export interface SessionsApi {
 	 */
 	unrestrict(provider: string, sessionId: string, lease: SessionRestrictionLease): void;
 	/**
-	 * Whether stored credential `credentialId` may serve `sessionId`: always for
-	 * an unrestricted session, otherwise only an OAuth account its
-	 * {@link restrict} list names.
+	 * Whether stored credential `credentialId` may serve `sessionId`: for a
+	 * restricted session only an OAuth account its {@link restrict} list names,
+	 * otherwise every credential except one another session reserved through an
+	 * exclusive {@link restrict}.
 	 */
 	permits(provider: string, sessionId: string, credentialId: number): boolean;
 	/**

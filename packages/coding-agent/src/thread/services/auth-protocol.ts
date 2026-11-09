@@ -221,7 +221,10 @@ export type AuthStorageProtocol = {
 		number
 	>;
 	/** Returns the lease id; the main thread holds the lease symbol. */
-	"sessions.restrict": RpcMethod<[provider: string, sessionId: string, identityKeys: readonly string[]], number>;
+	"sessions.restrict": RpcMethod<
+		[provider: string, sessionId: string, identityKeys: readonly string[], options?: { exclusive?: boolean }],
+		number
+	>;
 	"sessions.unrestrict": RpcMethod<[provider: string, sessionId: string, lease: number], void>;
 	"sessions.permits": RpcMethod<[provider: string, sessionId: string, credentialId: number], boolean>;
 	"sessions.release": RpcMethod<[provider: string, sessionId: string], boolean>;

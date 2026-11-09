@@ -249,10 +249,13 @@ export class OAuthAccounts implements OAuthApi {
 	 *
 	 * When `sessionId` is supplied, the session-sticky OAuth credential is marked
 	 * `active`. No account is active before that session has resolved or pinned a
-	 * credential.
+	 * credential. Accounts another session reserved through an exclusive
+	 * `sessions.restrict` are not offered here, unless `sessionId` holds a
+	 * restriction of its own — a reservation never narrows another restriction.
 	 */
 	accounts(provider: string, sessionId?: string): OAuthAccountSummary[] {
-		if (this.#deps.overrides.suppressesOAuth(provider, this.#deps.affinity.isRestricted(provider, sessionId))) {
+		const restricted = this.#deps.affinity.isRestricted(provider, sessionId);
+		if (this.#deps.overrides.suppressesOAuth(provider, restricted)) {
 			return [];
 		}
 		const sessionCredential = this.#deps.affinity.get(provider, sessionId);
@@ -261,21 +264,23 @@ export class OAuthAccounts implements OAuthApi {
 				? this.#deps.pool.entries(provider)[sessionCredential.index]?.id
 				: undefined;
 		const activeLastUsedAtMs = activeCredentialId !== undefined ? sessionCredential?.lastUsedAtMs : undefined;
-		return this.#getStoredOAuthSelections(provider).map((selection, position) => {
-			const active = selection.credentialId === activeCredentialId;
-			return {
-				position,
-				credentialId: selection.credentialId,
-				accountId: selection.credential.accountId,
-				email: selection.credential.email,
-				projectId: selection.credential.projectId,
-				enterpriseUrl: selection.credential.enterpriseUrl,
-				orgId: selection.credential.orgId,
-				orgName: selection.credential.orgName,
-				active,
-				...(active && activeLastUsedAtMs !== undefined ? { lastUsedAtMs: activeLastUsedAtMs } : {}),
-			};
-		});
+		return this.#getStoredOAuthSelections(provider)
+			.filter(selection => restricted || this.#deps.affinity.allows(provider, sessionId, selection.credential))
+			.map((selection, position) => {
+				const active = selection.credentialId === activeCredentialId;
+				return {
+					position,
+					credentialId: selection.credentialId,
+					accountId: selection.credential.accountId,
+					email: selection.credential.email,
+					projectId: selection.credential.projectId,
+					enterpriseUrl: selection.credential.enterpriseUrl,
+					orgId: selection.credential.orgId,
+					orgName: selection.credential.orgName,
+					active,
+					...(active && activeLastUsedAtMs !== undefined ? { lastUsedAtMs: activeLastUsedAtMs } : {}),
+				};
+			});
 	}
 
 	/**

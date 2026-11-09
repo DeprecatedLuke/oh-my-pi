@@ -35,7 +35,7 @@ export default class AuthGateway extends Command {
 		}),
 		clients: Flags.string({
 			description:
-				"JSON file of scoped client tokens (serve), each limited to its own models and broker accounts; re-read while serving",
+				"JSON file of scoped client tokens (serve), each limited to its own models and broker accounts; an entry can reserve its accounts for itself; re-read while serving",
 		}),
 		strict: Flags.boolean({
 			description:

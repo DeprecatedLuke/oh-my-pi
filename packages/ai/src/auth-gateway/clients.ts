@@ -11,12 +11,17 @@
  *   account pools) its requests may use. A listed provider never falls back to
  *   a sibling account or an API key; an empty list allows no account. When
  *   present, it is also a provider allow-list: a provider it omits is refused,
- *   so a binding can never be bypassed through another provider's accounts.
+ *   so a binding can never be worked around through another provider's accounts.
+ * - `exclusive`: with `accounts`, reserves those accounts for this client.
+ *   Every other requester — the gateway token, and clients without a binding for
+ *   that provider — stops seeing and selecting them, as if the provider had no
+ *   such account; only this client's requests keep using them. Without it a
+ *   bound account stays available to everyone else.
  *
  * Account binding reuses `AuthStorage.sessions.restrict`. Each admitted
- * version of a client (its token, models and accounts) resolves a bound
- * provider's credentials under a session id of its own, restricted before the
- * token is admitted. A reload that changes any of them admits a new version
+ * version of a client (its token, models, accounts and exclusivity) resolves a
+ * bound provider's credentials under a session id of its own, restricted before
+ * the token is admitted. A reload that changes any of them admits a new version
  * under a new session; requests the old version admitted keep resolving under
  * the old restriction until they finish, and only then is it lifted. A
  * version's requests share that session's account pin.
@@ -35,6 +40,12 @@ export interface AuthGatewayClient {
 	models?: readonly string[];
 	/** Provider id → OAuth identity keys the client's requests to that provider may use. */
 	accounts?: Readonly<Record<string, readonly string[]>>;
+	/**
+	 * Require `accounts`, and reserve its accounts for this client: every other
+	 * requester resolves the provider as if those accounts did not exist. Absent
+	 * or `false` leaves a bound account available to them.
+	 */
+	exclusive?: boolean;
 }
 
 /** An admitted scoped client, as the gateway's routes see it. */
@@ -62,7 +73,7 @@ export interface AuthGatewayClientScope {
 	retain(): () => void;
 }
 
-const CLIENT_FIELDS: Record<string, true> = { tokenSha256: true, models: true, accounts: true };
+const CLIENT_FIELDS: Record<string, true> = { tokenSha256: true, models: true, accounts: true, exclusive: true };
 const SHA256_HEX = /^[0-9a-f]{64}$/i;
 // C0 controls and DEL: a name is logged verbatim.
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/;
@@ -73,9 +84,10 @@ function invalid(where: string, problem: string): Error {
 
 /**
  * Parse a clients file: a JSON object mapping each client name to
- * `{ tokenSha256, models?, accounts? }`. Any malformed entry or unknown field
- * rejects the whole file, since a misspelled `models` would otherwise allow
- * every model. Errors name the offending field, never its value.
+ * `{ tokenSha256, models?, accounts?, exclusive? }`. Any malformed entry or
+ * unknown field rejects the whole file, since a misspelled `models` would
+ * otherwise allow every model. Errors name the offending field, never its
+ * value.
  */
 export function parseAuthGatewayClients(text: string): AuthGatewayClient[] {
 	let value: unknown;
@@ -93,7 +105,7 @@ export function parseAuthGatewayClients(text: string): AuthGatewayClient[] {
 		for (const field of Object.keys(entry)) {
 			if (!Object.hasOwn(CLIENT_FIELDS, field)) throw invalid(name, `unknown field "${field}"`);
 		}
-		const { tokenSha256, models, accounts } = entry;
+		const { tokenSha256, models, accounts, exclusive } = entry;
 		if (typeof tokenSha256 !== "string") throw invalid(`${name}.tokenSha256`, "expected a hex SHA-256 digest");
 		const client: AuthGatewayClient = { name, tokenSha256 };
 		if (models !== undefined) {
@@ -114,6 +126,14 @@ export function parseAuthGatewayClients(text: string): AuthGatewayClient[] {
 				pools[provider] = keys;
 			}
 			client.accounts = pools;
+		}
+		if (exclusive !== undefined) {
+			if (typeof exclusive !== "boolean") throw invalid(`${name}.exclusive`, "expected true or false");
+			// Reserve nothing without a binding: an entry without `accounts` allows every account.
+			if (exclusive && accounts === undefined) {
+				throw invalid(`${name}.exclusive`, 'requires "accounts": only a bound account can be reserved');
+			}
+			client.exclusive = exclusive;
 		}
 		clients.push(client);
 	}
@@ -145,6 +165,8 @@ class ClientScope implements AuthGatewayClientScope {
 	readonly #grantsModels: boolean;
 	/** Whether `accounts` was given, which makes it a provider allow-list too. */
 	readonly #bindsAccounts: boolean;
+	/** Whether its bound accounts are reserved from every other requester. */
+	readonly #exclusive: boolean;
 	readonly #sessionId = crypto.randomUUID();
 	#leases: Array<[provider: string, lease: SessionRestrictionLease]> = [];
 	#sessions: RestrictionSessions | undefined;
@@ -162,6 +184,7 @@ class ClientScope implements AuthGatewayClientScope {
 		this.tokenSha256 = client.tokenSha256.toLowerCase();
 		this.#grantsModels = client.models !== undefined;
 		this.#bindsAccounts = client.accounts !== undefined;
+		this.#exclusive = client.exclusive === true;
 		this.limitsModels = this.#grantsModels || this.#bindsAccounts;
 		for (const grant of client.models ?? []) {
 			const slash = grant.indexOf("/");
@@ -197,7 +220,13 @@ class ClientScope implements AuthGatewayClientScope {
 				throw invalid(`${name}.models`, `grants provider "${unbound}", which "accounts" does not list`);
 			}
 		}
-		this.policy = JSON.stringify([name, this.tokenSha256, client.models ?? null, client.accounts ?? null]);
+		this.policy = JSON.stringify([
+			name,
+			this.tokenSha256,
+			client.models ?? null,
+			client.accounts ?? null,
+			this.#exclusive,
+		]);
 	}
 
 	allows(model: Model<Api>): boolean {
@@ -226,11 +255,14 @@ class ClientScope implements AuthGatewayClientScope {
 		};
 	}
 
-	/** Restrict this scope's session to its accounts. */
+	/** Restrict this scope's session to its accounts, reserving them when exclusive. */
 	restrict(sessions: RestrictionSessions): void {
 		this.#sessions = sessions;
 		for (const [provider, keys] of this.#accounts) {
-			this.#leases.push([provider, sessions.restrict(provider, this.#sessionId, keys)]);
+			this.#leases.push([
+				provider,
+				sessions.restrict(provider, this.#sessionId, keys, { exclusive: this.#exclusive }),
+			]);
 		}
 	}
 

@@ -250,12 +250,12 @@ function serveAuthStorage(state: PeerAuthState): RpcServe<AuthStorage, AuthStora
 				target,
 				table ? (provider, explicit) => table[provider]?.[explicit ? 1 : 0] ?? false : undefined,
 			),
-		"sessions.restrict": (storage, provider, sessionId, identityKeys) =>
+		"sessions.restrict": (storage, provider, sessionId, identityKeys, options) =>
 			state.hold({
 				storage,
 				provider,
 				sessionId,
-				lease: storage.sessions.restrict(provider, sessionId, identityKeys),
+				lease: storage.sessions.restrict(provider, sessionId, identityKeys, options),
 			}),
 		"sessions.unrestrict": (storage, provider, sessionId, id) => {
 			const held = state.leases.get(id);

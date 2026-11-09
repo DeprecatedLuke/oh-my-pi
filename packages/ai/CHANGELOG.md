@@ -18,6 +18,7 @@
 - Added the `devin-cli` login, which adopts the Devin CLI's `credentials.toml` seat key as a `devin` API key ([#13637](https://github.com/can1357/oh-my-pi/pull/13637) by [@pavel-kalmykov](https://github.com/pavel-kalmykov))
 - Added the `devin-windsurf` login, which exchanges a Windsurf Enterprise sign-in for the seat's raw API key and stores it as a `devin` API key ([#13288](https://github.com/can1357/oh-my-pi/pull/13288) by [@pavel-kalmykov](https://github.com/pavel-kalmykov))
 - Factory Droid Gemini 4 Argon requests match droid's: no sampling parameters, the output cap at the model maximum, and its earlier turns replayed exactly as Gemini streamed them ([#17861](https://github.com/can1357/oh-my-pi/pull/17861) by [@will-bogusz](https://github.com/will-bogusz))
+- `omp auth-gateway serve --clients` accepts `"exclusive": true` on a client with `accounts`, reserving those accounts for it: the gateway token and every other client stop seeing and selecting them, as if the provider had no such account
 
 ### Fixed
 

@@ -83,7 +83,8 @@ export interface AuthGatewayCommandArgs {
 		strict?: boolean;
 		/**
 		 * `serve`: JSON file of scoped client tokens, each limited to its own
-		 * models and broker OAuth accounts. Re-read while serving.
+		 * models and broker OAuth accounts, optionally reserving those accounts
+		 * from every other requester. Re-read while serving.
 		 */
 		clients?: string;
 	};

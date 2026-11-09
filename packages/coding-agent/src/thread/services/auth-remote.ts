@@ -443,8 +443,13 @@ class RemoteSessions implements SessionsApi {
 		}
 		return this.#remote.callSync("sessions.inherit", sourceSessionId, targetSessionId, table);
 	}
-	restrict(provider: string, sessionId: string, identityKeys: readonly string[]): SessionRestrictionLease {
-		const id = this.#remote.callSync("sessions.restrict", provider, sessionId, identityKeys);
+	restrict(
+		provider: string,
+		sessionId: string,
+		identityKeys: readonly string[],
+		options?: { exclusive?: boolean },
+	): SessionRestrictionLease {
+		const id = this.#remote.callSync("sessions.restrict", provider, sessionId, identityKeys, options);
 		const lease: SessionRestrictionLease = Symbol(`restrict:${provider}:${sessionId}`);
 		this.#leases.set(lease, { id, provider, sessionId });
 		return lease;

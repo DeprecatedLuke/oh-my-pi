@@ -40,8 +40,15 @@ export type SessionCredential = {
 	explicit?: true;
 };
 
-/** One installed restriction: the allowed OAuth identity keys and the lease that lifts it. */
-type SessionRestriction = { readonly allowed: ReadonlySet<string>; readonly lease: SessionRestrictionLease };
+/**
+ * One installed restriction: the allowed OAuth identity keys, the lease that
+ * lifts it, and whether those keys are reserved from every other session.
+ */
+type SessionRestriction = {
+	readonly allowed: ReadonlySet<string>;
+	readonly lease: SessionRestrictionLease;
+	readonly exclusive: boolean;
+};
 
 /**
  * Provider → session id → installed restriction. Owned by `AuthStorage` so
@@ -73,11 +80,16 @@ export class SessionAffinity implements SessionsApi {
 		this.#restrictions = restrictions;
 	}
 
-	restrict(provider: string, sessionId: string, identityKeys: readonly string[]): SessionRestrictionLease {
+	restrict(
+		provider: string,
+		sessionId: string,
+		identityKeys: readonly string[],
+		options?: { exclusive?: boolean },
+	): SessionRestrictionLease {
 		if (!provider || !sessionId) throw new Error("sessions.restrict requires a provider and a session id");
 		const lease = Symbol("sessions.restrict");
 		const sessions = this.#restrictions.get(provider) ?? new Map<string, SessionRestriction>();
-		sessions.set(sessionId, { allowed: new Set(identityKeys), lease });
+		sessions.set(sessionId, { allowed: new Set(identityKeys), lease, exclusive: options?.exclusive === true });
 		this.#restrictions.set(provider, sessions);
 		return lease;
 	}
@@ -95,28 +107,60 @@ export class SessionAffinity implements SessionsApi {
 	}
 
 	/**
-	 * True when `credential` may serve `sessionId`: always for an unrestricted
-	 * session, otherwise only an OAuth credential whose identity key is allowed.
+	 * Whether {@link allows} can refuse anything to `sessionId`: the session is
+	 * restricted, or another session's exclusive restriction reserves accounts
+	 * from it.
+	 */
+	#constrains(provider: string, sessionId: string | undefined): boolean {
+		const sessions = this.#restrictions.get(provider);
+		if (sessions === undefined) return false;
+		if (sessionId !== undefined && sessions.has(sessionId)) return true;
+		for (const restriction of sessions.values()) {
+			if (restriction.exclusive) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * True when `credential` may serve `sessionId`. A restricted session may use
+	 * only an OAuth credential whose identity key it allows; any other session
+	 * (including one without an id) may use every credential except an OAuth
+	 * account an exclusive restriction reserves. Every request-path credential
+	 * check goes through here.
 	 */
 	allows(provider: string, sessionId: string | undefined, credential: AuthCredential): boolean {
-		const allowed = sessionId === undefined ? undefined : this.#restrictions.get(provider)?.get(sessionId)?.allowed;
-		if (allowed === undefined) return true;
-		if (credential.type !== "oauth") return false;
-		const identityKey = resolveCredentialIdentityKey(provider, credential);
-		return identityKey !== null && allowed.has(identityKey);
+		const sessions = this.#restrictions.get(provider);
+		if (sessions === undefined) return true;
+		const own = sessionId === undefined ? undefined : sessions.get(sessionId);
+		if (own !== undefined) {
+			if (credential.type !== "oauth") return false;
+			const identityKey = resolveCredentialIdentityKey(provider, credential);
+			return identityKey !== null && own.allowed.has(identityKey);
+		}
+		if (credential.type !== "oauth") return true;
+		let identityKey: string | null | undefined;
+		for (const restriction of sessions.values()) {
+			if (!restriction.exclusive) continue;
+			identityKey ??= resolveCredentialIdentityKey(provider, credential);
+			if (identityKey === null) return true;
+			if (restriction.allowed.has(identityKey)) return false;
+		}
+		return true;
 	}
 
 	/** Whether the stored row at `index` may serve `sessionId` (see {@link allows}). */
 	#permits(provider: string, sessionId: string, index: number): boolean {
-		if (!this.isRestricted(provider, sessionId)) return true;
+		if (!this.#constrains(provider, sessionId)) return true;
 		const credential = this.#pool.credentials(provider)[index];
-		return credential !== undefined && this.allows(provider, sessionId, credential);
+		if (credential === undefined) return !this.isRestricted(provider, sessionId);
+		return this.allows(provider, sessionId, credential);
 	}
 
 	permits(provider: string, sessionId: string, credentialId: number): boolean {
-		if (!this.isRestricted(provider, sessionId)) return true;
+		if (!this.#constrains(provider, sessionId)) return true;
 		const entry = this.#pool.entries(provider).find(candidate => candidate.id === credentialId);
-		return entry !== undefined && this.allows(provider, sessionId, entry.credential);
+		if (entry === undefined) return !this.isRestricted(provider, sessionId);
+		return this.allows(provider, sessionId, entry.credential);
 	}
 
 	/** Bounded per-provider session map, created on first use. */
