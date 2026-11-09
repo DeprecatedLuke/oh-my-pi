@@ -31,10 +31,6 @@ import { ensureThemeSync, getEditorTheme, theme } from "../theme/theme";
 const DOUBLE_INTERRUPT_MS = 500;
 // How long idle chrome must hold its height after a turn before it is treated as permanent.
 const IDLE_CHROME_SETTLE_MS = 250;
-// Self-clearing HUDs (todos, subagents) usually vanish shortly after a turn, but a todo plan
-// lingers for its auto-clear delay (or indefinitely while tasks stay open). Rows such a HUD displaces
-// are clipped, not retired, so one that outlives this window is promoted like persistent chrome.
-const SELF_CLEARING_CHROME_SETTLE_MS = 1000;
 
 /** Live settings that affect the composer before and after session adoption. */
 export interface ComposerPreferences {
@@ -839,8 +835,8 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		}
 	}
 
-	/** Raise the floor to idle chrome that survives `settleMs`, even if it appeared after the run. */
-	#rebaselineChromeFloor(busy: boolean, chrome: number, settleMs: number): void {
+	/** Raise the floor to eligible idle chrome that survives the settle window, even if it appeared after the run. */
+	#rebaselineChromeFloor(busy: boolean, chrome: number): void {
 		if (busy || chrome <= (this.#chromeFloor ?? chrome)) {
 			this.#resetIdleChrome();
 			return;
@@ -854,7 +850,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		if (this.#idleChrome === chrome && this.#idleChromeTimer !== undefined) return;
 		this.#resetIdleChrome();
 		this.#idleChrome = chrome;
-		this.#idleChromeTimer = this.ui.scheduleAfter(settleMs, () => {
+		this.#idleChromeTimer = this.ui.scheduleAfter(IDLE_CHROME_SETTLE_MS, () => {
 			this.#idleChromeTimer = undefined;
 			this.#idleChromeSettled = true;
 			this.ui.requestRender();

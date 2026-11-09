@@ -23,9 +23,14 @@ interface QueryElement extends QueryChildNode {
 	getAttribute(name: string): string | null;
 	hasAttribute(name: string): boolean;
 	readonly ownerDocument?: QueryDocument;
+	readonly parentElement: QueryElement | null;
+	readonly attributes: ArrayLike<{ readonly name: string }>;
 	querySelector(selector: string): QueryElement | null;
 	closest(selector: string): QueryElement | null;
 }
+
+/** Element type `getComputedStyle` accepts in the page. */
+type StyleTarget = Parameters<typeof getComputedStyle>[0];
 
 /** Root node Puppeteer passes to a custom query handler (the document for page-level queries). */
 type QueryNode = Parameters<NonNullable<CustomQueryHandler["queryAll"]>>[0];
@@ -142,18 +147,18 @@ export function queryByRole(node: QueryNode, selector: string): QueryElement[] {
 	const nameText = parsed[2] ?? parsed[3] ?? parsed[4];
 	const wantedName = nameText === undefined ? undefined : normalizeSpace(nameText).toLocaleLowerCase();
 	const exact = parsed[5]?.toLocaleLowerCase() === "exact";
-	const hasLandmarkName = (element: Element): boolean =>
+	const hasLandmarkName = (element: QueryElement): boolean =>
 		Boolean(
 			idrefText(element) ||
 			normalizeSpace(element.getAttribute("aria-label") ?? "") ||
 			normalizeSpace(element.getAttribute("title") ?? ""),
 		);
-	const isScoped = (element: Element, includeMain: boolean): boolean => {
+	const isScoped = (element: QueryElement, includeMain: boolean): boolean => {
 		for (let parent = element.parentElement; parent; parent = parent.parentElement) {
 			const explicit = parent.getAttribute("role")?.trim().split(/\s+/)[0]?.toLocaleLowerCase();
 			if (!explicit && parent.tagName.toLocaleLowerCase() === "section") return true;
 			// Browser ancestors have the same element interface as the queried node.
-			const ancestor = parent as Element;
+			const ancestor = parent as QueryElement;
 			const role = explicit || implicitRole(ancestor);
 			if (
 				role === "article" ||
@@ -166,7 +171,7 @@ export function queryByRole(node: QueryNode, selector: string): QueryElement[] {
 		}
 		return false;
 	};
-	const computeImplicitRole = (element: Element): string | null => {
+	const computeImplicitRole = (element: QueryElement): string | null => {
 		const tag = element.tagName.toLocaleLowerCase();
 		if ((tag === "a" || tag === "area") && element.hasAttribute("href")) return "link";
 		if (tag === "button") return "button";
@@ -266,8 +271,8 @@ export function queryByRole(node: QueryNode, selector: string): QueryElement[] {
 	 * Each element's implicit role, computed once per query: an aside's or header's role depends on its ancestors' roles,
 	 * so nested asides would otherwise recompute every ancestor at each level.
 	 */
-	const roles = new Map<Element, string | null>();
-	const implicitRole = (element: Element): string | null => {
+	const roles = new Map<QueryElement, string | null>();
+	const implicitRole = (element: QueryElement): string | null => {
 		let role = roles.get(element);
 		if (role === undefined) {
 			role = computeImplicitRole(element);
@@ -281,7 +286,7 @@ export function queryByRole(node: QueryNode, selector: string): QueryElement[] {
 			wantedRole,
 		);
 	/** An image input's name: its alt, value or title, else the browser's default caption for an image submit button. */
-	const imageInputName = (element: Element): string =>
+	const imageInputName = (element: QueryElement): string =>
 		normalizeSpace(element.getAttribute("alt") ?? "") ||
 		normalizeSpace(element.getAttribute("value") ?? "") ||
 		normalizeSpace(element.getAttribute("title") ?? "") ||
@@ -298,7 +303,7 @@ export function queryByRole(node: QueryNode, selector: string): QueryElement[] {
 		skip: QueryElement | null,
 		visibility: unknown,
 		followRefs = true,
-		visited = new Set<Element>(),
+		visited = new Set<QueryElement>(),
 	): string => {
 		let text = "";
 		const walk = (element: Pick<QueryElement, "childNodes">, visibility: unknown): void => {
@@ -312,7 +317,7 @@ export function queryByRole(node: QueryNode, selector: string): QueryElement[] {
 				const tag = childElement.tagName.toLocaleLowerCase();
 				if (["script", "style", "template", "noscript"].includes(tag)) continue;
 				if (visibility !== "any" && childElement.getAttribute("aria-hidden") === "true") continue;
-				const style = getComputedStyle(childElement as unknown as Element);
+				const style = getComputedStyle(childElement as unknown as StyleTarget);
 				if (style.display === "none" && visibility !== "any") continue;
 				const gap = style.display === "inline" || style.display === "contents" ? "" : " ";
 				const shown = visibility === "any" || style.visibility === "visible";
@@ -366,13 +371,13 @@ export function queryByRole(node: QueryNode, selector: string): QueryElement[] {
 		return text;
 	};
 	/** The host-language name of an element its descendants do not name: an optgroup's label, a fieldset's legend, a table's caption. */
-	const nativeName = (element: Element, visited = new Set<Element>()): string => {
+	const nativeName = (element: QueryElement, visited = new Set<QueryElement>()): string => {
 		const tag = element.tagName.toLocaleLowerCase();
 		if (tag === "optgroup") return normalizeSpace(element.getAttribute("label") ?? "");
 		if (tag !== "fieldset" && tag !== "table") return "";
 		const caption = element.querySelector(
 			tag === "fieldset" ? ":scope > legend" : ":scope > caption",
-		) as unknown as Element | null;
+		) as unknown as QueryElement | null;
 		if (!caption) return "";
 		// The caption or legend is named as an element in its own right: its references, then its label, then its text.
 		return (
@@ -386,7 +391,7 @@ export function queryByRole(node: QueryNode, selector: string): QueryElement[] {
 	 * references. Each target is read as a node embedded in a label, so a control target gives its value and an image its
 	 * alt, as its descendants would.
 	 */
-	const idrefText = (element: Element, visited = new Set<Element>()): string => {
+	const idrefText = (element: QueryElement, visited = new Set<QueryElement>()): string => {
 		const labelledBy = element.getAttribute("aria-labelledby");
 		if (!labelledBy || visited.has(element)) return "";
 		visited.add(element);
@@ -400,10 +405,11 @@ export function queryByRole(node: QueryNode, selector: string): QueryElement[] {
 						// Hidden by visibility, `display: none` (its own or an ancestor's, which leaves its own computed display
 						// untouched), or a `hidden`/`aria-hidden` ancestor: read the whole subtree. A `display: contents` target
 						// has no box of its own, so the nearest ancestor with one decides whether it is rendered.
-						const targetStyle = getComputedStyle(target);
+						const targetStyle = getComputedStyle(target as unknown as StyleTarget);
 						// Browser ancestors have the same element interface as the target.
-						let box = target as Element | null;
-						while (box && getComputedStyle(box).display === "contents") box = box.parentElement as Element | null;
+						let box = target as QueryElement | null;
+						while (box && getComputedStyle(box as unknown as StyleTarget).display === "contents")
+							box = box.parentElement as QueryElement | null;
 						const rendered = box as unknown as { checkVisibility?: () => boolean } | null;
 						const hidden =
 							targetStyle.visibility !== "visible" ||
@@ -417,7 +423,7 @@ export function queryByRole(node: QueryNode, selector: string): QueryElement[] {
 						if (native) return native;
 						const text = normalizeSpace(
 							contentText(
-								{ childNodes: [target] } as unknown as Element,
+								{ childNodes: [target] } as unknown as QueryElement,
 								null,
 								hidden ? "any" : "visible",
 								false,
@@ -433,7 +439,7 @@ export function queryByRole(node: QueryNode, selector: string): QueryElement[] {
 			visited.delete(element);
 		}
 	};
-	const accessibleName = (element: Element): string => {
+	const accessibleName = (element: QueryElement): string => {
 		const labelledBy = idrefText(element);
 		if (labelledBy) return labelledBy;
 		const ariaLabel = normalizeSpace(element.getAttribute("aria-label") ?? "");
