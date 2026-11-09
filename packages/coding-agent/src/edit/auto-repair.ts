@@ -371,12 +371,12 @@ export async function attemptEditAutoRepair(options: {
 	const timeout = AbortSignal.timeout(REPAIR_TIMEOUT_MS);
 	const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
 	const complete = async (builtPrompt: string): Promise<string> => {
-		session.costGate?.admit();
 		// The region and its neighbors come from disk and can hold configured secrets.
 		const content = session.obfuscateText ? session.obfuscateText(builtPrompt) : builtPrompt;
 		const response = await retryTransientCompletion(
-			() =>
-				completeSimple(
+			async () => {
+				session.costGate?.admit();
+				const attempt = await completeSimple(
 					model,
 					{ messages: [{ role: "user", content, timestamp: Date.now() }] },
 					{
@@ -386,10 +386,12 @@ export async function attemptEditAutoRepair(options: {
 						disableReasoning: true,
 						signal,
 					},
-				),
+				);
+				session.costGate?.record(attempt.usage.cost.total);
+				return attempt;
+			},
 			{ signal, provider: model.provider },
 		);
-		session.costGate?.record(response.usage.cost.total);
 		if (response.stopReason === "error") {
 			throw new Error(response.errorMessage ?? "auto-repair completion failed");
 		}
