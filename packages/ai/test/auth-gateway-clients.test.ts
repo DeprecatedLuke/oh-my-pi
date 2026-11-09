@@ -300,6 +300,108 @@ describe("auth-gateway scoped clients", () => {
 		expect(restricted(1)).toBe(false);
 	});
 
+	describe("exclusive accounts", () => {
+		const OPS_TOKEN = "ops-token";
+		const OPS_CLIENT: AuthGatewayClient = { name: "ops", tokenSha256: hashAuthGatewayToken(OPS_TOKEN) };
+		const EXCLUSIVE_CI: AuthGatewayClient = { ...CI_CLIENT, exclusive: true };
+
+		/** `mock/granted`, answering with the key it was called with; account a is past its usage limit while `exhausted()`. */
+		function keyEchoModel(exhausted: () => boolean, beforeServing?: () => Promise<void>): MockModel {
+			return createMockModel({
+				provider: "mock",
+				id: "granted",
+				handler: async (_context, options) => {
+					if (exhausted() && options?.apiKey === "access-a") {
+						throw new ProviderHttpError("Usage limit reached", 429, { code: "insufficient_quota" });
+					}
+					await beforeServing?.();
+					return { content: [`served:${options?.apiKey}`] };
+				},
+			});
+		}
+
+		beforeEach(async () => {
+			// No API key to fall back to: a requester denied every account fails.
+			await storage.credentials.set("mock", [oauthAccount("a"), oauthAccount("b")]);
+		});
+
+		it("serves the gateway token and unbound clients only from the remaining account, failing rather than borrowing the reserved one", async () => {
+			let accountAExhausted = false;
+			const granted = keyEchoModel(() => accountAExhausted);
+			boot([granted], [EXCLUSIVE_CI, OPS_CLIENT]);
+
+			for (const [token, conversation] of [
+				[GATEWAY_TOKEN, "gateway-1"],
+				[OPS_TOKEN, "ops-1"],
+				[GATEWAY_TOKEN, "gateway-2"],
+				[OPS_TOKEN, "ops-2"],
+			] as const) {
+				expect(await answer(await chat(token, "mock/granted", conversation))).toBe("served:access-a");
+			}
+			expect(await answer(await chat(CI_TOKEN, "mock/granted", "ci-1"))).toBe("served:access-b");
+
+			accountAExhausted = true;
+			granted.reset();
+			expect((await chat(GATEWAY_TOKEN, "mock/granted", "gateway-3")).status).toBe(429);
+			expect((await chat(OPS_TOKEN, "mock/granted", "ops-3")).status).toBe(429);
+			expect(granted.calls.map(call => call.options?.apiKey)).not.toContain("access-b");
+			// The owner keeps its account throughout.
+			expect(await answer(await chat(CI_TOKEN, "mock/granted", "ci-2"))).toBe("served:access-b");
+		});
+
+		it("leaves a non-exclusive client's bound account to the gateway token and unbound clients", async () => {
+			const granted = keyEchoModel(() => true);
+			boot([granted], [CI_CLIENT, OPS_CLIENT]);
+
+			expect(await answer(await chat(GATEWAY_TOKEN, "mock/granted", "gateway-1"))).toBe("served:access-b");
+			expect(await answer(await chat(OPS_TOKEN, "mock/granted", "ops-1"))).toBe("served:access-b");
+		});
+
+		it("stops reusing a pin to an account reserved after the pin was taken", async () => {
+			const granted = keyEchoModel(() => false);
+			const handle = boot([granted], []);
+			const accountB = storage.oauth.accounts("mock").find(account => account.accountId === "acc-b");
+			if (!accountB) throw new Error("account b is not stored");
+			expect(storage.sessions.pin("mock", "conversation-1", accountB.credentialId)).toBe(true);
+			expect(await answer(await chat(GATEWAY_TOKEN, "mock/granted", "conversation-1"))).toBe("served:access-b");
+
+			handle.setClients([EXCLUSIVE_CI]);
+			expect(await answer(await chat(GATEWAY_TOKEN, "mock/granted", "conversation-1"))).toBe("served:access-a");
+			expect(await answer(await chat(CI_TOKEN, "mock/granted", "conversation-1"))).toBe("served:access-b");
+		});
+
+		it.each([
+			["removes the client", []],
+			["drops exclusive from the client", [CI_CLIENT]],
+		] as Array<[string, AuthGatewayClient[]]>)(
+			"frees the reserved account to others after a reload that %s, once its in-flight request finishes",
+			async (_label, reloaded) => {
+				const entered = Promise.withResolvers<void>();
+				const proceed = Promise.withResolvers<void>();
+				let holdNext = true;
+				const granted = keyEchoModel(
+					() => true,
+					async () => {
+						if (!holdNext) return;
+						holdNext = false;
+						entered.resolve();
+						await proceed.promise;
+					},
+				);
+				const handle = boot([granted], [EXCLUSIVE_CI]);
+
+				const inFlight = chat(CI_TOKEN, "mock/granted", "ci-1");
+				await entered.promise;
+				handle.setClients(reloaded);
+				expect((await chat(GATEWAY_TOKEN, "mock/granted", "gateway-1")).status).toBe(429);
+
+				proceed.resolve();
+				expect(await answer(await inFlight)).toBe("served:access-b");
+				expect(await answer(await chat(GATEWAY_TOKEN, "mock/granted", "gateway-2"))).toBe("served:access-b");
+			},
+		);
+	});
+
 	it("never shares retained provider state between clients", async () => {
 		const states: unknown[] = [];
 		const granted = createMockModel({
@@ -349,6 +451,12 @@ describe("parseAuthGatewayClients", () => {
 			{ ci: { tokenSha256: digest }, ops: { tokenSha256: digest.toUpperCase() } },
 			"same",
 		],
+		[
+			"a non-boolean exclusive",
+			{ ci: { tokenSha256: digest, accounts: { mock: ["account:acc-b"] }, exclusive: "yes" } },
+			"ci.exclusive",
+		],
+		["exclusive without accounts to reserve", { ci: { tokenSha256: digest, exclusive: true } }, "ci.exclusive"],
 	])("rejects a whole file with %s", (_label, file, message) => {
 		expect(() => parseAuthGatewayClients(typeof file === "string" ? file : JSON.stringify(file))).toThrow(message);
 	});

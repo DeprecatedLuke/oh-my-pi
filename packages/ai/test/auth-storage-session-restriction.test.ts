@@ -142,6 +142,36 @@ describe("AuthStorage session account restrictions", () => {
 		expect(storage.sessions.permits(PROVIDER, "session", accountB.credentialId)).toBe(true);
 	});
 
+	test("reserves an exclusive restriction's accounts from every other session until it is lifted", async () => {
+		// Reserved account first, so an ignored reservation would be the natural pick.
+		await storage.credentials.set(PROVIDER, [oauthCredential("b"), oauthCredential("a")]);
+		const [accountB, accountA] = storage.oauth.accounts(PROVIDER);
+		if (!accountA || !accountB) throw new Error("expected stored accounts");
+		const listed = (sessionId?: string) =>
+			storage.oauth.accounts(PROVIDER, sessionId).map(account => account.accountId);
+		expect(storage.sessions.pin(PROVIDER, "parent", accountB.credentialId)).toBe(true);
+
+		const lease = storage.sessions.restrict(PROVIDER, "owner", ["account:acc-b"], { exclusive: true });
+		// A restriction of its own wins over another session's reservation.
+		storage.sessions.restrict(PROVIDER, "peer", ["account:acc-b"]);
+
+		// A pin taken before the reservation is neither inherited nor reused.
+		expect(storage.sessions.inherit("parent", "child")).toBe(0);
+		expect(await storage.keys.get(PROVIDER, "parent")).toBe("access-a");
+		expect(storage.sessions.pin(PROVIDER, "other", accountB.credentialId)).toBe(false);
+		for (let request = 0; request < 3; request++) expect(await storage.keys.get(PROVIDER)).toBe("access-a");
+		expect(listed("other")).toEqual(["acc-a"]);
+		expect(listed()).toEqual(["acc-a"]);
+		expect(await storage.keys.get(PROVIDER, "owner")).toBe("access-b");
+		expect(await storage.keys.get(PROVIDER, "peer")).toBe("access-b");
+		expect(listed("peer")).toEqual(["acc-b", "acc-a"]);
+
+		storage.sessions.unrestrict(PROVIDER, "owner", lease);
+		expect(listed("other")).toEqual(["acc-b", "acc-a"]);
+		expect(storage.sessions.pin(PROVIDER, "other", accountB.credentialId)).toBe(true);
+		expect(await storage.keys.get(PROVIDER, "other")).toBe("access-b");
+	});
+
 	test("keeps restrictions across a credential store replacement", async () => {
 		storage.sessions.restrict(PROVIDER, "session", ["account:acc-b"]);
 		const replacement = await SqliteAuthCredentialStore.open(path.join(tempDir, "replacement.db"));
