@@ -583,7 +583,9 @@ function resolveMcpTool(
 	const preferReplace = cursorMcpPrefersReplaceEdit(toolName, args);
 	const tool = preferReplace
 		? options.getEditReplaceTool?.()
-		: (options.getExecutableTool?.(toolName) ?? options.tools.get(toolName));
+		: (options.getExecutableTool?.(toolName) ??
+			options.tools.get(normalizeToolName(toolName)) ??
+			options.tools.get(toolName));
 	return { tool, preferReplace };
 }
 
