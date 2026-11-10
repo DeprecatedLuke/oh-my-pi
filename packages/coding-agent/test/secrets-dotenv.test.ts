@@ -238,22 +238,20 @@ describe("dotenv file secrets", () => {
 			content,
 		}));
 
-		obfuscator.batch(() => {
-			expect(obfuscator.obfuscate(addedSecret)).toBe(addedSecret);
-			obfuscator.registerPlainSecrets(additions);
-			const addedToken = obfuscator.obfuscate(addedSecret);
-			expect(addedToken).not.toContain(addedSecret);
-			expect(obfuscator.deobfuscate(addedToken)).toBe(addedSecret);
-			expect(obfuscator.obfuscate(regexSecret)).toBe(originalToken);
-			expect(obfuscator.deobfuscate(originalToken)).toBe(regexSecret);
-			expect(obfuscator.obfuscate(replacedSecret)).toBe(replacement);
+		expect(obfuscator.obfuscate(addedSecret)).toBe(addedSecret);
+		obfuscator.registerPlainSecrets(additions);
+		const addedToken = obfuscator.obfuscate(addedSecret);
+		expect(addedToken).not.toContain(addedSecret);
+		expect(obfuscator.deobfuscate(addedToken)).toBe(addedSecret);
+		expect(obfuscator.obfuscate(regexSecret)).toBe(originalToken);
+		expect(obfuscator.deobfuscate(originalToken)).toBe(regexSecret);
+		expect(obfuscator.obfuscate(replacedSecret)).toBe(replacement);
 
-			obfuscator.registerPlainSecrets(additions);
-			expect(obfuscator.obfuscate(addedSecret)).toBe(addedToken);
-			expect(obfuscator.deobfuscate(addedToken)).toBe(addedSecret);
-			expect(obfuscator.obfuscate(regexSecret)).toBe(originalToken);
-			expect(obfuscator.deobfuscate(originalToken)).toBe(regexSecret);
-			expect(obfuscator.obfuscate(replacedSecret)).toBe(replacement);
-		});
+		obfuscator.registerPlainSecrets(additions);
+		expect(obfuscator.obfuscate(addedSecret)).toBe(addedToken);
+		expect(obfuscator.deobfuscate(addedToken)).toBe(addedSecret);
+		expect(obfuscator.obfuscate(regexSecret)).toBe(originalToken);
+		expect(obfuscator.deobfuscate(originalToken)).toBe(regexSecret);
+		expect(obfuscator.obfuscate(replacedSecret)).toBe(replacement);
 	});
 });
