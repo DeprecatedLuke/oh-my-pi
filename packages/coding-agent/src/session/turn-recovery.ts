@@ -67,7 +67,9 @@ import {
 	formatRetryFallbackSelector,
 	getRetryFallbackChains,
 	getRetryFallbackRevertPolicy,
+	matchRetryCyberFallbackModels,
 	parseRetryFallbackSelector,
+	type RetryCyberFallbackMatch,
 	type RetryFallbackChains,
 	type RetryFallbackResolutionContext,
 	type RetryFallbackRevertPolicy,
@@ -75,6 +77,7 @@ import {
 	resolveRetryFallbackChainKey,
 	retryFallbackAdmits,
 	type ServingModel,
+	validateRetryCyberFallbackModels,
 	validateRetryFallbackChains,
 } from "./retry-fallback-chains";
 import { describeUsageFallback } from "./retry-fallback-reason";
@@ -90,6 +93,7 @@ import {
 	cfgFeaturesUnexpectedStopDetection,
 	cfgModelLoopGuardEnabled,
 	cfgRetry,
+	cfgRetryCyberFallbackModels,
 	cfgRetryEnabled,
 	cfgRetryModelFallback,
 	cfgRetryUsageAwareFallback,
@@ -108,6 +112,12 @@ const EMPTY_STOP_MAX_RETRIES = 3;
 const MALFORMED_FUNCTION_CALL_MAX_RETRIES = 3;
 const STREAM_STALL_CONTINUE_MAX_RETRIES = 3;
 const GENERIC_ABORT_MAX_RETRIES = 2;
+/**
+ * Same-model retries a classifier refusal gets before it walks
+ * `retry.cyberFallbackModels`. The classifier is stochastic, so the model that
+ * refused a request often answers the identical one.
+ */
+export const CLASSIFIER_REFUSAL_SAME_MODEL_RETRIES = 3;
 const SIBLING_UNBLOCK_BUFFER_MS = 1_000;
 const NON_WHITESPACE_RE = /\S/;
 const USAGE_PREFLIGHT_BLOCKED_PREFIX = "Usage preflight blocked:";
@@ -400,6 +410,12 @@ export class TurnRecovery {
 	 * the exhausted budget, a cancelled wait, an abort), so no turn inherits another turn's walk.
 	 */
 	readonly #refusalWalkTried = new Set<string>();
+	/**
+	 * Same-model retries already spent on the current model's classifier refusal.
+	 * Reset by `resolveRetry()` and by every model switch, so each model a
+	 * refusal walk lands on gets its own {@link CLASSIFIER_REFUSAL_SAME_MODEL_RETRIES}.
+	 */
+	#classifierRefusalRetries = 0;
 	/** Per-model account walk allowance, snapshotted once and cleared when the retry saga ends. */
 	readonly #accountPolicyRotationsRemaining = new Map<string, number>();
 	#requestBodyReadTimeoutRecoveryPromptSequence: number | undefined;
@@ -894,6 +910,7 @@ export class TurnRecovery {
 	/** Resolve the pending retry promise; the saga is over, and so is its refusal walk. */
 	resolveRetry(): void {
 		this.#refusalWalkTried.clear();
+		this.#classifierRefusalRetries = 0;
 		this.#accountPolicyRotationsRemaining.clear();
 		if (this.#retryResolve) {
 			this.#retryResolve();
@@ -1290,6 +1307,15 @@ export class TurnRecovery {
 			this.#host.agent.replaceMessages(messages.slice(0, -1));
 			return;
 		}
+		// A turn that emitted tool calls is followed by the results the agent loop
+		// paired with them — synthetic `executed: false` placeholders for calls that
+		// never ran. Dropping only the assistant would leave those results orphaned
+		// in active context, so a whole refused turn goes together.
+		const turn = this.#assistantTurnRange(assistantMessage);
+		if (turn !== undefined) {
+			this.#host.agent.replaceMessages([...messages.slice(0, turn.start), ...messages.slice(turn.end)]);
+			return;
+		}
 		// A miss means the failed turn is still in active context (or was never
 		// there); log just enough to explain why the identity check failed.
 		logger.debug("agent active context assistant removal missed", {
@@ -1303,25 +1329,35 @@ export class TurnRecovery {
 	}
 
 	/**
-	 * Remove a failed assistant turn together with the synthetic "not executed"
-	 * results agent-loop appended for its tool calls. Classifier refusals use this
-	 * so the model never sees its refused call or a stream-error result for it —
-	 * otherwise it narrates the refusal back ("the last command got blocked").
+	 * Locate an assistant turn together with the synthetic tool results that
+	 * directly follow it: `[start, end)` covers the assistant and every
+	 * unexecuted placeholder paired with one of its calls. `undefined` when the
+	 * turn is not in active context, or when a real result for one of its calls
+	 * follows — removing the assistant would orphan a completed side effect.
 	 */
-	removeFailedTurnFromActiveContext(assistantMessage: AssistantMessage, reason: string): void {
-		const callIds = new Set<string>();
-		for (const block of assistantMessage.content) {
-			if (block.type === "toolCall") callIds.add(block.id);
-		}
+	#assistantTurnRange(assistantMessage: AssistantMessage): { start: number; end: number } | undefined {
 		const messages = this.#host.agent.state.messages;
-		let end = messages.length;
-		while (end > 0) {
-			const candidate = messages[end - 1]!;
-			if (candidate.role !== "toolResult" || !callIds.has(candidate.toolCallId)) break;
-			end--;
+		let start = -1;
+		for (let index = messages.length - 1; index >= 0; index--) {
+			const candidate = messages[index];
+			if (candidate.role === "assistant" && this.#isSameAssistantMessage(candidate, assistantMessage)) {
+				start = index;
+				break;
+			}
 		}
-		if (end < messages.length) this.#host.agent.replaceMessages(messages.slice(0, end));
-		this.removeAssistantMessageFromActiveContext(assistantMessage, reason);
+		if (start < 0) return undefined;
+		const emittedToolCallIds = new Set<string>();
+		for (const block of assistantMessage.content) {
+			if (block.type === "toolCall") emittedToolCallIds.add(block.id);
+		}
+		let end = start + 1;
+		while (end < messages.length) {
+			const next = messages[end];
+			if (next.role !== "toolResult" || !emittedToolCallIds.has(next.toolCallId)) break;
+			if (!isSyntheticToolResultMessage(next)) return undefined;
+			end++;
+		}
+		return { start, end };
 	}
 
 	/**
@@ -1617,12 +1653,12 @@ export class TurnRecovery {
 		// also be replayed when every emitted tool call is paired with positive
 		// proof that it never executed.
 		const replaySafeUnexecutedTools =
-			(this.isClassifierRefusal(message) ||
+			(this.isCyberRefusal(message) ||
 				AIError.is(id, AIError.Flag.MalformedFunctionCall) ||
 				AIError.retriable(id)) &&
 			this.#unexecutedToolCallsReplaySafe(message);
 		if (this.#hasReplayUnsafeOutput(message) && !replaySafeUnexecutedTools) return false;
-		if (AIError.is(id, AIError.Flag.AccountPolicy) || this.isClassifierRefusal(message)) return true;
+		if (AIError.is(id, AIError.Flag.AccountPolicy) || this.isCyberRefusal(message)) return true;
 		return AIError.retriable(id);
 	}
 
@@ -1820,8 +1856,18 @@ export class TurnRecovery {
 		);
 	}
 
-	/** Checks whether a provider error represents a classifier refusal. */
-	isClassifierRefusal(message: AssistantMessage): boolean {
+	/**
+	 * Checks whether a provider error refused the turn for its content: a
+	 * classifier refusal, an OpenAI content filter, or Codex's `cyber_policy`
+	 * denial. Account-scoped denials another credential can clear are not
+	 * refusals and stay on rotation.
+	 */
+	isCyberRefusal(message: AssistantMessage): boolean {
+		return AIError.isCyberRefusal(message, this.#classifyRetryMessage(message));
+	}
+
+	/** A `stopDetails` classifier refusal, without the content-policy shapes. */
+	#isStopDetailsRefusal(message: AssistantMessage): boolean {
 		if (message.stopReason !== "error") return false;
 		const stopType = message.stopDetails?.type;
 		return stopType === "refusal" || stopType === "sensitive";
@@ -1846,22 +1892,20 @@ export class TurnRecovery {
 		if (this.#fallbackChainsValidated) return;
 		this.#fallbackChainsValidated = true;
 		let deferred = false;
-		validateRetryFallbackChains(
-			this.#host.settings,
-			this.#host.modelRegistry,
-			message => {
-				logger.warn(message);
-				this.#fallbackChainWarnings.add(message);
-				this.#host.configWarnings.push(message);
+		const report = (message: string): void => {
+			logger.warn(message);
+			this.#fallbackChainWarnings.add(message);
+			this.#host.configWarnings.push(message);
+		};
+		const validationOptions = {
+			isDiscoveryPending: (provider: string) => {
+				const pending = this.#host.modelRegistry.isProviderDiscoveryPending(provider);
+				if (pending) deferred = true;
+				return pending;
 			},
-			{
-				isDiscoveryPending: provider => {
-					const pending = this.#host.modelRegistry.isProviderDiscoveryPending(provider);
-					if (pending) deferred = true;
-					return pending;
-				},
-			},
-		);
+		};
+		validateRetryFallbackChains(this.#host.settings, this.#host.modelRegistry, report, validationOptions);
+		validateRetryCyberFallbackModels(this.#host.settings, this.#host.modelRegistry, report, validationOptions);
 		this.#pendingDiscoveryDeferredValidation = deferred;
 	}
 
@@ -1882,7 +1926,11 @@ export class TurnRecovery {
 	 */
 	revalidateRetryFallbackChainsAfterDiscovery(): boolean {
 		const definitive = new Set<string>();
-		validateRetryFallbackChains(this.#host.settings, this.#host.modelRegistry, message => definitive.add(message));
+		const collect = (message: string): void => {
+			definitive.add(message);
+		};
+		validateRetryFallbackChains(this.#host.settings, this.#host.modelRegistry, collect);
+		validateRetryCyberFallbackModels(this.#host.settings, this.#host.modelRegistry, collect);
 		this.#pendingDiscoveryDeferredValidation = false;
 		let changed = false;
 		for (const message of Array.from(this.#fallbackChainWarnings)) {
@@ -2288,6 +2336,8 @@ export class TurnRecovery {
 			if (this.#activeRetryFallback) this.#activeRetryFallback.served = servedBeforeSwap;
 			return false;
 		}
+		// A model a refusal walk lands on gets its own same-model refusal retries.
+		this.#classifierRefusalRetries = 0;
 		this.#host.sessionManager.appendModelChange(candidateSelector, EPHEMERAL_MODEL_CHANGE_ROLE, true);
 		this.#host.settings.getStorage()?.recordModelUsage(candidateSelector);
 		this.#host.setThinkingLevel(nextThinkingLevel);
@@ -2312,6 +2362,59 @@ export class TurnRecovery {
 			reason: options?.reason,
 		});
 		return true;
+	}
+
+	/**
+	 * Walk the `retry.cyberFallbackModels` entry matched for the refused model.
+	 *
+	 * Each entry is resolved through the same selector path a chain entry uses
+	 * (`@role` references and thinking suffixes included), and a model the walk
+	 * has already been refused on this turn is skipped, so a map whose entries
+	 * point back at each other terminates. Returns true when the active model
+	 * switched.
+	 */
+	async #tryCyberFallback(
+		currentSelector: string,
+		failedMessage: AssistantMessage,
+		match: RetryCyberFallbackMatch,
+		options?: { preserveFailedTurn?: boolean },
+	): Promise<boolean> {
+		const ceiling = this.#host.thinkingLevelCeiling();
+		for (const entry of match.selectors) {
+			const resolved = resolveModelOverride([entry], this.#host.modelRegistry, this.#host.settings);
+			const candidate = resolved.model;
+			if (!candidate) continue;
+			const selector: RetryFallbackSelector = {
+				raw: entry,
+				provider: candidate.provider,
+				id: candidate.id,
+				thinkingLevel: resolved.explicitThinkingLevel ? resolved.thinkingLevel : undefined,
+			};
+			// The walk is bounded by resolved model, not by the configured entry: two
+			// entries (`@cyber`, `mistral/deepseek-v4-1-flash-1017`) can name one model.
+			const visitedKey = formatRetryFallbackBaseSelector(selector);
+			if (this.#refusalWalkTried.has(visitedKey)) continue;
+			if (this.isRetryFallbackSelectorSuppressed(selector)) continue;
+			if (this.#isNoOpRetryFallback(candidate, selector)) continue;
+			if (ceiling !== undefined && !modelSupportsEffortCeiling(candidate, ceiling)) continue;
+			if (!this.#host.contextFitsModel(candidate, options?.preserveFailedTurn ? undefined : failedMessage)) {
+				continue;
+			}
+			let apiKey: string | undefined;
+			try {
+				apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
+			} catch (error) {
+				if (!(error instanceof AIError.MissingApiKeyError)) throw error;
+			}
+			if (!apiKey) continue;
+			const applied = await this.applyRetryFallbackCandidate(match.key, selector, currentSelector, {
+				pinFallback: true,
+				apiKey,
+				reason: `Refused: ${failedMessage.errorMessage ?? "provider classifier refused the turn"}`,
+			});
+			if (applied) return true;
+		}
+		return false;
 	}
 
 	async #tryRetryModelFallback(
@@ -2520,7 +2623,7 @@ export class TurnRecovery {
 		if (this.#hasReplayUnsafeOutput(message)) return false;
 		// A content refusal/sensitivity stop is the model's decision, not a route
 		// failure — switching to the base model would just re-trigger it.
-		if (this.isClassifierRefusal(message)) return false;
+		if (this.#isStopDetailsRefusal(message)) return false;
 		const id = this.#classifyRetryMessage(message);
 		if (AIError.isContextOverflow(message, model.contextWindow ?? 0)) return false;
 		if (AIError.is(id, AIError.Flag.UsageLimit)) return false;
@@ -2557,7 +2660,7 @@ export class TurnRecovery {
 		if (immutableAnthropicThinkingError) return false;
 		const retrySettings = cfgRetry.get(this.#host.settings);
 		if (!retrySettings.enabled || !retrySettings.modelFallback) return false;
-		if (this.isClassifierRefusal(message)) return false;
+		if (this.#isStopDetailsRefusal(message)) return false;
 		const id = this.#classifyRetryMessage(message);
 		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return false;
 		if (!retryFallbackAdmits(retrySettings.fallbackOn, AIError.is(id, AIError.Flag.UsageLimit))) return false;
@@ -2715,7 +2818,7 @@ export class TurnRecovery {
 		// not a retry loop, so it runs even when the user disabled retries: it switches
 		// the model once and lets the base turn proceed.
 		if (!retrySettings.enabled && !options?.fireworksFastFallback) return false;
-		const classifierRefusal = this.isClassifierRefusal(message);
+		const cyberRefusal = this.isCyberRefusal(message);
 
 		const generation = this.#host.promptGeneration();
 		if (this.#retryAttempt === 0) this.#genericAbortStreak = 0;
@@ -2747,11 +2850,15 @@ export class TurnRecovery {
 
 		const errorMessage = message.errorMessage || "Unknown error";
 		const id = this.#classifyRetryMessage(message);
+		// A refused turn is never preserved, whatever the caller asked for: the
+		// classifier declined this exact request, and the partial turn it left —
+		// plus the synthetic results paired with its unexecuted calls — must not
+		// replay on the retry or on any fallback hop.
 		const preserveFailedTurn =
-			options?.preserveFailedTurn === true ||
-			(!classifierRefusal &&
-				(AIError.is(id, AIError.Flag.MalformedFunctionCall) || AIError.retriable(id)) &&
-				this.#unexecutedToolCallsReplaySafe(message));
+			!cyberRefusal &&
+			(options?.preserveFailedTurn === true ||
+				((AIError.is(id, AIError.Flag.MalformedFunctionCall) || AIError.retriable(id)) &&
+					this.#unexecutedToolCallsReplaySafe(message)));
 		const rateLimitReason = parseRateLimitReason(errorMessage);
 		// A rate limit is a cap the next attempt on this model re-hits, so
 		// retry.rateLimitWalksChain lets it skip the signed-thinking deferral in
@@ -2916,11 +3023,32 @@ export class TurnRecovery {
 		const currentSelector = currentModel
 			? formatRetryFallbackSelector(currentModel, this.#host.thinkingLevel())
 			: undefined;
-		if (accountPolicyDenial && currentModel) {
+		// `retry.cyberFallbackModels` is a model-glob map. A refusal on a model one
+		// of its keys matches first gets same-model retries — the classifier is
+		// stochastic — and only then the matched replacements. A refusal no key
+		// matches keeps its immediate chain walk below, and a session that may not
+		// switch models at all never pays for the extra retries.
+		const cyberFallbackEligible =
+			cyberRefusal &&
+			allowModelFallback &&
+			retrySettings.modelFallback &&
+			retryFallbackAdmits(retrySettings.fallbackOn, AIError.is(id, AIError.Flag.UsageLimit));
+		const cyberFallbackMatch =
+			cyberFallbackEligible && currentModel
+				? matchRetryCyberFallbackModels(cfgRetryCyberFallbackModels.get(this.#host.settings), currentModel)
+				: undefined;
+		// A mapped `cyber_policy` denial is a content refusal the map owns: no sibling
+		// account is spent on it, and its same-model retries always apply.
+		const mappedCyberPolicy = accountPolicyDenial && cyberRefusal && cyberFallbackMatch !== undefined;
+		// Set when every account of the failing provider has already been tried this
+		// saga: re-asking the same account cannot clear an account-scoped denial.
+		let accountRotationExhausted = false;
+		if (accountPolicyDenial && currentModel && !mappedCyberPolicy) {
 			const accountPolicyKey = `${currentModel.provider}/${currentModel.id}`;
 			const rotationsRemaining =
 				this.#accountPolicyRotationsRemaining.get(accountPolicyKey) ??
 				Math.max(0, this.#host.modelRegistry.authStorage.credentials.list(currentModel.provider).length - 1);
+			accountRotationExhausted = rotationsRemaining === 0;
 			this.#accountPolicyRotationsRemaining.set(accountPolicyKey, Math.max(0, rotationsRemaining - 1));
 			// `rotate` may sleep out a sibling's short block; register its signal
 			// as the retry controller so `abortRetry()` cancels that wait exactly
@@ -2949,6 +3077,14 @@ export class TurnRecovery {
 			}
 			if (switchedCredential) delayMs = 0;
 		}
+		const cyberRefusalRetry =
+			cyberFallbackMatch !== undefined &&
+			this.#classifierRefusalRetries < CLASSIFIER_REFUSAL_SAME_MODEL_RETRIES &&
+			// An unmapped `cyber_policy` denial keeps the rotation-first behavior: once
+			// every account has been tried, re-asking this one cannot succeed, so the
+			// map walk follows immediately. A mapped denial never rotates, so its
+			// retries always apply.
+			!(accountPolicyDenial && accountRotationExhausted);
 		// A thinking-loop abort is not a provider failure — it is the loop guard
 		// asking for a same-model resample, paired with a hidden
 		// `thinking-loop-redirect` notice that only makes sense on the model that
@@ -3035,7 +3171,7 @@ export class TurnRecovery {
 			// one model at most once per turn, so A -> B -> A terminates whatever the
 			// chains say.
 			const refusalWalkKey = this.#refusalWalkKey(currentSelector);
-			const refusalWalkRepeats = classifierRefusal && this.#refusalWalkTried.has(refusalWalkKey);
+			const refusalWalkRepeats = cyberRefusal && this.#refusalWalkTried.has(refusalWalkKey);
 			if (
 				allowModelFallback &&
 				retrySettings.modelFallback &&
@@ -3044,10 +3180,21 @@ export class TurnRecovery {
 				!sameModelSteerReplay &&
 				!waitForSiblingCredential &&
 				!refusalWalkRepeats &&
+				// A model `retry.cyberFallbackModels` covers keeps its own retries first.
+				!cyberRefusalRetry &&
 				!this.#isFirstAttemptMidStreamSocketDrop(message, id, retryBudgetExhausted)
 			) {
-				if (classifierRefusal) {
+				if (cyberRefusal) {
 					this.#refusalWalkTried.add(refusalWalkKey);
+					// The refusal map is consulted before the chains, and re-consulted for
+					// every model a hop lands on, so opus -> astra -> @cyber chains through
+					// its own keys. Entries already refused this turn are skipped, and an
+					// exhausted map falls through to the chain walk below.
+					if (cyberFallbackMatch) {
+						switchedModel = await this.#tryCyberFallback(currentSelector, message, cyberFallbackMatch, {
+							preserveFailedTurn,
+						});
+					}
 				} else {
 					// A usage-limit wait already knows when this provider can serve
 					// the session again (report reset, merged credential block,
@@ -3057,35 +3204,37 @@ export class TurnRecovery {
 					const usageCooldownMs = recordedUsageLimitOutcome?.switchedCredential ? undefined : usageLimitWaitMs;
 					this.noteRetryFallbackCooldown(currentSelector, usageCooldownMs ?? parsedRetryAfterMs, errorMessage);
 				}
-				switchedModel = await this.#tryRetryModelFallback(currentSelector, message, {
-					excludeProvider: longUsageLimitFallback ? currentModel.provider : undefined,
-					pinFallback: classifierRefusal,
-					refusalWalk: classifierRefusal,
-					preserveFailedTurn,
-					wrapAround: longUsageLimitFallback,
-					cooldownLastResort: !retryBudgetExhausted,
-					// Deferring a chain candidate only pays when the code below makes
-					// another attempt on this model that can succeed. Each term is a
-					// branch below that, with no switch, ends the turn instead (a spent
-					// budget, a refusal or account-policy denial, a hard-error or
-					// Fast-degrade consult the classifier would not retry, a wait past
-					// the fail-fast cap), or, under `retry.rateLimitWalksChain`, a rate
-					// limit on this model, which the next attempt re-hits.
-					sameModelRetryAvailable:
-						!retryBudgetExhausted &&
-						!sourceRateLimited &&
-						!classifierRefusal &&
-						!accountPolicyDenial &&
-						!(
-							(options?.fireworksFastFallback || options?.hardErrorFallback) &&
-							!this.isRetryableError(message)
-						) &&
-						!exceedsDelayCap(
-							usageLimitWaitMs === undefined && parsedRetryAfterMs && parsedRetryAfterMs > delayMs
-								? parsedRetryAfterMs
-								: delayMs,
-						),
-				});
+				if (!switchedModel) {
+					switchedModel = await this.#tryRetryModelFallback(currentSelector, message, {
+						excludeProvider: longUsageLimitFallback ? currentModel.provider : undefined,
+						pinFallback: cyberRefusal,
+						refusalWalk: cyberRefusal,
+						preserveFailedTurn,
+						wrapAround: longUsageLimitFallback,
+						cooldownLastResort: !retryBudgetExhausted,
+						// Deferring a chain candidate only pays when the code below makes
+						// another attempt on this model that can succeed. Each term is a
+						// branch below that, with no switch, ends the turn instead (a spent
+						// budget, a refusal or account-policy denial, a hard-error or
+						// Fast-degrade consult the classifier would not retry, a wait past
+						// the fail-fast cap), or, under `retry.rateLimitWalksChain`, a rate
+						// limit on this model, which the next attempt re-hits.
+						sameModelRetryAvailable:
+							!retryBudgetExhausted &&
+							!sourceRateLimited &&
+							!cyberRefusal &&
+							!accountPolicyDenial &&
+							!(
+								(options?.fireworksFastFallback || options?.hardErrorFallback) &&
+								!this.isRetryableError(message)
+							) &&
+							!exceedsDelayCap(
+								usageLimitWaitMs === undefined && parsedRetryAfterMs && parsedRetryAfterMs > delayMs
+									? parsedRetryAfterMs
+									: delayMs,
+							),
+					});
+				}
 			}
 			// Auto fallback from a Fireworks Fast variant to its base model. Independent
 			// of the role-fallback setting: it's intrinsic to the Fast contract (speed
@@ -3096,13 +3245,22 @@ export class TurnRecovery {
 			}
 			if (switchedModel) {
 				delayMs = 0;
+				// A model a refusal walk lands on starts with its own retry budget,
+				// exactly as a chain hop past a spent budget does.
+				if (cyberRefusal) {
+					this.#retryAttempt = 1;
+					this.#genericAbortStreak = 0;
+				}
 			} else if (usageLimitWaitMs === undefined && parsedRetryAfterMs && parsedRetryAfterMs > delayMs) {
 				delayMs = parsedRetryAfterMs;
 			}
 		}
 
 		if (retryBudgetExhausted) {
-			if (!switchedModel && !switchedCredential) {
+			// A refusal the cyber map covers keeps its own retries even when the
+			// provider-error budget is spent: the classifier declines the request,
+			// not the model.
+			if (!switchedModel && !switchedCredential && !cyberRefusalRetry) {
 				const attempt = this.#retryAttempt - 1;
 				message.errorMessage = `Retry budget exhausted after ${attempt} ${attempt === 1 ? "retry" : "retries"}: ${errorMessage}`;
 				await this.#closeRetrySaga(
@@ -3122,7 +3280,7 @@ export class TurnRecovery {
 		// Classifier refusals (e.g. Anthropic cyber) are often false positives on
 		// benign turns: with no fallback available, fall through to the normal
 		// backoff retry, bounded by the retry budget above.
-		if (accountPolicyDenial && !switchedCredential && !switchedModel) {
+		if (accountPolicyDenial && !switchedCredential && !switchedModel && !cyberRefusalRetry) {
 			// A prior attempt in this saga already announced `auto_retry_start`
 			// (retryAttempt was incremented for each call to this method, so > 1
 			// means at least one earlier attempt started the loop) but this
@@ -3181,6 +3339,10 @@ export class TurnRecovery {
 			return false;
 		}
 
+		// A refusal retry is spent here, once it is certain this attempt schedules
+		// another one: every dead end above returns without reaching this point.
+		if (cyberRefusalRetry) this.#classifierRefusalRetries++;
+
 		await this.#recordPendingRetryError(message, id, { switchedCredential, switchedModel, delayMs });
 		// Quota resets elapse while the machine sleeps; capture the deadline before event delivery.
 		const usageResetDeadline = AIError.is(id, AIError.Flag.UsageLimit) ? Date.now() + delayMs : undefined;
@@ -3188,7 +3350,8 @@ export class TurnRecovery {
 		await this.#host.emitSessionEvent({
 			type: "auto_retry_start",
 			attempt: this.#retryAttempt,
-			maxAttempts: maxRetries,
+			// A cyber-covered refusal may outlast `retry.maxRetries` on the same model.
+			maxAttempts: cyberRefusalRetry ? Math.max(maxRetries, CLASSIFIER_REFUSAL_SAME_MODEL_RETRIES) : maxRetries,
 			delayMs,
 			errorMessage,
 			errorId: message.errorId,
@@ -3199,11 +3362,10 @@ export class TurnRecovery {
 
 		// Resolved stream-stall tools and proven-unexecuted malformed calls keep
 		// their assistant/result pair. Continuation then sees explicit synthetic
-		// results and cannot repeat a side effect. Classifier refusals drop the
-		// whole turn (calls were never executed) so the model never sees it.
-		if (classifierRefusal) {
-			this.removeFailedTurnFromActiveContext(message, "auto-retry-refusal");
-		} else if (!preserveFailedTurn) {
+		// results and cannot repeat a side effect. A refused turn is never kept:
+		// its assistant message and the synthetic results paired with its
+		// unexecuted calls leave active context together.
+		if (!preserveFailedTurn) {
 			this.removeAssistantMessageFromActiveContext(message, "auto-retry");
 		}
 

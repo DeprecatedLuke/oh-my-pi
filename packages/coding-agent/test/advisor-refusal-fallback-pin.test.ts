@@ -18,6 +18,9 @@ import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 // The advisor must stay on its fallback instead of returning to the refusing
 // model after every cooldown, and may retry it once a compaction has replaced
 // the history that triggered the refusal.
+const CYBER_POLICY_MESSAGE =
+	"This content was flagged for possible cybersecurity risk. Join Trusted Access for Cyber. (code=cyber_policy)";
+
 describe("advisor classifier-refusal fallback", () => {
 	const PAST_COOLDOWN_MS = 10 * 60_000;
 	let tempDir: TempDir;
@@ -55,7 +58,15 @@ describe("advisor classifier-refusal fallback", () => {
 		modelRegistry.clearSuppressedSelectors();
 	});
 
-	async function startSession(primaryFailure: "refusal" | "overloaded", scenario: { fallbackRefuses?: boolean } = {}) {
+	async function startSession(
+		primaryFailure: "refusal" | "overloaded",
+		scenario: {
+			fallbackRefuses?: boolean;
+			cyberPolicy?: boolean;
+			cyberFallbackModels?: Record<string, string | string[]>;
+			refusingIds?: readonly string[];
+		} = {},
+	) {
 		const runtime = new ExtensionRuntime();
 		const extension = await loadExtensionFromFactory(
 			pi => {
@@ -79,6 +90,8 @@ describe("advisor classifier-refusal fallback", () => {
 		const primary = createMockModel({ handler: { content: ["primary complete"] } });
 		const advisorMock = createMockModel();
 		const advisorRequests: string[] = [];
+		const advisorContexts: string[][] = [];
+		const fallbackRoles: string[] = [];
 		let providerFailed = false;
 		const controls = { primaryRefuses: true };
 		const agent = new Agent({
@@ -98,6 +111,7 @@ describe("advisor classifier-refusal fallback", () => {
 					`${secondFallback.provider}/${secondFallback.id}`,
 				],
 			},
+			...(scenario.cyberFallbackModels ? { "retry.cyberFallbackModels": scenario.cyberFallbackModels } : {}),
 		});
 		settings.setModelRole("advisor", `${advisorPrimary.provider}/${advisorPrimary.id}`);
 		session = new AgentSession({
@@ -109,17 +123,27 @@ describe("advisor classifier-refusal fallback", () => {
 			advisorTools: [],
 			advisorStreamFn: (model, context, options) => {
 				advisorRequests.push(model.id);
+				advisorContexts.push(
+					context.messages.map(message =>
+						message.role === "assistant" ? `assistant:${message.stopReason}` : message.role,
+					),
+				);
 				const refuses =
+					scenario.refusingIds?.includes(model.id) === true ||
 					(model.id === advisorPrimary.id && primaryFailure === "refusal" && controls.primaryRefuses) ||
 					(model.id === advisorFallback.id && scenario.fallbackRefuses === true);
 				const overloads = model.id === advisorPrimary.id && primaryFailure === "overloaded" && !providerFailed;
 				if (refuses) {
-					advisorMock.push({
-						content: [],
-						stopReason: "error",
-						stopDetails: { type: "refusal", category: "cyber", explanation: "Declined." },
-						errorMessage: "Refusal (cyber): Declined.",
-					});
+					advisorMock.push(
+						scenario.cyberPolicy
+							? { content: [], stopReason: "error", errorMessage: CYBER_POLICY_MESSAGE }
+							: {
+									content: [],
+									stopReason: "error",
+									stopDetails: { type: "refusal", category: "cyber", explanation: "Declined." },
+									errorMessage: "Refusal (cyber): Declined.",
+								},
+					);
 				} else if (overloads) {
 					providerFailed = true;
 					advisorMock.push({ throw: "overloaded_error: provider returned error 503" });
@@ -133,6 +157,7 @@ describe("advisor classifier-refusal fallback", () => {
 		const s = session;
 		const fellBack = Promise.withResolvers<void>();
 		s.subscribe(event => {
+			if (event.type === "retry_fallback_applied") fallbackRoles.push(event.role);
 			if (event.type === "retry_fallback_succeeded") fellBack.resolve();
 		});
 		expect(s.setAdvisorEnabled(true)).toBe(true);
@@ -144,7 +169,7 @@ describe("advisor classifier-refusal fallback", () => {
 		await s.prompt("first turn triggers the fallback");
 		await s.waitForIdle();
 		await fellBack.promise;
-		return { s, advisorRequests, review, controls };
+		return { s, advisorRequests, advisorContexts, fallbackRoles, review, controls };
 	}
 
 	it("keeps a refusal fallback past the cooldown a provider failure would observe", async () => {
@@ -209,5 +234,60 @@ describe("advisor classifier-refusal fallback", () => {
 
 		expect(advisorRequests.filter(id => id === advisorPrimary.id)).toHaveLength(primaryRequests);
 		expect(s.getAdvisorAgent()?.state.model.id).toBe(secondFallback.id);
+	});
+
+	it("hops a refusing advisor through retry.cyberFallbackModels before its chain", async () => {
+		const { s, advisorRequests, fallbackRoles } = await startSession("refusal", {
+			cyberFallbackModels: { "*sonnet*": `${secondFallback.provider}/${secondFallback.id}` },
+		});
+
+		// Three same-model retries, then the mapped model — not the chain's first entry.
+		expect(advisorRequests.filter(id => id === advisorPrimary.id)).toHaveLength(4);
+		expect(advisorRequests).not.toContain(advisorFallback.id);
+		expect(advisorRequests.at(-1)).toBe(secondFallback.id);
+		expect(fallbackRoles).toEqual(["*sonnet*"]);
+		expect(s.getAdvisorAgent()?.state.model.id).toBe(secondFallback.id);
+	});
+
+	it("chains a second refusing advisor model through the map", async () => {
+		const { s, advisorRequests, fallbackRoles } = await startSession("refusal", {
+			cyberFallbackModels: {
+				"*sonnet*": `${advisorFallback.provider}/${advisorFallback.id}`,
+				"*gemini*": `${secondFallback.provider}/${secondFallback.id}`,
+			},
+			refusingIds: [advisorFallback.id],
+		});
+
+		// Each model the walk lands on gets its own three retries, then re-matches.
+		expect(advisorRequests.filter(id => id === advisorPrimary.id)).toHaveLength(4);
+		expect(advisorRequests.filter(id => id === advisorFallback.id)).toHaveLength(4);
+		expect(advisorRequests.at(-1)).toBe(secondFallback.id);
+		expect(fallbackRoles).toEqual(["*sonnet*", "*gemini*"]);
+		expect(s.getAdvisorAgent()?.state.model.id).toBe(secondFallback.id);
+	});
+
+	it("hops a mapped advisor cyber_policy denial without rotating accounts", async () => {
+		const rotateSpy = vi.spyOn(authStorage.limits, "rotate");
+		const { s, advisorRequests } = await startSession("refusal", {
+			cyberPolicy: true,
+			cyberFallbackModels: { "*sonnet*": `${secondFallback.provider}/${secondFallback.id}` },
+		});
+
+		// Three same-account retries, then the mapped model; no credential rotation.
+		expect(advisorRequests.filter(id => id === advisorPrimary.id)).toHaveLength(4);
+		expect(advisorRequests.at(-1)).toBe(secondFallback.id);
+		expect(rotateSpy).not.toHaveBeenCalled();
+		expect(s.getAdvisorAgent()?.state.model.id).toBe(secondFallback.id);
+	});
+
+	it("never sends a refused advisor turn back to the provider", async () => {
+		const { advisorContexts } = await startSession("refusal", {
+			cyberFallbackModels: { "*sonnet*": `${secondFallback.provider}/${secondFallback.id}` },
+		});
+
+		expect(advisorContexts.length).toBeGreaterThan(1);
+		for (const context of advisorContexts) {
+			expect(context).not.toContain("assistant:error");
+		}
 	});
 });

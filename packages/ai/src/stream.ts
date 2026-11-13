@@ -1078,8 +1078,13 @@ function isRetryableUpstreamError(
 	error: unknown,
 	status: number | undefined,
 	message: string | undefined,
+	options?: { cyberPolicyRotatesCredentials?: boolean },
 ): boolean {
-	if (AIError.isAuthRetryableError(error)) return true;
+	// A caller that owns cyber refusals itself (`retry.cyberFallbackModels`) must
+	// not spend sibling accounts on a content denial; plan/entitlement denials,
+	// 401s, 403s, and usage limits keep rotating.
+	if (options?.cyberPolicyRotatesCredentials === false && AIError.isCyberPolicyError(error)) return false;
+	if (AIError.isAuthRetryableError(error, options)) return true;
 	// 401 means the credential is bad; 403 is its valid-token twin (access
 	// denied by plan, model policy, or org restriction — a sibling account may
 	// not share it). Explicit account-scoped policy errors such as Codex
@@ -1266,6 +1271,7 @@ function streamSimpleRequest<TApi extends Api>(
 							event.error,
 							extractStatusFromAssistantError(event.error),
 							event.error.errorMessage,
+							requestOptions,
 						)
 					) {
 						return {
@@ -1293,6 +1299,7 @@ function streamSimpleRequest<TApi extends Api>(
 						error,
 						AIError.status(error),
 						error instanceof Error ? error.message : undefined,
+						requestOptions,
 					)
 				) {
 					return { error: contextualizeAuthRetryError(model, error), bufferedEvents };

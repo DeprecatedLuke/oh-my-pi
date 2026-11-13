@@ -1,5 +1,11 @@
 import { extractHttpStatusFromError } from "@oh-my-pi/pi-utils";
-import { isAccountPolicyError, isClinePassSurfaceGateMessage, isOAuthExpiry, isUsageLimit } from "./flags";
+import {
+	isAccountPolicyError,
+	isClinePassSurfaceGateMessage,
+	isCyberPolicyError,
+	isOAuthExpiry,
+	isUsageLimit,
+} from "./flags";
 import { OAuthError } from "./oauth";
 import { isConcurrencyCapExclusion, isUsageLimitOutcome } from "./rate-limit";
 
@@ -36,8 +42,11 @@ export function isInvalidatedOAuthTokenError(error: unknown): boolean {
  * a bare `429` whose payload did not preserve a richer quota code. Transient
  * 429s (`Too many requests`, per-minute caps) stay in the upstream-backoff lane.
  */
-export function isAuthRetryableError(error: unknown): boolean {
+export function isAuthRetryableError(error: unknown, options?: { cyberPolicyRotatesCredentials?: boolean }): boolean {
 	if (error instanceof OAuthError && error.kind === "token-refresh") return true;
+	// A caller that owns cyber refusals itself must not spend sibling accounts on
+	// a content denial; every other account-scoped denial keeps rotating.
+	if (options?.cyberPolicyRotatesCredentials === false && isCyberPolicyError(error)) return false;
 	if (isUsageLimit(error)) return true;
 	if (isAccountPolicyError(error)) return true;
 	if (isInvalidatedOAuthTokenError(error)) return true;

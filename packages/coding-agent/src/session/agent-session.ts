@@ -4354,7 +4354,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		if (this.#sessionMessageAlreadyPersisted(message)) return;
 		if (message.role === "assistant") {
 			const assistantMsg = message as AssistantMessage;
-			if (this.#recovery.isClassifierRefusal(assistantMsg)) {
+			if (this.#recovery.isCyberRefusal(assistantMsg)) {
 				for (const block of assistantMsg.content) {
 					if (block.type === "toolCall") this.#refusedToolCallIds.add(block.id);
 				}
@@ -5321,9 +5321,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			// Fall through to the standard error tail so `session_stop` hooks (block,
 			// continue, telemetry) still fire — matching the pre-fix flow for
 			// `stopReason === "error"`.
-			if (this.#recovery.isClassifierRefusal(msg)) {
+			if (this.#recovery.isCyberRefusal(msg)) {
 				this.#prunedTerminalFailure = msg;
-				this.#recovery.removeFailedTurnFromActiveContext(msg, "terminal-refusal");
+				this.#recovery.removeAssistantMessageFromActiveContext(msg, "terminal-refusal");
 			} else if (!AIError.isContextOverflow(msg, this.model?.contextWindow ?? 0)) {
 				// No retry, fallback, or compaction continuation fired: this errored
 				// turn ends the run. #persistSessionMessageIfMissing dropped it as an

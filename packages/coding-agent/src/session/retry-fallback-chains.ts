@@ -12,9 +12,15 @@ import {
 	resolveThinkingLevelForModel,
 } from "@oh-my-pi/pi-tui/thinking";
 import { resolveConfiguredModelPatterns, resolveModelRoleValue } from "../config/model-resolver";
-import { getRoleInfo, isKindRole } from "../config/model-roles";
+import { getRoleInfo, isKindRole, MODEL_ROLE_ALIAS_PREFIX } from "../config/model-roles";
 
-import { cfgRetryFallbackChains, cfgRetryFallbackRevertPolicy, type RetrySettings } from "./settings";
+import {
+	cfgRetryCyberFallbackModels,
+	cfgRetryFallbackChains,
+	cfgRetryFallbackRevertPolicy,
+	type RetryCyberFallbackModels,
+	type RetrySettings,
+} from "./settings";
 
 /** Configured fallback chains keyed by role or model selector. */
 export type RetryFallbackChains = Record<string, string[]>;
@@ -351,6 +357,140 @@ export function validateRetryFallbackChains(
 /** Returns the configured fallback-primary restoration policy. */
 export function getRetryFallbackRevertPolicy(settings: Settings): RetryFallbackRevertPolicy {
 	return cfgRetryFallbackRevertPolicy.get(settings) === "never" ? "never" : "cooldown-expiry";
+}
+
+/** One matched `retry.cyberFallbackModels` entry: the configured key and its replacement selectors. */
+export interface RetryCyberFallbackMatch {
+	/** Configured key that matched the refused model. */
+	key: string;
+	/** Replacement selectors in configured order. */
+	selectors: readonly string[];
+}
+
+/** Ordered selector list configured for one cyber-fallback key. */
+function retryCyberFallbackSelectors(value: string | readonly string[] | undefined): string[] {
+	if (typeof value === "string") return value.trim() ? [value.trim()] : [];
+	if (!Array.isArray(value)) return [];
+	return value
+		.filter((entry): entry is string => typeof entry === "string")
+		.map(entry => entry.trim())
+		.filter(entry => entry.length > 0);
+}
+
+/**
+ * Compile a cyber-fallback key to an anchored matcher. `*` is the only
+ * metacharacter and matches any run, including an empty one, so `*opus-*`
+ * matches `claude-opus-5-5` and `*` matches everything.
+ */
+function retryCyberGlobMatcher(pattern: string): (subject: string) => boolean {
+	if (!pattern.includes("*")) {
+		const literal = pattern.toLowerCase();
+		return subject => subject.toLowerCase() === literal;
+	}
+	let source = "";
+	for (const char of pattern) {
+		source += char === "*" ? ".*" : char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	}
+	const matcher = new RegExp(`^${source}$`, "i");
+	return subject => matcher.test(subject);
+}
+
+/** Characters a glob key pins literally; the tie-breaker between matching globs. */
+function retryCyberGlobLiteralLength(pattern: string): number {
+	let length = 0;
+	for (const char of pattern) if (char !== "*") length++;
+	return length;
+}
+
+/**
+ * Match a refused model against `retry.cyberFallbackModels`.
+ *
+ * Keys containing `/` match `provider/model-id`; every other key matches the
+ * bare model id. An exact key beats any glob, and among globs the one pinning
+ * the longest literal run wins; a remaining tie keeps configured order.
+ */
+export function matchRetryCyberFallbackModels(
+	models: RetryCyberFallbackModels,
+	model: { provider: string; id: string },
+): RetryCyberFallbackMatch | undefined {
+	const providerId = `${model.provider}/${model.id}`;
+	let bestKey: string | undefined;
+	let bestSelectors: readonly string[] = [];
+	let bestRank = -1;
+	for (const key in models) {
+		const selectors = retryCyberFallbackSelectors(models[key]);
+		if (selectors.length === 0) continue;
+		const subject = key.includes("/") ? providerId : model.id;
+		if (!retryCyberGlobMatcher(key)(subject)) continue;
+		// An exact key outranks every glob regardless of how much the glob pins.
+		const rank = key.includes("*") ? retryCyberGlobLiteralLength(key) : Number.POSITIVE_INFINITY;
+		if (rank <= bestRank) continue;
+		bestKey = key;
+		bestSelectors = selectors;
+		bestRank = rank;
+	}
+	return bestKey === undefined ? undefined : { key: bestKey, selectors: bestSelectors };
+}
+
+/**
+ * Validates `retry.cyberFallbackModels` and reports each warning via `warn`.
+ *
+ * Keys are globs over model ids, so only the replacement selectors are checked:
+ * each must parse like a `retry.fallbackChains` entry (or expand from an
+ * `@role` reference) and name a model the catalog knows. `isDiscoveryPending`
+ * suppresses "unknown model" warnings for providers whose discovery has not
+ * settled yet, exactly as {@link validateRetryFallbackChains} does.
+ */
+export function validateRetryCyberFallbackModels(
+	settings: Settings,
+	modelRegistry: Pick<ModelRegistry, "find" | "hasProvider">,
+	warn: (message: string) => void,
+	options: { isDiscoveryPending?: (provider: string) => boolean } = {},
+): void {
+	const configured = cfgRetryCyberFallbackModels.get(settings);
+	if (configured === undefined) return;
+	const isDiscoveryPending = options.isDiscoveryPending ?? (() => false);
+	if (!configured || typeof configured !== "object" || Array.isArray(configured)) {
+		warn("retry.cyberFallbackModels must be a mapping of model globs to selector strings or arrays.");
+		return;
+	}
+	for (const key in configured) {
+		if (!key.trim()) {
+			warn("retry.cyberFallbackModels contains an empty key.");
+			continue;
+		}
+		const selectors = retryCyberFallbackSelectors(configured[key]);
+		if (selectors.length === 0) {
+			warn(`retry.cyberFallbackModels entry '${key}' must be a selector string or an array of selector strings.`);
+			continue;
+		}
+		for (const selector of selectors) {
+			const rolePatterns = resolveConfiguredModelPatterns(selector, settings);
+			if (rolePatterns.length === 0 && selector.startsWith(MODEL_ROLE_ALIAS_PREFIX)) {
+				warn(`retry.cyberFallbackModels entry '${key}' references unknown role: ${selector}`);
+				continue;
+			}
+			for (const pattern of rolePatterns.length > 0 ? rolePatterns : [selector]) {
+				if (isRetryFallbackWildcardKey(pattern)) {
+					const { provider } = parseRetryFallbackWildcard(pattern, candidate =>
+						isKnownProvider(modelRegistry, candidate),
+					);
+					if (!isKnownProvider(modelRegistry, provider)) {
+						warn(`retry.cyberFallbackModels entry '${key}' references unknown provider: ${pattern}`);
+					}
+					continue;
+				}
+				const parsed = parseRetryFallbackSelector(pattern, modelRegistry);
+				if (!parsed) {
+					warn(`Invalid fallback selector in retry.cyberFallbackModels entry '${key}': ${pattern}`);
+					continue;
+				}
+				if (!modelRegistry.find(parsed.provider, parsed.id) && !isDiscoveryPending(parsed.provider)) {
+					warn(`retry.cyberFallbackModels entry '${key}' references unknown model: ${pattern}`);
+				}
+			}
+		}
+	}
 }
 
 /** Whether `retry.fallbackOn` lets a failure walk the fallback chain. */

@@ -67,7 +67,6 @@ import {
 	formatAdvisorBatchContent,
 	getOrCreateAdvisorProviderSessionId,
 	isAdvisorInterruptImmuneTurnActive,
-	isClassifierRefusal,
 	meetsAdvisorSeverity,
 	quarantineAdvisorUnsafeOutput,
 	resolveAdvisorDeliveryChannel,
@@ -108,6 +107,7 @@ import {
 	calculateRetryBackoffDelayMs,
 	formatRetryFallbackSelector,
 	getRetryFallbackRevertPolicy,
+	matchRetryCyberFallbackModels,
 	parseRetryFallbackSelector,
 	type RetryFallbackSelector,
 	retryFallbackAdmits,
@@ -117,6 +117,7 @@ import { formatSessionDumpText } from "./session-dump-format";
 import type { CompactionEntry, SessionEntry } from "./session-entries";
 import { formatSessionHistoryMarkdown } from "./session-history-format";
 import type { SessionManager } from "./session-manager";
+import { CLASSIFIER_REFUSAL_SAME_MODEL_RETRIES } from "./turn-recovery";
 import { buildSessionMetadata } from "./session-metadata";
 import type { YieldQueue } from "./yield-queue";
 
@@ -131,7 +132,7 @@ import {
 } from "../advisor/settings";
 import { cfgCompaction, cfgContextPromotionEnabled } from "./context-settings";
 import { resolveModelCompactionSettings } from "./model-compaction-threshold";
-import { cfgProvidersOpenaiCodexDaybreak, cfgRetry, cfgTierAdvisor } from "./settings";
+import { cfgProvidersOpenaiCodexDaybreak, cfgRetry, cfgRetryCyberFallbackModels, cfgTierAdvisor } from "./settings";
 
 const ADVISOR_CODEX_SSE_MAX_ATTEMPTS = 1;
 
@@ -366,6 +367,19 @@ interface ActiveAdvisor {
 	 * own budget. Reset with {@link providerWaitRetries}.
 	 */
 	credentialSwitches: { provider: string; count: number } | undefined;
+	/**
+	 * Same-model refusal retries spent per model in the current run, so a
+	 * `retry.cyberFallbackModels`-mapped model is re-prompted
+	 * {@link CLASSIFIER_REFUSAL_SAME_MODEL_RETRIES} times before its replacement
+	 * is tried. Cleared with {@link providerWaitRetries}.
+	 */
+	cyberRefusalRetries: Map<string, number>;
+	/**
+	 * Models a refusal has already moved off in the current run; the map walk
+	 * visits any one model at most once, so entries pointing at each other
+	 * terminate. Cleared with {@link providerWaitRetries}.
+	 */
+	cyberWalkTried: Set<string>;
 	signature: string;
 	reviewInProgress: boolean | undefined;
 }
@@ -1619,6 +1633,11 @@ export class SessionAdvisors {
 						advisorRef.pendingCoveredTurn,
 					);
 				},
+				isCyberRefusalMapped: identity => {
+					const parsed = parseRetryFallbackSelector(identity, this.#host.modelRegistry);
+					return parsed ? this.#isCyberRefusalMapped(parsed) : false;
+				},
+				retryRefusedModel: identity => this.#retryRefusedAdvisorModel(advisorRef, identity),
 				onTurnError: async (error, failedMessages, signal) => {
 					try {
 						return await this.#recoverAdvisorTurn(advisorRef, error, failedMessages, signal);
@@ -1701,6 +1720,8 @@ export class SessionAdvisors {
 				retryFallbackPendingSuccess: false,
 				providerWaitRetries: 0,
 				credentialSwitches: undefined,
+				cyberRefusalRetries: new Map(),
+				cyberWalkTried: new Set(),
 				signature,
 				reviewInProgress: undefined,
 			};
@@ -2139,7 +2160,12 @@ export class SessionAdvisors {
 		}
 
 		const accountPolicyDenial = AIError.is(errorId, AIError.Flag.AccountPolicy);
-		if (accountPolicyDenial) {
+		const cyberRefusal = assistantFailure !== undefined && AIError.isCyberRefusal(assistantFailure);
+		// A `cyber_policy` denial the map covers is a content refusal the map owns:
+		// no sibling account is spent on it, and the runtime's refusal cascade
+		// already applied its same-model retries before calling this hook.
+		const mappedCyberPolicy = accountPolicyDenial && cyberRefusal && this.#isCyberRefusalMapped(currentModel);
+		if (accountPolicyDenial && !mappedCyberPolicy) {
 			const rotation = await this.#host.modelRegistry.authStorage.limits.rotate(
 				currentModel.provider,
 				advisor.providerSessionId,
@@ -2212,6 +2238,26 @@ export class SessionAdvisors {
 				: Promise.resolve(false);
 		if (!retrySettings.enabled || !retrySettings.modelFallback) return waitOrDecline();
 		if (!retryFallbackAdmits(retrySettings.fallbackOn, usageLimit)) return waitOrDecline();
+
+		// A refusal by the advisor's primary judges this context, not the model's health:
+		// skip its cooldown and pin the switch. A refusing fallback gets the usual cooldown.
+		const primaryRefused =
+			assistantFailure !== undefined &&
+			AIError.isCyberRefusal(assistantFailure) &&
+			(advisor.retryFallback === undefined || advisor.retryFallback.originalSelector === currentSelector);
+		if (!primaryRefused) this.#host.noteRetryFallbackCooldown(currentSelector, retryAfterMs, message);
+
+		// The refusal map is consulted before the chains, and re-consulted for every
+		// model a hop lands on, so an advisor chains through its own keys. Models
+		// already refused in this run are skipped; an exhausted map falls through to
+		// the chain walk below.
+		if (
+			cyberRefusal &&
+			(await this.#tryAdvisorCyberFallback(advisor, currentSelector, currentModel, primaryRefused, message, signal))
+		) {
+			return true;
+		}
+
 		// Same two-key walk the main loop uses: the chain that owns this advisor's
 		// active fallback, then the chain the current model owns. Without the
 		// second key an advisor that lands on the last entry of one chain never
@@ -2226,13 +2272,6 @@ export class SessionAdvisors {
 			return waitOrDecline();
 		}
 
-		// A refusal by the advisor's primary judges this context, not the model's health:
-		// skip its cooldown and pin the switch. A refusing fallback gets the usual cooldown.
-		const primaryRefused =
-			assistantFailure !== undefined &&
-			isClassifierRefusal(assistantFailure) &&
-			(advisor.retryFallback === undefined || advisor.retryFallback.originalSelector === currentSelector);
-		if (!primaryRefused) this.#host.noteRetryFallbackCooldown(currentSelector, retryAfterMs, message);
 		for (const role of chainKeys) {
 			for (const selector of this.#host.findRetryFallbackCandidates(role, currentSelector, currentModel)) {
 				if (this.#host.isRetryFallbackSelectorSuppressed(selector)) continue;
@@ -2243,41 +2282,112 @@ export class SessionAdvisors {
 				const apiKey = await this.#host.modelRegistry.getApiKey(candidate, advisor.providerSessionId, { signal });
 				if (!apiKey) continue;
 				signal.throwIfAborted();
-
-				const originalThinkingLevel = advisor.thinkingLevel;
-				// A `:auto` fallback entry follows the primary's resolved effort, like an `auto` advisor.
-				const requestedThinkingLevel =
-					selector.thinkingLevel === AUTO_THINKING
-						? automaticThinkingLevel(candidate, this.#autoAdvisorThinkingLevel())
-						: (selector.thinkingLevel ?? originalThinkingLevel);
-				const nextThinkingLevel = this.#setAdvisorModel(advisor, candidate, requestedThinkingLevel);
-				if (advisor.retryFallback) {
-					advisor.retryFallback.lastAppliedThinkingLevel = nextThinkingLevel;
-					advisor.retryFallback.autoThinking = selector.thinkingLevel === AUTO_THINKING;
-					advisor.retryFallback.pinned ||= primaryRefused;
-				} else {
-					advisor.retryFallback = {
-						role,
-						originalSelector: currentSelector,
-						originalThinkingLevel,
-						lastAppliedThinkingLevel: nextThinkingLevel,
-						autoThinking: selector.thinkingLevel === AUTO_THINKING,
-						pinned: primaryRefused,
-					};
-				}
-				advisor.retryFallbackPendingSuccess = true;
-				this.#host.settings.getStorage()?.recordModelUsage(formatModelStringWithRouting(candidate));
-				await this.#host.emitSessionEvent({
-					type: "retry_fallback_applied",
-					from: currentSelector,
-					to: selector.raw,
+				await this.#applyAdvisorFallbackCandidate({
+					advisor,
+					candidate,
+					selector,
 					role,
-					reason: `Advisor request failed: ${message}`,
+					currentSelector,
+					primaryRefused,
+					message,
 				});
 				return true;
 			}
 		}
 		return waitOrDecline();
+	}
+
+	/**
+	 * Walk the `retry.cyberFallbackModels` entry matched for the advisor's refused
+	 * model, visiting each model at most once per run. Entries resolve through the
+	 * same selector path a chain entry uses, so `@role` references and thinking
+	 * suffixes work.
+	 */
+	async #tryAdvisorCyberFallback(
+		advisor: ActiveAdvisor,
+		currentSelector: string,
+		currentModel: Model,
+		primaryRefused: boolean,
+		message: string,
+		signal: AbortSignal,
+	): Promise<boolean> {
+		const match = matchRetryCyberFallbackModels(cfgRetryCyberFallbackModels.get(this.#host.settings), currentModel);
+		if (!match) return false;
+		for (const entry of match.selectors) {
+			const resolved = resolveModelOverride([entry], this.#host.modelRegistry, this.#host.settings);
+			const candidate = resolved.model;
+			if (!candidate) continue;
+			const selector: RetryFallbackSelector = {
+				raw: entry,
+				provider: candidate.provider,
+				id: candidate.id,
+				thinkingLevel: resolved.explicitThinkingLevel ? resolved.thinkingLevel : undefined,
+			};
+			// Bound by resolved model: two entries can name the same one.
+			const visitedKey = `${candidate.provider}/${candidate.id}`;
+			if (advisor.cyberWalkTried.has(visitedKey)) continue;
+			if (modelsAreEqual(candidate, currentModel)) continue;
+			if (this.#host.isRetryFallbackSelectorSuppressed(selector)) continue;
+			if (!this.#canReplayAdvisorHistory(advisor, candidate)) continue;
+			const apiKey = await this.#host.modelRegistry.getApiKey(candidate, advisor.providerSessionId, { signal });
+			if (!apiKey) continue;
+			signal.throwIfAborted();
+			advisor.cyberWalkTried.add(visitedKey);
+			await this.#applyAdvisorFallbackCandidate({
+				advisor,
+				candidate,
+				selector,
+				role: match.key,
+				currentSelector,
+				primaryRefused,
+				message,
+			});
+			return true;
+		}
+		return false;
+	}
+
+	/** Switch the advisor onto a fallback candidate and record the pin/revert state. */
+	async #applyAdvisorFallbackCandidate(args: {
+		advisor: ActiveAdvisor;
+		candidate: Model;
+		selector: RetryFallbackSelector;
+		role: string;
+		currentSelector: string;
+		primaryRefused: boolean;
+		message: string;
+	}): Promise<void> {
+		const { advisor, candidate, selector, role, currentSelector, primaryRefused, message } = args;
+		const originalThinkingLevel = advisor.thinkingLevel;
+		// A `:auto` fallback entry follows the primary's resolved effort, like an `auto` advisor.
+		const requestedThinkingLevel =
+			selector.thinkingLevel === AUTO_THINKING
+				? automaticThinkingLevel(candidate, this.#autoAdvisorThinkingLevel())
+				: (selector.thinkingLevel ?? originalThinkingLevel);
+		const nextThinkingLevel = this.#setAdvisorModel(advisor, candidate, requestedThinkingLevel);
+		if (advisor.retryFallback) {
+			advisor.retryFallback.lastAppliedThinkingLevel = nextThinkingLevel;
+			advisor.retryFallback.autoThinking = selector.thinkingLevel === AUTO_THINKING;
+			advisor.retryFallback.pinned ||= primaryRefused;
+		} else {
+			advisor.retryFallback = {
+				role,
+				originalSelector: currentSelector,
+				originalThinkingLevel,
+				lastAppliedThinkingLevel: nextThinkingLevel,
+				autoThinking: selector.thinkingLevel === AUTO_THINKING,
+				pinned: primaryRefused,
+			};
+		}
+		advisor.retryFallbackPendingSuccess = true;
+		this.#host.settings.getStorage()?.recordModelUsage(formatModelStringWithRouting(candidate));
+		await this.#host.emitSessionEvent({
+			type: "retry_fallback_applied",
+			from: currentSelector,
+			to: selector.raw,
+			role,
+			reason: `Advisor request failed: ${message}`,
+		});
 	}
 
 	/**
@@ -2298,6 +2408,31 @@ export class SessionAdvisors {
 	#resetRecoveryBudgets(advisor: ActiveAdvisor): void {
 		advisor.providerWaitRetries = 0;
 		advisor.credentialSwitches = undefined;
+		advisor.cyberRefusalRetries.clear();
+		advisor.cyberWalkTried.clear();
+	}
+
+	/** Whether `retry.cyberFallbackModels` maps `model` to a replacement. */
+	#isCyberRefusalMapped(model: { provider: string; id: string }): boolean {
+		return matchRetryCyberFallbackModels(cfgRetryCyberFallbackModels.get(this.#host.settings), model) !== undefined;
+	}
+
+	/**
+	 * Whether a classifier refusal on `identity` should re-prompt the same model:
+	 * `retry.cyberFallbackModels` maps it and its per-model retry budget is not
+	 * spent. The budget lives here so a model switch starts a fresh one.
+	 */
+	#retryRefusedAdvisorModel(advisor: ActiveAdvisor, identity: string): boolean {
+		const retrySettings = cfgRetry.get(this.#host.settings);
+		if (!retrySettings.enabled || !retrySettings.modelFallback) return false;
+		if (!retryFallbackAdmits(retrySettings.fallbackOn, false)) return false;
+		const parsed = parseRetryFallbackSelector(identity, this.#host.modelRegistry);
+		if (!parsed || !this.#isCyberRefusalMapped(parsed)) return false;
+		const key = `${parsed.provider}/${parsed.id}`;
+		const spent = advisor.cyberRefusalRetries.get(key) ?? 0;
+		if (spent >= CLASSIFIER_REFUSAL_SAME_MODEL_RETRIES) return false;
+		advisor.cyberRefusalRetries.set(key, spent + 1);
+		return true;
 	}
 
 	/**

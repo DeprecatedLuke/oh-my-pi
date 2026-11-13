@@ -1041,6 +1041,63 @@ export function classifyMessage(message: {
 	return id;
 }
 
+/**
+ * Whether an assistant turn was refused for its content rather than failing on
+ * the provider: a classifier refusal (`stopDetails.type` `refusal`/`sensitive`),
+ * an OpenAI content filter (`content_filter`), or Codex's `cyber_policy`
+ * denial.
+ *
+ * Plan and entitlement denials (Codex ChatGPT model restrictions, Cursor plans,
+ * OAuth organization policy) also carry {@link Flag.AccountPolicy} — and the
+ * Codex ones {@link Flag.ContentBlocked} too — so the cyber shape is identified
+ * by its own wording. Every other account-scoped denial stays on credential
+ * rotation and is not a refusal. Callers that already classified the turn
+ * against the active session model pass that `id` instead of letting this
+ * re-classify from the message.
+ */
+export function isCyberRefusal(
+	message: {
+		stopReason?: string;
+		stopDetails?: { type?: string } | null;
+		api?: Api;
+		provider?: string;
+		model?: string;
+		errorId?: number;
+		errorMessage?: string;
+		errorClassificationMessage?: string;
+		errorStatus?: number;
+	},
+	id?: number,
+): boolean {
+	if (message.stopReason !== "error") return false;
+	const stopType = message.stopDetails?.type;
+	if (stopType === "refusal" || stopType === "sensitive") return true;
+	const resolvedId = id ?? classifyMessage(message);
+	if (!is(resolvedId, Flag.ContentBlocked)) return false;
+	// A content filter blocks content without an account scope.
+	if (!is(resolvedId, Flag.AccountPolicy)) return true;
+	const text = message.errorClassificationMessage ?? message.errorMessage;
+	return text !== undefined && ACCOUNT_POLICY_PATTERN.test(text);
+}
+
+/**
+ * Whether an error is Codex's `cyber_policy` content denial, by its own wording.
+ * Plan and entitlement denials (Codex ChatGPT model restrictions, Cursor plans,
+ * OAuth organization policy) are account-scoped too but are not content
+ * refusals, and keep rotating through sibling credentials.
+ */
+export function isCyberPolicyError(error: unknown, depth = 0): boolean {
+	if (depth > 6) return false;
+	if (typeof error === "string") return ACCOUNT_POLICY_PATTERN.test(error);
+	if (!error || typeof error !== "object") return false;
+	const matches = (value: unknown): boolean => typeof value === "string" && ACCOUNT_POLICY_PATTERN.test(value);
+	if ("errorClassificationMessage" in error && matches(error.errorClassificationMessage)) return true;
+	if ("errorMessage" in error && matches(error.errorMessage)) return true;
+	if ("message" in error && matches(error.message)) return true;
+	if ("cause" in error) return isCyberPolicyError(error.cause, depth + 1);
+	return false;
+}
+
 export function attach<E extends object>(error: E, id: number): E {
 	Object.defineProperty(error, "errorId", { value: id, enumerable: false, configurable: true });
 	return error;

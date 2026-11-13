@@ -5,9 +5,11 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
 	expandDefaultRetryFallbackChains,
 	findRetryFallbackCandidates,
+	matchRetryCyberFallbackModels,
 	type RetryFallbackResolutionContext,
 	parseRetryFallbackSelector,
 	resolveRetryFallbackChainKey,
+	validateRetryCyberFallbackModels,
 	validateRetryFallbackChains,
 } from "@oh-my-pi/pi-coding-agent/session/retry-fallback-chains";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -416,5 +418,109 @@ describe("retry fallback kind-role validation", () => {
 		});
 
 		expect(warnings).toEqual([]);
+	});
+});
+
+describe("retry cyber fallback model matching", () => {
+	it("prefers an exact key over every glob, then the glob pinning the most literal text", () => {
+		const models = {
+			"*": "fallback/catch-all",
+			"*opus*": "fallback/short-glob",
+			"*opus-5-5": "fallback/long-glob",
+			"anthropic/claude-opus-5-5": "fallback/exact",
+		};
+		expect(matchRetryCyberFallbackModels(models, { provider: "anthropic", id: "claude-opus-5-5" })).toEqual({
+			key: "anthropic/claude-opus-5-5",
+			selectors: ["fallback/exact"],
+		});
+
+		// Without the exact key the longest literal run wins over configured order.
+		const { "anthropic/claude-opus-5-5": _exact, ...globs } = models;
+		expect(matchRetryCyberFallbackModels(globs, { provider: "anthropic", id: "claude-opus-5-5" })).toEqual({
+			key: "*opus-5-5",
+			selectors: ["fallback/long-glob"],
+		});
+
+		// A tie keeps the first configured key, and `*` alone is a catch-all.
+		expect(
+			matchRetryCyberFallbackModels({ "*opus*": "a/one", "*5-5*": "b/two" }, { provider: "p", id: "x-opus-5-5" }),
+		).toEqual({ key: "*opus*", selectors: ["a/one"] });
+		expect(matchRetryCyberFallbackModels({ "*": "a/one" }, { provider: "p", id: "anything" })).toEqual({
+			key: "*",
+			selectors: ["a/one"],
+		});
+	});
+
+	it("matches a provider-qualified key against provider/id and a bare key against the id", () => {
+		const providerKeyed = { "openai-codex/gpt-6-astra": "mistral/deepseek-v4-1-flash-1017" };
+		expect(matchRetryCyberFallbackModels(providerKeyed, { provider: "openai-codex", id: "gpt-6-astra" })).toEqual({
+			key: "openai-codex/gpt-6-astra",
+			selectors: ["mistral/deepseek-v4-1-flash-1017"],
+		});
+		// The same model on another provider is not covered by a provider-qualified key.
+		expect(
+			matchRetryCyberFallbackModels(providerKeyed, { provider: "openrouter", id: "gpt-6-astra" }),
+		).toBeUndefined();
+
+		const bareKeyed = { "gpt-6-astra": ["@cyber"] };
+		expect(matchRetryCyberFallbackModels(bareKeyed, { provider: "openrouter", id: "gpt-6-astra" })).toEqual({
+			key: "gpt-6-astra",
+			selectors: ["@cyber"],
+		});
+		expect(
+			matchRetryCyberFallbackModels(bareKeyed, { provider: "openrouter", id: "gpt-6-astra-mini" }),
+		).toBeUndefined();
+	});
+
+	it("normalizes a single-selector value and ignores empty entries", () => {
+		expect(matchRetryCyberFallbackModels({ "*opus*": " a/one " }, { provider: "p", id: "opus" })).toEqual({
+			key: "*opus*",
+			selectors: ["a/one"],
+		});
+		expect(matchRetryCyberFallbackModels({ "*opus*": [] }, { provider: "p", id: "opus" })).toBeUndefined();
+		expect(matchRetryCyberFallbackModels({}, { provider: "p", id: "opus" })).toBeUndefined();
+	});
+});
+
+describe("retry cyber fallback validation", () => {
+	const chatModel = getBundledModel("openai", "gpt-4o-mini");
+	if (!chatModel) throw new Error("Expected bundled OpenAI test model");
+	const registry = {
+		find: (provider: string, id: string) =>
+			provider === chatModel.provider && id === chatModel.id ? chatModel : undefined,
+		hasProvider: (provider: string) => provider === chatModel.provider,
+	};
+
+	it("accepts selectors, arrays, and @role references that resolve", () => {
+		const settings = Settings.isolated({
+			modelRoles: { cyber: `${chatModel.provider}/${chatModel.id}` },
+			"retry.cyberFallbackModels": {
+				"*opus*": `${chatModel.provider}/${chatModel.id}`,
+				"*astra*": ["@cyber", `${chatModel.provider}/${chatModel.id}:high`],
+			},
+		});
+		const warnings: string[] = [];
+
+		validateRetryCyberFallbackModels(settings, registry, warning => warnings.push(warning));
+
+		expect(warnings).toEqual([]);
+	});
+
+	it("warns about unknown roles, unknown models, and non-selector values", () => {
+		const settings = Settings.isolated({
+			"retry.cyberFallbackModels": {
+				"*opus*": "@nowhere",
+				"*astra*": ["openai/missing-model"],
+				"*sonnet*": [] as string[],
+			},
+		});
+		const warnings: string[] = [];
+
+		validateRetryCyberFallbackModels(settings, registry, warning => warnings.push(warning));
+
+		expect(warnings).toHaveLength(3);
+		expect(warnings[0]).toContain("@nowhere");
+		expect(warnings[1]).toContain("openai/missing-model");
+		expect(warnings[2]).toContain("*sonnet*");
 	});
 });

@@ -32,6 +32,13 @@ import { AUTO_THINKING, getConfiguredThinkingLevelMetadata, getThinkingLevelMeta
 const EMPTY_NUMBER_RECORD: Record<string, number> = {};
 const EMPTY_STRING_ARRAYS_RECORD: Record<string, string[]> = {};
 const EMPTY_STRING_RECORD: Record<string, string> = {};
+const EMPTY_CYBER_FALLBACK_MODELS: RetryCyberFallbackModels = {};
+
+/**
+ * Classifier-refusal fallbacks: a model glob keyed to one replacement selector
+ * or an ordered list of them (`*opus-*: [openai-codex/gpt-6-astra, @cyber]`).
+ */
+export type RetryCyberFallbackModels = Record<string, string | readonly string[]>;
 const DEFAULT_TOOL_CALL_LOOP_EXEMPT_TOOLS: string[] = ["wait"];
 
 /** Scope of the resume picker's current-folder list. */
@@ -903,6 +910,19 @@ export const cfgRetryFallbackChains = register({
 		label: "Retry Fallback Chains",
 		description:
 			'JSON object mapping model roles, model selectors ("provider/model-id"), or provider wildcards ("provider/*") to ordered fallback selectors, e.g. {"default":["openai/gpt-4o-mini"],"google-antigravity/*":["google/*","google-vertex/*"]}. Model-oriented keys apply whenever that model/provider is active, regardless of role; a "provider/*" entry keeps the failing model\'s id and swaps the provider. An id-prefixed wildcard ("openrouter/google/*") re-prefixes the failing model\'s bare id (google-antigravity/gemini-x -> openrouter/google/gemini-x) and, used as a key, matches only that provider\'s ids under the prefix. A fallback entry may carry an explicit thinking suffix ("provider/model:low", ":high", ":max", ":off"); a bare entry inherits the failing turn\'s effort, and "provider/*" entries always inherit.',
+	},
+});
+
+export const cfgRetryCyberFallbackModels = register({
+	id: "retry.cyberFallbackModels",
+	type: "record",
+	default: EMPTY_CYBER_FALLBACK_MODELS,
+	ui: {
+		tab: "model",
+		group: "Retry & Fallback",
+		label: "Cyber Refusal Fallbacks",
+		description:
+			'JSON object mapping a model glob to the model(s) that replace it when a provider classifier refuses the turn, e.g. {"*opus-*":"openai-codex/gpt-6-astra","*astra*":"@cyber"}. Keys match the refused model id, or "provider/model-id" when the key contains "/"; "*" is the only wildcard and matches any run, so "*" is a catch-all. An exact key wins over a glob, and among globs the longest literal part wins. Values accept one selector or a list, with the same syntax as retry.fallbackChains entries (thinking suffixes and @role references included). A refusal first retries the same model 3 times, then walks the matched entries in order, re-matching each model it lands on; when nothing is left untried it falls through to retry.fallbackChains.',
 	},
 });
 

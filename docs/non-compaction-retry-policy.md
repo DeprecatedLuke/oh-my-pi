@@ -51,7 +51,7 @@ Retry classification runs through `AIError.classifyMessage(...)`, using the pers
 
 Retry additionally requires no replay-unsafe output: committed non-whitespace visible text, images, tool calls, and Anthropic server-tool blocks normally prevent replay. Thinking-only and whitespace-only partials are safe to discard and retry. Classifier refusals use the same veto.
 
-There is one proven-unexecuted-tool exception for classifier refusals, malformed-function responses, and retryable failures: every emitted call must have a later synthetic result with `details.executed === false`, with no images, server tools, or committed text. Any real result or missing proof retains the veto. Recovery preserves these assistant/result pairs so continuation can reissue the unexecuted calls.
+There is one proven-unexecuted-tool exception for classifier refusals, malformed-function responses, and retryable failures: every emitted call must have a later synthetic result with `details.executed === false`, with no images, server tools, or committed text. Any real result or missing proof retains the veto. Recovery preserves these assistant/result pairs so continuation can reissue the unexecuted calls — except for a classifier refusal, whose turn is dropped whole (assistant plus synthetic results) before the retry, so the refused request is never replayed.
 
 Current retryable categories include:
 
@@ -88,8 +88,38 @@ Flow (`#handleRetryableError`):
 6. When allowed, consult configured model fallback chains. `retry.fallbackOn` decides whether this error class may (`any`, `usage-limit`, `except-usage-limit`). A switch uses delay `0`; classifier refusals and account-policy denials only continue when a credential or model switch succeeds. Thinking-loop redirects stay on the same model; a temporarily blocked sibling credential within the wait cap is preferred over model fallback.
 7. If the current model's retry budget is exhausted, stop unless a model switch or confirmed credential reset permits continuation. A fallback model receives a fresh retry budget; credential recovery keeps the cumulative count. Known thinking-only stream-close routes have a one-retry cap rather than the full configured budget.
 8. If the final delay exceeds `retry.maxDelayMs` and no credential/model switch happened, emit final failure without sleeping, except an authoritative usage-reset wait explicitly allowed by `retry.waitForUsageReset`.
-9. Record the recoverable error, emit `auto_retry_start`, and remove the failed assistant from active context unless preserving a resolved interrupted tool turn or proven-unexecuted tool-call/result pairs.
+9. Record the recoverable error, emit `auto_retry_start`, and remove the failed assistant from active context unless preserving a resolved interrupted tool turn or proven-unexecuted tool-call/result pairs. A classifier-refused turn is always removed, together with the synthetic results paired with its unexecuted calls.
 10.   Sleep with abort support, then schedule `agent.continue()` through the post-prompt task scheduler for the same prompt generation.
+
+### Cyber fallbacks
+
+A refusal of the request's content is not a provider failure: the model answered and declined. Three shapes count, and `retry.cyberFallbackModels` maps the refused model to the model(s) that take over, keyed by a glob over the model:
+
+- a classifier refusal (`stopDetails.type` `"refusal"` or `"sensitive"`),
+- Codex's `cyber_policy` denial (the only account-scoped denial that also blocks content),
+- an OpenAI content filter (`content_filter`).
+
+Account-scoped denials another credential can clear — OAuth organization policy, plan/entitlement denials — are **not** refusals and stay on credential rotation.
+
+```yaml
+retry:
+   cyberFallbackModels:
+      "*opus*": openai-codex/gpt-6-astra
+      "*astra*": "@cyber"
+      "anthropic/claude-sonnet-4-5": openai-codex/gpt-6-sol
+      "*": openai/gpt-5.5-mini
+```
+
+- Keys match the refused model id, or `provider/model-id` when the key contains `/`; `*` is the only wildcard and matches any run, including empty, so `*` is a catch-all.
+- An exact key beats every glob; among globs the one pinning the longest literal run wins; a remaining tie keeps configured order.
+- Values accept one selector or a list, with the same syntax as `retry.fallbackChains` entries — thinking suffixes and `@role` references included. `@role` resolves when the hop happens, so a `modelRoles.cyber` assignment is enough.
+- A refusal on a model some key matches first retries that same model up to three times (the classifier is stochastic), independent of `retry.maxRetries`. Then the matched entries are walked in order.
+- A `cyber_policy` denial on a model the map covers never rotates through sibling accounts: the request opts out of credential rotation for that call, so the same-model retries and the map walk above apply directly. An unmapped `cyber_policy` keeps the rotation-first behavior — the per-account rotation runs before anything else, and once it has tried every account the same-model retries are skipped (re-asking the same account cannot succeed) so the chain walk follows.
+- A hop that lands on a model which refuses too re-matches the map for that model, so `*opus* -> gpt-6-astra -> @cyber` chains through its own keys. Each model is visited at most once per turn, so a map whose entries point back at each other terminates.
+- When the map yields nothing untried, the refusal falls through to the `retry.fallbackChains` refusal walk, then the turn ends as before.
+- Gated by `retry.modelFallback` and `retry.fallbackOn`, like the chain walk. A refusal no key matches keeps the immediate chain walk.
+- The refused turn is never preserved: its assistant message and the synthetic results paired with its unexecuted calls leave active context before every retry and hop, so the refused partial turn is not replayed.
+- Advisor reviews use the same map with the same three retries and once-per-run walk, consulted before the advisor's own chain; the advisor's refused turn is rolled back before the retry ([advisor watchdog](./advisor-watchdog.md)).
 
 ### What resets retry counters
 
@@ -199,6 +229,7 @@ Defined in `packages/coding-agent/src/session/settings.ts`:
 - `retry.fallbackOn` (default `"any"`; `"usage-limit"` or `"except-usage-limit"` restrict which errors walk the chains)
 - `retry.rateLimitWalksChain` (default `false`; `true` walks the chain as soon as a rate limit fails the turn, including after signed thinking, instead of keeping the failing model for its whole retry budget)
 - `retry.fallbackChains`
+- `retry.cyberFallbackModels` (default `{}`; maps a model glob to the model(s) that replace a classifier-refused turn, see [Cyber fallbacks](#cyber-fallbacks))
 - `retry.fallbackRevertPolicy` (`"cooldown-expiry"` by default; `"never"` disables automatic restoration)
 - `retry.usageAwareFallback` (default `false`; runs a preflight for supported coding-plan usage reports)
 - `retry.usageReservePct` (default `10`; remaining-quota reserve threshold)

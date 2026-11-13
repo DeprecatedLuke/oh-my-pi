@@ -81,6 +81,19 @@ export interface AdvisorRuntimeHost {
 	): Promise<boolean | undefined> | boolean | undefined;
 	/** Called after a successful advisor turn so the host can finish fallback lifecycle reporting. */
 	onTurnSuccess?(): Promise<void> | void;
+	/**
+	 * Whether `retry.cyberFallbackModels` maps `modelIdentity` to a replacement.
+	 * A mapped `cyber_policy` denial takes the refusal cascade instead of the
+	 * host's credential rotation.
+	 */
+	isCyberRefusalMapped?(modelIdentity: string): boolean;
+	/**
+	 * Whether a classifier refusal on `modelIdentity` should re-prompt the same
+	 * model instead of walking the fallback chain: `retry.cyberFallbackModels`
+	 * maps it and its same-model retry budget is not spent. The host owns the
+	 * budget so a model switch starts a fresh one.
+	 */
+	retryRefusedModel?(modelIdentity: string): boolean;
 	/** Called when a failed batch is permanently dropped so replay-only state can be discarded. */
 	onTurnAbandoned?(): void;
 	/** Surface a non-recovering advisor failure to the host UI without adding model-visible context. */
@@ -1433,10 +1446,21 @@ export class AdvisorRuntime {
 					const rawErrorId = AIError.classify(err);
 					const terminalFailureId =
 						terminalFailure === undefined ? undefined : AIError.classifyMessage(terminalFailure);
-					const classifierRefusal =
-						(terminalFailure !== undefined && isClassifierRefusal(terminalFailure)) ||
-						(!AIError.is(rawErrorId, AIError.Flag.AccountPolicy) &&
-							AIError.is(rawErrorId, AIError.Flag.ContentBlocked));
+					// An account-scoped denial goes through the host's credential rotation
+					// first, so it keeps the generic recovery path; content-only refusals
+					// take the refusal cascade here. A `cyber_policy` denial the host maps
+					// in `retry.cyberFallbackModels` is the exception: the map owns it, so
+					// no sibling account is spent on it.
+					const accountScoped =
+						AIError.is(rawErrorId, AIError.Flag.AccountPolicy) ||
+						(terminalFailureId !== undefined && AIError.is(terminalFailureId, AIError.Flag.AccountPolicy));
+					const refusalModel = this.host.getModelIdentity?.() ?? this.#modelIdentity ?? "";
+					const cyberRefusalByIdentity = terminalFailure !== undefined && AIError.isCyberRefusal(terminalFailure);
+					const mappedCyberPolicy =
+						accountScoped && cyberRefusalByIdentity && this.host.isCyberRefusalMapped?.(refusalModel) === true;
+					const cyberRefusal =
+						mappedCyberPolicy ||
+						(!accountScoped && (cyberRefusalByIdentity || AIError.is(rawErrorId, AIError.Flag.ContentBlocked)));
 					const contextOverflow =
 						(terminalFailureId !== undefined && AIError.is(terminalFailureId, AIError.Flag.ContextOverflow)) ||
 						AIError.is(rawErrorId, AIError.Flag.ContextOverflow);
@@ -1450,7 +1474,7 @@ export class AdvisorRuntime {
 						AIError.is(terminalFailureId, AIError.Flag.ContextOverflow);
 					this.#rollbackFailedTurn(messageSnapshot);
 					logger.debug("advisor turn failed", { err: String(err) });
-					if (classifierRefusal) {
+					if (cyberRefusal) {
 						// Stripping only recovers when it changes what was sent: a batch
 						// without primary reasoning would be resent byte-for-byte and
 						// refused again, so it goes straight to the model fallback.
@@ -1482,7 +1506,31 @@ export class AdvisorRuntime {
 						// exhaustion (the host returns false once candidates run out); the
 						// tried-set only stops a cyclic chain from revisiting a model. The
 						// primary turn-recovery path already allows fallback on refusals.
-						const refusalModel = this.host.getModelIdentity?.() ?? this.#modelIdentity ?? "";
+						// A model `retry.cyberFallbackModels` maps gets its same-model retries
+						// first: the classifier is stochastic, and the host owns that budget.
+						let cyberRetry = false;
+						try {
+							cyberRetry = this.host.retryRefusedModel?.(refusalModel) === true;
+						} catch (hookErr) {
+							logger.debug("advisor refusal retry hook failed", { err: String(hookErr) });
+						}
+						if (cyberRetry) {
+							if (this.#epoch !== epoch) continue;
+							if (this.#sessionTransitionPaused) {
+								this.#pending.unshift(...popped);
+								continue;
+							}
+							this.#pending.unshift({
+								text: batch(),
+								rawMessages,
+								renderRevision: this.#renderRevision,
+								turns: finalTurns,
+								wip,
+								overflowRecovery: recoveringOverflow || undefined,
+							});
+							logger.debug("advisor refusal retried on the same model");
+							continue;
+						}
 						let refusalRecovered = false;
 						try {
 							if (!this.#refusalModelsTried.has(refusalModel)) {
@@ -1701,16 +1749,6 @@ export class AdvisorRuntime {
 			}
 		}
 	}
-}
-
-/** Mirrors turn recovery's refusal classification without treating account eligibility as a model refusal. */
-export function isClassifierRefusal(message: AssistantMessage): boolean {
-	if (message.stopReason !== "error") return false;
-	const id = AIError.classifyMessage(message);
-	if (AIError.is(id, AIError.Flag.AccountPolicy)) return false;
-	const stopType = message.stopDetails?.type;
-	if (stopType === "refusal" || stopType === "sensitive") return true;
-	return AIError.is(id, AIError.Flag.ContentBlocked);
 }
 
 /**

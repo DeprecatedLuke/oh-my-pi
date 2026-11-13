@@ -9240,4 +9240,493 @@ describe("AgentSession retry fallback", () => {
 		expect(requestedModels).toContain("openrouter/z-ai/glm-4.7@chutes");
 		expect(getLastAssistantMessage(session).stopReason).not.toBe("error");
 	});
+
+	describe("retry.cyberFallbackModels", () => {
+		const refusedModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const mappedModel = getBundledModel("openai", "gpt-4o-mini");
+		const cyberRoleModel = getBundledModel("google", "gemini-1.5-flash");
+		if (!refusedModel || !mappedModel || !cyberRoleModel) {
+			throw new Error("Expected bundled test models to exist");
+		}
+		const refusedSelector = `${refusedModel.provider}/${refusedModel.id}`;
+		const mappedSelector = `${mappedModel.provider}/${mappedModel.id}`;
+		const cyberRoleSelector = `${cyberRoleModel.provider}/${cyberRoleModel.id}`;
+
+		function refusal(): MockResponse {
+			return {
+				content: [],
+				stopReason: "error",
+				stopDetails: { type: "refusal", category: "cyber", explanation: "Declined." },
+				errorMessage: "Refusal (cyber): Declined.",
+			};
+		}
+
+		it("retries the refused model three times before switching to the mapped model", async () => {
+			const requestedModels: string[] = [];
+			const mock = createMockModel();
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: refusedModel, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					requestedModels.push(`${model.provider}/${model.id}`);
+					if (model.id === refusedModel.id) mock.push(refusal());
+					else mock.push({ content: ["answered on the mapped model"] });
+					return mock.stream(model, context, options);
+				},
+			});
+
+			// The refusal retries are the map's, not the provider-error budget's.
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 1,
+				"retry.maxRetries": 0,
+				"retry.cyberFallbackModels": { "*sonnet*": mappedSelector },
+			});
+			settings.setModelRole("default", refusedSelector);
+
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+			});
+			const { retryStartEvents } = trackRetryEvents(session);
+
+			await session.prompt("Refused by the classifier");
+			await session.waitForIdle();
+
+			expect(requestedModels).toEqual([
+				refusedSelector,
+				refusedSelector,
+				refusedSelector,
+				refusedSelector,
+				mappedSelector,
+			]);
+			expect(retryStartEvents.map(event => event.attempt)).toEqual([1, 2, 3, 1]);
+			expect(session.model?.id).toBe(mappedModel.id);
+			expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+		});
+
+		it("chains through the map, resolving an @role value at hop time", async () => {
+			const requestedModels: string[] = [];
+			const mock = createMockModel();
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: refusedModel, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					requestedModels.push(`${model.provider}/${model.id}`);
+					if (model.id === cyberRoleModel.id) mock.push({ content: ["answered on the cyber role"] });
+					else mock.push(refusal());
+					return mock.stream(model, context, options);
+				},
+			});
+
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 1,
+				"retry.maxRetries": 0,
+				"retry.cyberFallbackModels": { "*sonnet*": mappedSelector, "*gpt-4o*": "@cyber" },
+			});
+			settings.setModelRole("default", refusedSelector);
+			settings.setModelRole("cyber", cyberRoleSelector);
+
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+			});
+
+			await session.prompt("Refused twice over");
+			await session.waitForIdle();
+
+			// Each model the walk lands on gets its own three retries, and the map is
+			// re-matched for it: sonnet -> gpt-4o-mini -> @cyber.
+			expect(requestedModels).toEqual([
+				refusedSelector,
+				refusedSelector,
+				refusedSelector,
+				refusedSelector,
+				mappedSelector,
+				mappedSelector,
+				mappedSelector,
+				mappedSelector,
+				cyberRoleSelector,
+			]);
+			expect(session.model?.id).toBe(cyberRoleModel.id);
+		});
+
+		it("terminates when two mapped models refuse each other", async () => {
+			const requestedModels: string[] = [];
+			const mock = createMockModel();
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: refusedModel, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					requestedModels.push(`${model.provider}/${model.id}`);
+					mock.push(refusal());
+					return mock.stream(model, context, options);
+				},
+			});
+
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 1,
+				"retry.maxRetries": 0,
+				"retry.cyberFallbackModels": { "*sonnet*": mappedSelector, "*gpt-4o*": refusedSelector },
+			});
+			settings.setModelRole("default", refusedSelector);
+
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+			});
+			const { retryEndEvents } = trackRetryEvents(session);
+
+			await session.prompt("Both mapped models refuse");
+			await session.waitForIdle();
+
+			// Each model is visited once, so the cycle ends instead of alternating.
+			expect(requestedModels).toEqual([
+				refusedSelector,
+				refusedSelector,
+				refusedSelector,
+				refusedSelector,
+				mappedSelector,
+				mappedSelector,
+				mappedSelector,
+				mappedSelector,
+			]);
+			expect(retryEndEvents.at(-1)?.finalError).toContain("Refusal (cyber)");
+			// A terminal refusal leaves no refused turn behind in active context.
+			expect(session.agent.state.messages.map(message => message.role)).toEqual(["user"]);
+		});
+
+		it("keeps the immediate chain walk for a refusal no key matches", async () => {
+			const requestedModels: string[] = [];
+			const mock = createMockModel();
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: refusedModel, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					requestedModels.push(`${model.provider}/${model.id}`);
+					if (model.id === refusedModel.id) mock.push(refusal());
+					else mock.push({ content: ["answered on the chain fallback"] });
+					return mock.stream(model, context, options);
+				},
+			});
+
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 1,
+				"retry.maxRetries": 0,
+				"retry.cyberFallbackModels": { "*opus*": cyberRoleSelector },
+				"retry.fallbackChains": { default: [mappedSelector] },
+			});
+			settings.setModelRole("default", refusedSelector);
+
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+			});
+
+			await session.prompt("Refused with no cyber mapping");
+			await session.waitForIdle();
+
+			// No same-model retries: the refusal walks the chain at once, as before.
+			expect(requestedModels).toEqual([refusedSelector, mappedSelector]);
+			expect(session.model?.id).toBe(mappedModel.id);
+		});
+
+		it("hops a mapped Codex cyber_policy denial without spending sibling accounts", async () => {
+			const codexModel = getBundledModel("openai-codex", "gpt-6-astra");
+			if (!codexModel) throw new Error("Expected bundled Codex test model to exist");
+			const codexSelector = `${codexModel.provider}/${codexModel.id}`;
+
+			// Two Codex accounts: a mapped denial must not rotate through either.
+			const codexAuth = await AuthStorage.create(path.join(tempDir.path(), "cyber-hop-auth.db"));
+			try {
+				codexAuth.keys.setRuntime("openai", "openai-test-key");
+				await codexAuth.credentials.set("openai-codex", [
+					{ type: "api_key", key: "codex-cyber-A" },
+					{ type: "api_key", key: "codex-cyber-B" },
+				]);
+				const codexRegistry = new ModelRegistry(codexAuth, path.join(tempDir.path(), "cyber-hop-models.yml"));
+				const rotateSpy = vi.spyOn(codexAuth.limits, "rotate");
+
+				const requestedModels: string[] = [];
+				const mock = createMockModel();
+				const agent = new Agent({
+					getApiKey: model => `${model.provider}-test-key`,
+					initialState: { model: codexModel, systemPrompt: ["Test"], tools: [], messages: [] },
+					streamFn: (model, context, options) => {
+						requestedModels.push(`${model.provider}/${model.id}`);
+						if (model.id === codexModel.id) {
+							mock.push({
+								content: [],
+								stopReason: "error",
+								errorMessage:
+									"This content was flagged for possible cybersecurity risk. Join Trusted Access for Cyber. (code=cyber_policy)",
+							});
+						} else {
+							mock.push({ content: ["answered on the mapped model"] });
+						}
+						return mock.stream(model, context, options);
+					},
+				});
+
+				const settings = Settings.isolated({
+					"compaction.enabled": false,
+					"retry.baseDelayMs": 1,
+					"retry.maxRetries": 0,
+					"retry.cyberFallbackModels": { "*astra*": mappedSelector },
+				});
+				settings.setModelRole("default", codexSelector);
+
+				session = new AgentSession({
+					agent,
+					sessionManager: SessionManager.inMemory(),
+					settings,
+					modelRegistry: codexRegistry,
+				});
+
+				await session.prompt("Refused by the Codex cyber policy");
+				await session.waitForIdle();
+
+				// Three same-account retries, then the map hop — no credential switch.
+				expect(requestedModels).toEqual([
+					codexSelector,
+					codexSelector,
+					codexSelector,
+					codexSelector,
+					mappedSelector,
+				]);
+				expect(rotateSpy).not.toHaveBeenCalled();
+				expect(session.model?.id).toBe(mappedModel.id);
+				expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+			} finally {
+				codexAuth.close();
+			}
+		});
+
+		it("still rotates an unmapped Codex cyber_policy denial through sibling accounts", async () => {
+			const codexModel = getBundledModel("openai-codex", "gpt-6-astra");
+			if (!codexModel) throw new Error("Expected bundled Codex test model to exist");
+			const codexSelector = `${codexModel.provider}/${codexModel.id}`;
+
+			const codexAuth = await AuthStorage.create(path.join(tempDir.path(), "cyber-rotate-auth.db"));
+			try {
+				codexAuth.keys.setRuntime("openai", "openai-test-key");
+				await codexAuth.credentials.set("openai-codex", [
+					{ type: "api_key", key: "codex-rotate-A" },
+					{ type: "api_key", key: "codex-rotate-B" },
+				]);
+				const codexRegistry = new ModelRegistry(codexAuth, path.join(tempDir.path(), "cyber-rotate-models.yml"));
+				const rotateSpy = vi.spyOn(codexAuth.limits, "rotate");
+
+				const requestedModels: string[] = [];
+				const mock = createMockModel();
+				let attempts = 0;
+				const agent = new Agent({
+					getApiKey: model => `${model.provider}-test-key`,
+					initialState: { model: codexModel, systemPrompt: ["Test"], tools: [], messages: [] },
+					streamFn: (model, context, options) => {
+						requestedModels.push(`${model.provider}/${model.id}`);
+						attempts++;
+						if (attempts === 1) {
+							mock.push({
+								content: [],
+								stopReason: "error",
+								errorMessage:
+									"This content was flagged for possible cybersecurity risk. Join Trusted Access for Cyber. (code=cyber_policy)",
+							});
+						} else {
+							mock.push({ content: ["answered on the sibling account"] });
+						}
+						return mock.stream(model, context, options);
+					},
+				});
+
+				// No `retry.cyberFallbackModels` entry for this model: today's rotation-first behavior.
+				const settings = Settings.isolated({
+					"compaction.enabled": false,
+					"retry.baseDelayMs": 1,
+					"retry.maxRetries": 0,
+				});
+				settings.setModelRole("default", codexSelector);
+
+				session = new AgentSession({
+					agent,
+					sessionManager: SessionManager.inMemory(),
+					settings,
+					modelRegistry: codexRegistry,
+				});
+
+				await session.prompt("Refused by the Codex cyber policy");
+				await session.waitForIdle();
+
+				expect(requestedModels).toEqual([codexSelector, codexSelector]);
+				expect(rotateSpy).toHaveBeenCalledTimes(1);
+				expect(session.model?.id).toBe(codexModel.id);
+				expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+			} finally {
+				codexAuth.close();
+			}
+		});
+
+		it("keeps an account-scoped denial that another credential can clear on rotation", async () => {
+			const requestedModels: string[] = [];
+			const mock = createMockModel();
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: refusedModel, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					requestedModels.push(`${model.provider}/${model.id}`);
+					mock.push({
+						content: [],
+						stopReason: "error",
+						errorMessage: "OAuth authentication is currently not allowed for this organization.",
+					});
+					return mock.stream(model, context, options);
+				},
+			});
+
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 1,
+				"retry.maxRetries": 0,
+				"retry.cyberFallbackModels": { "*sonnet*": mappedSelector },
+			});
+			settings.setModelRole("default", refusedSelector);
+
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+			});
+
+			await session.prompt("Denied by the account's OAuth policy");
+			await session.waitForIdle();
+
+			// Not a content refusal: the map is never consulted, and the turn ends
+			// on the model whose account policy denied it.
+			expect(requestedModels).toEqual([refusedSelector]);
+			expect(session.model?.id).toBe(refusedModel.id);
+		});
+
+		it("hops an OpenAI content filter through the map after its same-model retries", async () => {
+			const requestedModels: string[] = [];
+			const mock = createMockModel();
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: mappedModel, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					requestedModels.push(`${model.provider}/${model.id}`);
+					if (model.id === mappedModel.id) {
+						mock.push({ content: [], stopReason: "error", errorMessage: "incomplete: content_filter" });
+					} else {
+						mock.push({ content: ["answered on the mapped model"] });
+					}
+					return mock.stream(model, context, options);
+				},
+			});
+
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 1,
+				"retry.maxRetries": 0,
+				"retry.cyberFallbackModels": { "*gpt-4o*": cyberRoleSelector },
+			});
+			settings.setModelRole("default", mappedSelector);
+
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+			});
+
+			await session.prompt("Blocked by the content filter");
+			await session.waitForIdle();
+
+			// A content filter is not account-scoped, so the map's same-model
+			// retries apply before the hop.
+			expect(requestedModels).toEqual([
+				mappedSelector,
+				mappedSelector,
+				mappedSelector,
+				mappedSelector,
+				cyberRoleSelector,
+			]);
+			expect(session.model?.id).toBe(cyberRoleModel.id);
+		});
+
+		it("drops the refused turn and its synthetic tool results before the retry", async () => {
+			const toolSchema = type({ value: type("string") });
+			let toolExecutions = 0;
+			const tool: AgentTool<typeof toolSchema, { value: string }> = {
+				name: "record",
+				label: "Record",
+				description: "Record a value",
+				parameters: toolSchema,
+				async execute(_toolCallId, params) {
+					toolExecutions += 1;
+					return { content: [{ type: "text", text: params.value }], details: params };
+				},
+			};
+
+			const requestedModels: string[] = [];
+			const retryContextRoles: string[][] = [];
+			const mock = createMockModel();
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: refusedModel, systemPrompt: ["Test"], tools: [tool], messages: [] },
+				streamFn: (model, context, options) => {
+					requestedModels.push(`${model.provider}/${model.id}`);
+					if (model.id === refusedModel.id) {
+						mock.push({
+							content: [{ type: "toolCall", id: "refused-call", name: "record", arguments: { value: "x" } }],
+							stopReason: "error",
+							stopDetails: { type: "refusal", category: "cyber", explanation: "Declined." },
+							errorMessage: "Refusal (cyber): Declined.",
+						});
+					} else {
+						retryContextRoles.push(context.messages.map(message => message.role));
+						mock.push({ content: ["answered on the mapped model"] });
+					}
+					return mock.stream(model, context, options);
+				},
+			});
+
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 1,
+				"retry.maxRetries": 0,
+				"retry.cyberFallbackModels": { "*sonnet*": mappedSelector },
+			});
+			settings.setModelRole("default", refusedSelector);
+
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+			});
+
+			await session.prompt("Refused after emitting a tool call");
+			await session.waitForIdle();
+
+			expect(toolExecutions).toBe(0);
+			// The refused assistant turn and the synthetic result paired with its
+			// unexecuted call are gone before the retry request goes out.
+			expect(retryContextRoles).toEqual([["user"]]);
+			expect(session.agent.state.messages.map(message => message.role)).toEqual(["user", "assistant"]);
+			expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+		});
+	});
 });

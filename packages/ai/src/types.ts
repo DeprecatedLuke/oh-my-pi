@@ -551,6 +551,14 @@ export interface StreamOptions {
 	 */
 	maxRetryDelayMs?: number;
 	/**
+	 * Whether an account-scoped `cyber_policy` content denial may retry through
+	 * the credential resolver. Callers that own the refusal themselves (a
+	 * configured `retry.cyberFallbackModels` entry) set `false` so a content
+	 * denial does not spend sibling accounts. Plan/entitlement denials, 401s,
+	 * 403s, and usage limits keep rotating either way. Default `true`.
+	 */
+	cyberPolicyRotatesCredentials?: boolean;
+	/**
 	 * Optional metadata to include in API requests.
 	 * Providers extract the fields they understand and ignore the rest.
 	 * For example, Anthropic uses `user_id` for abuse tracking and rate limiting.

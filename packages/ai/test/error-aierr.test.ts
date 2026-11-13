@@ -235,4 +235,53 @@ describe("aierr flag helpers", () => {
 		expect(AIError.isTransientStreamParseError("end of file")).toBe(false);
 		expect(AIError.isTransientStreamParseError("Unexpected token in JSON")).toBe(false);
 	});
+
+	it("separates content refusals from account-scoped denials", () => {
+		const refusal = (errorMessage: string, stopDetails?: { type: string }) => ({
+			stopReason: "error",
+			stopDetails,
+			errorMessage,
+		});
+		expect(AIError.isCyberRefusal(refusal("", { type: "refusal" }))).toBe(true);
+		expect(AIError.isCyberRefusal(refusal("", { type: "sensitive" }))).toBe(true);
+		// Codex cyber policy carries ContentBlocked alongside AccountPolicy.
+		expect(
+			AIError.isCyberRefusal(
+				refusal(
+					"This content was flagged for possible cybersecurity risk. Join Trusted Access for Cyber. (code=cyber_policy)",
+				),
+			),
+		).toBe(true);
+		// OpenAI content filters block content without an account scope.
+		expect(AIError.isCyberRefusal(refusal("incomplete: content_filter"))).toBe(true);
+		// Account-scoped denials another credential can clear are not refusals.
+		expect(
+			AIError.isCyberRefusal(refusal("OAuth authentication is currently not allowed for this organization.")),
+		).toBe(false);
+		// A Codex ChatGPT plan denial carries ContentBlocked too, but is not a
+		// content refusal: only its own wording identifies `cyber_policy`.
+		expect(
+			AIError.isCyberRefusal(
+				refusal(
+					"Codex error event: The 'gpt-5.6-sol' model is not supported when using Codex with a ChatGPT account. (code=model_not_found)",
+				),
+				AIError.create(AIError.Flag.AccountPolicy | AIError.Flag.ContentBlocked),
+			),
+		).toBe(false);
+		expect(AIError.isCyberRefusal({ stopReason: "stop", errorMessage: "content_filter" })).toBe(false);
+	});
+
+	it("lets a caller opt out of rotating a cyber_policy denial", () => {
+		const cyberPolicy = new Error(
+			"This content was flagged for possible cybersecurity risk. Join Trusted Access for Cyber. (code=cyber_policy)",
+		);
+		expect(AIError.isCyberPolicyError(cyberPolicy)).toBe(true);
+		expect(AIError.isAuthRetryableError(cyberPolicy)).toBe(true);
+		expect(AIError.isAuthRetryableError(cyberPolicy, { cyberPolicyRotatesCredentials: false })).toBe(false);
+
+		// Plan and entitlement denials keep rotating under the opt-out.
+		const planDenial = new Error("OAuth authentication is currently not allowed for this organization.");
+		expect(AIError.isCyberPolicyError(planDenial)).toBe(false);
+		expect(AIError.isAuthRetryableError(planDenial, { cyberPolicyRotatesCredentials: false })).toBe(true);
+	});
 });

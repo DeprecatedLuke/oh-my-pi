@@ -16,6 +16,7 @@ import { openAIResponsesReplaysNativeHistory } from "@oh-my-pi/pi-ai/providers/o
 import { serverSideFallbackModels } from "@oh-my-pi/pi-catalog/compat/server-side-fallback";
 import type { Settings } from "../config/settings";
 import { type AnthropicSlowModeLanes, anthropicSlowModeLanes } from "./anthropic-slow-mode";
+import { matchRetryCyberFallbackModels } from "./retry-fallback-chains";
 
 import {
 	cfgModelLoopGuardCheckAssistantContent,
@@ -34,6 +35,7 @@ import {
 	cfgProvidersOpenrouterVariant,
 	cfgProvidersStreamFirstEventTimeoutSeconds,
 	cfgProvidersStreamIdleTimeoutSeconds,
+	cfgRetryCyberFallbackModels,
 	cfgRetryMaxDelayMs,
 	cfgTextVerbosity,
 	validateProviderMaxInFlightRequests,
@@ -153,6 +155,12 @@ export function createSettingsAwareStreamFn(
 		const maxInFlightRequests = validateProviderMaxInFlightRequests(
 			streamOptions?.maxInFlightRequests ?? cfgProvidersMaxInFlightRequests.get(settings),
 		);
+		// A model `retry.cyberFallbackModels` covers owns its `cyber_policy` handling:
+		// the request must not spend sibling accounts on a content denial. Unmapped
+		// models keep the default rotation.
+		const cyberPolicyRotatesCredentials =
+			streamOptions?.cyberPolicyRotatesCredentials ??
+			(matchRetryCyberFallbackModels(cfgRetryCyberFallbackModels.get(settings), model) ? false : undefined);
 		// A cold Responses session rebuilds turns without their encrypted reasoning.
 		// A request that may wait for a provider slot is built when it gets one,
 		// after a concurrent response may have warmed the session, so it is
@@ -179,6 +187,7 @@ export function createSettingsAwareStreamFn(
 			streamIdleTimeoutMs: streamOptions?.streamIdleTimeoutMs ?? streamIdleTimeoutMs,
 			maxRetryDelayMs: streamOptions?.maxRetryDelayMs ?? cfgRetryMaxDelayMs.get(settings),
 			maxInFlightRequests,
+			...(cyberPolicyRotatesCredentials === undefined ? {} : { cyberPolicyRotatesCredentials }),
 			loopGuard: {
 				enabled: cfgModelLoopGuardEnabled.get(settings),
 				checkAssistantContent: cfgModelLoopGuardCheckAssistantContent.get(settings),
