@@ -735,13 +735,17 @@ function obfuscateMessageBatch(obfuscator: SecretObfuscator, messages: Message[]
  */
 export function obfuscateProviderContext(obfuscator: SecretObfuscator | undefined, context: Context): Context {
 	if (!obfuscator?.obfuscates()) return context;
-	const messages = obfuscateMessages(obfuscator, context.messages);
-	const original = context.systemPrompt;
-	let systemPrompt = original;
-	if (original) {
-		const next = original.map(block => obfuscator.obfuscate(block));
-		if (next.some((block, index) => block !== original[index])) systemPrompt = next;
-	}
-	if (messages === context.messages && systemPrompt === original) return context;
-	return { ...context, messages, systemPrompt };
+	// One batch for the whole request: outside a batch the system prompt is
+	// rescanned from scratch on every request (~1s for a 125K-char prompt).
+	return obfuscator.batch(() => {
+		const messages = obfuscateMessages(obfuscator, context.messages);
+		const original = context.systemPrompt;
+		let systemPrompt = original;
+		if (original) {
+			const next = original.map(block => obfuscator.obfuscate(block));
+			if (next.some((block, index) => block !== original[index])) systemPrompt = next;
+		}
+		if (messages === context.messages && systemPrompt === original) return context;
+		return { ...context, messages, systemPrompt };
+	});
 }
