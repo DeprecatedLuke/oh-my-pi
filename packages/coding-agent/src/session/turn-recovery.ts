@@ -3048,10 +3048,8 @@ export class TurnRecovery {
 			? formatRetryFallbackSelector(currentModel, this.#host.thinkingLevel())
 			: undefined;
 		// `retry.cyberFallbackModels` is a model-glob map. A refusal on a model one
-		// of its keys matches first gets same-model retries — the classifier is
-		// stochastic — and only then the matched replacements. A refusal no key
-		// matches keeps its immediate chain walk below, and a session that may not
-		// switch models at all never pays for the extra retries.
+		// of its keys matches switches straight to the matched replacements. A
+		// refusal no key matches keeps its immediate chain walk below.
 		const cyberFallbackEligible =
 			cyberRefusal &&
 			allowModelFallback &&
@@ -3061,6 +3059,15 @@ export class TurnRecovery {
 			cyberFallbackEligible && currentModel
 				? matchRetryCyberFallbackModels(cfgRetryCyberFallbackModels.get(this.#host.settings), currentModel)
 				: undefined;
+		if (cyberRefusal && !cyberFallbackMatch) {
+			logger.warn("Cyber refusal not covered by retry.cyberFallbackModels", {
+				model: currentModel ? `${currentModel.provider}/${currentModel.id}` : undefined,
+				allowModelFallback,
+				modelFallback: retrySettings.modelFallback,
+				fallbackOn: retrySettings.fallbackOn,
+				map: cfgRetryCyberFallbackModels.get(this.#host.settings),
+			});
+		}
 		// A mapped `cyber_policy` denial is a content refusal the map owns: no sibling
 		// account is spent on it.
 		const mappedCyberPolicy = accountPolicyDenial && cyberRefusal && cyberFallbackMatch !== undefined;
