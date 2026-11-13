@@ -1,14 +1,6 @@
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { ElementHandle, Page } from "puppeteer-core";
-import "./page-dom-types";
-
-interface BrowserElement {
-	readonly innerText?: string;
-	readonly value?: unknown;
-	readonly checked?: unknown;
-	readonly textContent: string | null;
-}
 import { isNavigatedContextError } from "./navigation";
 
 /** Default computed-style properties returned by `tab.styles()`. */
@@ -99,7 +91,7 @@ export async function queryValue(page: Page, selector: string, signal: AbortSign
 	try {
 		return (await untilAborted(signal, () =>
 			handle.evaluate(element => {
-				const candidate = element as BrowserElement;
+				const candidate = element as Element & { value?: unknown };
 				return "value" in candidate && candidate.value != null ? String(candidate.value) : null;
 			}),
 		)) as string | null;
@@ -204,7 +196,7 @@ export async function queryChecked(page: Page, selector: string, signal: AbortSi
 	try {
 		return (await untilAborted(signal, () =>
 			handle.evaluate(element => {
-				const candidate = element as BrowserElement;
+				const candidate = element as Element & { checked?: unknown };
 				return typeof candidate.checked === "boolean"
 					? candidate.checked
 					: element.getAttribute("aria-checked") === "true";
@@ -224,10 +216,9 @@ export function enrichElementQueries<T extends ElementHandle>(
 	enriched.text = () =>
 		guard("handle.text()", signal =>
 			untilAborted(signal, () =>
-				handle.evaluate(element => {
-					const candidate = element as BrowserElement;
-					return (candidate.innerText ?? candidate.textContent ?? "").trim();
-				}),
+				handle.evaluate(element =>
+					((element as unknown as { innerText?: string }).innerText ?? element.textContent ?? "").trim(),
+				),
 			),
 		) as Promise<string>;
 	enriched.html = () =>
@@ -238,7 +229,7 @@ export function enrichElementQueries<T extends ElementHandle>(
 		guard("handle.value()", signal =>
 			untilAborted(signal, () =>
 				handle.evaluate(element => {
-					const candidate = element as BrowserElement;
+					const candidate = element as Element & { value?: unknown };
 					return "value" in candidate && candidate.value != null ? String(candidate.value) : null;
 				}),
 			),
@@ -275,7 +266,7 @@ export function enrichElementQueries<T extends ElementHandle>(
 		guard("handle.isChecked()", signal =>
 			untilAborted(signal, () =>
 				handle.evaluate(element => {
-					const candidate = element as BrowserElement;
+					const candidate = element as Element & { checked?: unknown };
 					return typeof candidate.checked === "boolean"
 						? candidate.checked
 						: element.getAttribute("aria-checked") === "true";

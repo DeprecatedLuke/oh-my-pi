@@ -70,7 +70,7 @@ import { sendsImageInputOnWire } from "@oh-my-pi/pi-ai/providers/vision-guard";
 import { resolvePromptCacheLookback } from "@oh-my-pi/pi-catalog/compat/prompt-cache-lookback";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import type { CatalogPolicyInputs } from "@oh-my-pi/pi-catalog/types";
-import { isRecord, logger, prompt, Snowflake, toError } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, prompt, Snowflake, toError, withLoopPhase } from "@oh-my-pi/pi-utils";
 import * as snapcompact from "@oh-my-pi/snapcompact";
 import { writeArtifact } from "./artifacts";
 import type { ModelRegistry } from "../config/model-registry";
@@ -517,7 +517,11 @@ export interface SessionMaintenanceHost {
 	runRecoveryCompactionWithRollback(
 		reason: "overflow" | "incomplete",
 		message: AssistantMessage,
-		options: { autoContinue: boolean; triggerContextTokens?: number; excludeMediaMethods?: boolean },
+		options: {
+			autoContinue: boolean;
+			triggerContextTokens?: number;
+			excludeMediaMethods?: boolean;
+		},
 	): Promise<CompactionCheckResult>;
 	parseRetryAfterMsFromError(errorMessage: string): number | undefined;
 	setModelTemporary(
@@ -546,7 +550,11 @@ interface ArchiveReader {
 function archiveReader(model: Model): ArchiveReader {
 	const excludeThinking = !snapcompact.readerIncludesThinking(model);
 	const withoutFrames = !sendsImageInputOnWire(model);
-	return { excludeThinking, withoutFrames, key: `${excludeThinking}:${withoutFrames}` };
+	return {
+		excludeThinking,
+		withoutFrames,
+		key: `${excludeThinking}:${withoutFrames}`,
+	};
 }
 
 /**
@@ -752,7 +760,10 @@ export class SessionMaintenance {
 	 */
 	#withPlanProtection<T extends { protectedTools: ProtectedToolMatcher[] }>(config: T): T {
 		const planMatcher = createPlanReadMatcher(() => this.#host.planReferencePath());
-		return { ...config, protectedTools: [...config.protectedTools, planMatcher] };
+		return {
+			...config,
+			protectedTools: [...config.protectedTools, planMatcher],
+		};
 	}
 
 	/**
@@ -940,7 +951,9 @@ export class SessionMaintenance {
 		try {
 			const { removed } = await this.#host.dropImages();
 			if (removed > 0) {
-				logger.info("Snapcompact automatically shook attached images", { removed });
+				logger.info("Snapcompact automatically shook attached images", {
+					removed,
+				});
 			}
 		} catch (error) {
 			logger.warn("Snapcompact automatic image shake failed", {
@@ -956,7 +969,9 @@ export class SessionMaintenance {
 	 * session state exactly as the request resolves it.
 	 */
 	#replaysNativeHistory(message: AssistantMessage, nativeHistoryReplay: boolean): boolean {
-		return replaysNativeResponsesHistory(message, this.#model, { nativeHistoryReplay });
+		return replaysNativeResponsesHistory(message, this.#model, {
+			nativeHistoryReplay,
+		});
 	}
 
 	/**
@@ -991,7 +1006,13 @@ export class SessionMaintenance {
 	): Promise<ShakeResult> {
 		if (mode === "images") {
 			const { removed, tokensFreed } = await this.#host.dropImages();
-			return { mode, toolResultsDropped: 0, blocksDropped: 0, imagesDropped: removed, tokensFreed };
+			return {
+				mode,
+				toolResultsDropped: 0,
+				blocksDropped: 0,
+				imagesDropped: removed,
+				tokensFreed,
+			};
 		}
 
 		if (mode === "thinking") {
@@ -1121,7 +1142,12 @@ export class SessionMaintenance {
 			}
 			({ replacements, replacementTokenCounts, savings } = calculateReplacementState(artifactId));
 			if (opts.toolResultsOnly && savings < config.minSavings) {
-				return { mode, toolResultsDropped: 0, blocksDropped: 0, tokensFreed: 0 };
+				return {
+					mode,
+					toolResultsDropped: 0,
+					blocksDropped: 0,
+					tokensFreed: 0,
+				};
 			}
 		}
 
@@ -1328,7 +1354,10 @@ export class SessionMaintenance {
 				// its behalf would nudge the model on the previous transcript instead.
 				const interruptedActiveTurn = this.#host.agent.state.isStreaming;
 				this.#host.disconnectFromAgent();
-				await this.#host.abort({ goalReason: "internal", preserveCompaction: true });
+				await this.#host.abort({
+					goalReason: "internal",
+					preserveCompaction: true,
+				});
 				resumeInterruptedTurn =
 					(interruptedActiveTurn || inheritedResume) &&
 					options?.suppressContinuation !== true &&
@@ -1336,7 +1365,10 @@ export class SessionMaintenance {
 				interruptedTurnGeneration = this.#host.promptGeneration();
 				manualCompactionStarted = true;
 				await this.#emitLifecycleEvent(
-					{ type: "manual_compaction_start", ...(compactMode ? { mode: compactMode.name } : {}) },
+					{
+						type: "manual_compaction_start",
+						...(compactMode ? { mode: compactMode.name } : {}),
+					},
 					false,
 				);
 			}
@@ -1488,24 +1520,24 @@ export class SessionMaintenance {
 					: `${this.#model.id} is text-only`;
 				throw snapcompactFailure(`snapcompact needs a vision-capable model (${reason})`);
 			} else if (snapcompactReady) {
-				const text = snapcompact.serializeConversation(
-					this.#host.convertToLlmForSideRequest(
-						preparation.messagesToSummarize.concat(preparation.turnPrefixMessages),
-					),
-					{ includeThinking: snapcompactIncludeThinking },
+				const renderScan = this.#snapcompactPreflight(
+					preparation,
+					snapcompactIncludeThinking,
+					snapcompactShapeSetting,
 				);
-				const probeText = snapcompact.renderabilityProbeText(
-					text,
-					preparation.previousPreserveData,
-					preparation.previousSummary,
-				);
-				snapcompactShape = snapcompact.resolveShapeForText(probeText, this.#model, snapcompactShapeSetting);
-				const renderScan = snapcompact.scanRenderability(probeText, { shape: snapcompactShape });
+				snapcompactShape = renderScan.shape;
 				if (!renderScan.isSafe) {
 					const percent = (renderScan.unrenderableRatio * 100).toFixed(1);
 					throw snapcompactFailure(
 						`snapcompact cannot render this conversation: unsupported characters for selected snapcompact font (${percent}%)`,
 					);
+				}
+				// The preflight and the render each block the loop for a long history; let it breathe between them.
+				// The yield lets a model switch land, and the scanned shape belongs to the model it was resolved for.
+				const scannedModel = this.#model;
+				await Bun.sleep(0);
+				if (this.#model !== scannedModel) {
+					throw snapcompactFailure("snapcompact stopped: the active model changed while it was preparing");
 				}
 			}
 
@@ -1538,7 +1570,7 @@ export class SessionMaintenance {
 						{
 							convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
 							model: this.#model,
-							...(snapcompactShapeSetting === "auto" ? {} : { shape }),
+							shape,
 							maxFrames,
 							includeThinking: snapcompactIncludeThinking,
 						},
@@ -1604,7 +1636,10 @@ export class SessionMaintenance {
 				firstKeptEntryId = snapcompactResult.firstKeptEntryId;
 				tokensBefore = snapcompactResult.tokensBefore;
 				details = snapcompactResult.details;
-				preserveData = { ...compactionPrep.preserveData, ...snapcompactResult.preserveData };
+				preserveData = {
+					...compactionPrep.preserveData,
+					...snapcompactResult.preserveData,
+				};
 			} else {
 				codexCompaction = createCodexCompactionContext({
 					trigger: "manual",
@@ -1785,7 +1820,12 @@ export class SessionMaintenance {
 			error instanceof Error ? error.message : error === undefined ? "Compaction failed" : String(error);
 		if (error instanceof ManualCompactionNoOpError) {
 			return this.#emitLifecycleEvent(
-				{ type: "manual_compaction_end", aborted: false, skipped: true, errorMessage },
+				{
+					type: "manual_compaction_end",
+					aborted: false,
+					skipped: true,
+					errorMessage,
+				},
 				false,
 			);
 		}
@@ -1835,7 +1875,9 @@ export class SessionMaintenance {
 			this.#host.sessionManager.getBranch().at(-1)?.id !== sourceLeafId ||
 			(this.#model && `${this.#model.provider}/${this.#model.id}` !== sourceModel)
 		) {
-			throw new CompactionCancelledError(undefined, { cause: signalController.signal.reason });
+			throw new CompactionCancelledError(undefined, {
+				cause: signalController.signal.reason,
+			});
 		}
 		const prepared = await this.#prepareCompactionFromHooks(preparation, hookCompaction, signalController.signal);
 		if (
@@ -1845,7 +1887,9 @@ export class SessionMaintenance {
 			this.#host.sessionManager.getBranch().at(-1)?.id !== sourceLeafId ||
 			(this.#model && `${this.#model.provider}/${this.#model.id}` !== sourceModel)
 		) {
-			throw new CompactionCancelledError(undefined, { cause: signalController.signal.reason });
+			throw new CompactionCancelledError(undefined, {
+				cause: signalController.signal.reason,
+			});
 		}
 		const result =
 			prepared.kind === "fromHook"
@@ -2364,7 +2408,11 @@ export class SessionMaintenance {
 	/** Install and launch one background speculation run for `method`. */
 	#startSpeculationRun(contextTokens: number, method: "remote" | "handoff" | "soft"): void {
 		const controller = new AbortController();
-		const run: SpeculationRun = { controller, promise: Promise.resolve(), contextTokensAtStart: contextTokens };
+		const run: SpeculationRun = {
+			controller,
+			promise: Promise.resolve(),
+			contextTokensAtStart: contextTokens,
+		};
 		const model = this.#model;
 		// Keyed now: the session can switch before the run settles.
 		const nativeKey = model && this.#nativeSpeculationKey(model);
@@ -2604,7 +2652,9 @@ export class SessionMaintenance {
 			this.#host.settings.revision,
 		);
 		const emptyWrapperTokens = this.#countProjectedMessages([
-			createCompactionSummaryMessage("", 0, new Date(0).toISOString(), { method: armed.method }),
+			createCompactionSummaryMessage("", 0, new Date(0).toISOString(), {
+				method: armed.method,
+			}),
 		]);
 		const maxArmedBaseline = Math.max(
 			branchCurrentTokens,
@@ -2722,7 +2772,9 @@ export class SessionMaintenance {
 		// plan reference. Clear the sent-flag so #buildPlanReferenceMessage re-reads
 		// the plan from disk and re-injects it on the next turn (issue #1246).
 		this.#host.resetPlanReference();
-		this.#host.resetAdvisorRuntimes(args.advisorResetReason, { compacted: true });
+		this.#host.resetAdvisorRuntimes(args.advisorResetReason, {
+			compacted: true,
+		});
 		this.#host.syncTodoPhasesFromBranch();
 		if (args.codexCompaction) {
 			this.#host.resetCodexProviderAfterCompaction(args.codexCompaction);
@@ -2784,7 +2836,10 @@ export class SessionMaintenance {
 	}
 
 	#estimatePrePromptContextTokens(messages: AgentMessage[], contextWindow: number): number {
-		const breakdown = this.#host.getContextBreakdown({ contextWindow, pendingMessages: messages });
+		const breakdown = this.#host.getContextBreakdown({
+			contextWindow,
+			pendingMessages: messages,
+		});
 		const localEstimate = this.#estimateStoredContextTokens(messages);
 		// Floor by the local estimate: a payload-shrinking before_provider_request
 		// hook deflates the provider-anchored breakdown, which must not suppress
@@ -2910,7 +2965,9 @@ export class SessionMaintenance {
 		await this.runAutoCompaction("threshold", false, {
 			autoContinue: false,
 			triggerContextTokens: contextTokens,
-			pendingContextTokens: this.#tokenizer.countMessages(messages, { excludeEncryptedReasoning: true }),
+			pendingContextTokens: this.#tokenizer.countMessages(messages, {
+				excludeEncryptedReasoning: true,
+			}),
 			preparedContextTokens: this.#estimateStoredContextTokens(),
 			phase: "pre_turn",
 		});
@@ -3496,7 +3553,11 @@ export class SessionMaintenance {
 					this.#host.emitNotice("error", finalError, "compaction");
 					// Without this the dropped turn leaves no error behind, so the task
 					// executor reads the run as idle and re-prompts it into the same loop.
-					this.#host.retainTerminalFailure({ ...assistantMessage, stopReason: "error", errorMessage: finalError });
+					this.#host.retainTerminalFailure({
+						...assistantMessage,
+						stopReason: "error",
+						errorMessage: finalError,
+					});
 					return COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION;
 				}
 				this.#incompleteRecoveryAttempts++;
@@ -3529,7 +3590,11 @@ export class SessionMaintenance {
 						promptTokens: incompletePromptTokens,
 						attempt: this.#incompleteRecoveryAttempts,
 					});
-					this.#host.scheduleAgentContinue({ source: "incomplete-retry", delayMs: 100, generation });
+					this.#host.scheduleAgentContinue({
+						source: "incomplete-retry",
+						delayMs: 100,
+						generation,
+					});
 					return COMPACTION_CHECK_CONTINUATION;
 				}
 				logger.debug("Compaction triggered by response.incomplete (length stop, no promotion target)", {
@@ -3684,7 +3749,9 @@ export class SessionMaintenance {
 		if (!targetModel) return false;
 
 		try {
-			await this.#host.setModelTemporary(targetModel, undefined, { ephemeral: true });
+			await this.#host.setModelTemporary(targetModel, undefined, {
+				ephemeral: true,
+			});
 			logger.debug("Context promotion switched model on overflow", {
 				from: `${currentModel.provider}/${currentModel.id}`,
 				to: `${targetModel.provider}/${targetModel.id}`,
@@ -3913,7 +3980,13 @@ export class SessionMaintenance {
 				type: "session.compacting",
 				sessionId: this.#host.sessionId(),
 				messages: compactMessages,
-			})) as { context?: string[]; prompt?: string; preserveData?: Record<string, unknown> } | undefined;
+			})) as
+				| {
+						context?: string[];
+						prompt?: string;
+						preserveData?: Record<string, unknown>;
+				  }
+				| undefined;
 
 			hookContext = result?.context;
 			hookPrompt = result?.prompt;
@@ -4039,7 +4112,9 @@ export class SessionMaintenance {
 		// sees the pending prompt too; the window fit keeps the full count.
 		const fixedTokens =
 			nonMessageTokens +
-			this.#tokenizer.countMessages(preparation.recentMessages, { excludeEncryptedReasoning: true }) +
+			this.#tokenizer.countMessages(preparation.recentMessages, {
+				excludeEncryptedReasoning: true,
+			}) +
 			pendingTokens +
 			capReserve;
 		const roomBudget = Math.min(
@@ -4064,6 +4139,33 @@ export class SessionMaintenance {
 		);
 	}
 
+	/**
+	 * Pick the snapcompact shape for `preparation`'s history and check the font can render it.
+	 * The resolved shape is what {@link snapcompact.compact} would pick from the same probe text,
+	 * so callers pass it through instead of letting compact resolve it again.
+	 * Runs as the `compaction.snapcompact` loop phase: serializing and scanning a long history blocks the loop.
+	 */
+	#snapcompactPreflight(
+		preparation: CompactionPreparation,
+		includeThinking: boolean,
+		shapeSetting: snapcompact.ShapeVariantName | "auto",
+	): snapcompact.ShapeScan {
+		return withLoopPhase("compaction.snapcompact", () => {
+			const text = snapcompact.serializeConversation(
+				this.#host.convertToLlmForSideRequest(
+					preparation.messagesToSummarize.concat(preparation.turnPrefixMessages),
+				),
+				{ includeThinking },
+			);
+			const probeText = snapcompact.renderabilityProbeText(
+				text,
+				preparation.previousPreserveData,
+				preparation.previousSummary,
+			);
+			return snapcompact.resolveShapeAndScan(probeText, this.#model, shapeSetting);
+		});
+	}
+
 	#snapcompactFramePayloadBytes(result: snapcompact.CompactionResult): number {
 		const archive = snapcompact.getPreservedArchive(result.preserveData);
 		return archive ? snapcompact.frameDataBytes(archive.frames) : 0;
@@ -4072,7 +4174,11 @@ export class SessionMaintenance {
 	/** What the active tokenizer charges for `archive`'s frames inside a compaction summary. */
 	#snapcompactArchiveFrameTokens(archive: snapcompact.Archive): number {
 		const timestamp = new Date(0).toISOString();
-		const blocks = archive.frames.map(frame => ({ type: "image" as const, data: frame.data, mimeType: "image/png" }));
+		const blocks = archive.frames.map(frame => ({
+			type: "image" as const,
+			data: frame.data,
+			mimeType: "image/png",
+		}));
 		return (
 			this.#tokenizer.countMessage(createCompactionSummaryMessage("", 0, timestamp, { blocks })) -
 			this.#tokenizer.countMessage(createCompactionSummaryMessage("", 0, timestamp))
@@ -4101,7 +4207,10 @@ export class SessionMaintenance {
 		options: snapcompact.Options<AgentMessage>,
 		settings: EngineCompactionSettings,
 		pendingTokens: number,
-	): Promise<{ result: snapcompact.CompactionResult; framePayloadBytes: number }> {
+	): Promise<{
+		result: snapcompact.CompactionResult;
+		framePayloadBytes: number;
+	}> {
 		let result = await snapcompact.compact(preparation, options);
 		let framePayloadBytes = this.#snapcompactFramePayloadBytes(result);
 		const ctxWindow = this.#model?.contextWindow ?? 0;
@@ -4119,8 +4228,9 @@ export class SessionMaintenance {
 				maxFrames = Math.floor((frames * frameByteBudget) / framePayloadBytes);
 			}
 			const projected =
-				this.#projectSnapcompactContextTokens(preparation, result, { excludeEncryptedReasoning: true }) +
-				pendingTokens;
+				this.#projectSnapcompactContextTokens(preparation, result, {
+					excludeEncryptedReasoning: true,
+				}) + pendingTokens;
 			if (projected > targetTokens && frames > 1) {
 				const perFrame = this.#snapcompactArchiveFrameTokens(archive) / frames;
 				maxFrames = Math.min(maxFrames, Math.max(1, frames - Math.ceil((projected - targetTokens) / perFrame)));
@@ -4134,7 +4244,10 @@ export class SessionMaintenance {
 				targetTokens,
 				maxFrames,
 			});
-			result = await snapcompact.compact(preparation, { ...options, maxFrames });
+			result = await snapcompact.compact(preparation, {
+				...options,
+				maxFrames,
+			});
 			framePayloadBytes = this.#snapcompactFramePayloadBytes(result);
 		}
 		return { result, framePayloadBytes };
@@ -4178,7 +4291,9 @@ export class SessionMaintenance {
 	): number {
 		const archive = snapcompact.getPreservedArchive(result.preserveData);
 		const blocks = archive
-			? snapcompact.historyBlocks(archive, { maxFrameDataBytes: snapcompact.frameDataBytesBudget(this.#model) })
+			? snapcompact.historyBlocks(archive, {
+					maxFrameDataBytes: snapcompact.frameDataBytesBudget(this.#model),
+				})
 			: undefined;
 		const summaryMessage = createCompactionSummaryMessage(
 			result.summary,
@@ -4218,7 +4333,9 @@ export class SessionMaintenance {
 		const leaf = branch.at(-1);
 		const archive = snapcompact.getPreservedArchive(args.preserveData);
 		const blocks = archive
-			? snapcompact.historyBlocks(archive, { maxFrameDataBytes: snapcompact.frameDataBytesBudget(this.#model) })
+			? snapcompact.historyBlocks(archive, {
+					maxFrameDataBytes: snapcompact.frameDataBytesBudget(this.#model),
+				})
 			: undefined;
 		if (!leaf) {
 			const summaryMessage = createCompactionSummaryMessage(
@@ -4331,7 +4448,9 @@ export class SessionMaintenance {
 			: this.#countProjectedMessages(preparation.recentMessages);
 		const replacedBranchTokens = Math.max(0, branchBefore - nonMessageTokens - keptTokens);
 		const emptyWrapperTokens = this.#countProjectedMessages([
-			createCompactionSummaryMessage("", 0, new Date(0).toISOString(), { method }),
+			createCompactionSummaryMessage("", 0, new Date(0).toISOString(), {
+				method,
+			}),
 		]);
 		const hasRealReplacedHistory =
 			replacedBranchTokens > emptyWrapperTokens || preparation.previousSummary !== undefined;
@@ -4483,7 +4602,9 @@ export class SessionMaintenance {
 			? this.#tokenizer
 			: new Tokenizer(model, tokenizerOptions);
 		const storedExcludedTokens = activeExcludedMessage
-			? tokenizer.countMessage(activeExcludedMessage, { excludeEncryptedReasoning: true })
+			? tokenizer.countMessage(activeExcludedMessage, {
+					excludeEncryptedReasoning: true,
+				})
 			: 0;
 		const branch = this.#host.sessionManager.getBranch();
 		if (
@@ -4511,7 +4632,9 @@ export class SessionMaintenance {
 				excludedIndex === -1 ? readerMessages : readerMessages.filter((_, index) => index !== excludedIndex);
 			const readerTokens =
 				computeNonMessageTokens(this.#host.nonMessageTokenSource(), tokenizer, this.#host.settings.revision) +
-				tokenizer.countMessages(sentMessages, { excludeEncryptedReasoning: true });
+				tokenizer.countMessages(sentMessages, {
+					excludeEncryptedReasoning: true,
+				});
 			return readerTokens <= fitBudget;
 		}
 		// Provider usage carries the reasoning the active model's request replayed,
@@ -4599,7 +4722,10 @@ export class SessionMaintenance {
 		let elideSink = "placeholders";
 		if (!options.skipElide) {
 			try {
-				const result = await this.#host.shake("elide", { config: RESCUE_SHAKE_CONFIG, signal });
+				const result = await this.#host.shake("elide", {
+					config: RESCUE_SHAKE_CONFIG,
+					signal,
+				});
 				elided = result.toolResultsDropped + result.blocksDropped;
 				elidedTokens = result.tokensFreed;
 				if (result.artifactId) elideSink = "an artifact";
@@ -4913,7 +5039,11 @@ export class SessionMaintenance {
 			}
 		}
 		lists.forEach((list, index) => {
-			this.#summaryScans.set(list, { key: scanKey, length: scanned[index]!, first: list[0] });
+			this.#summaryScans.set(list, {
+				key: scanKey,
+				length: scanned[index]!,
+				first: list[0],
+			});
 		});
 	}
 
@@ -5125,7 +5255,10 @@ export class SessionMaintenance {
 				// densely than the dropped middle. Each pass cuts at least 2%.
 				while (tokens > targetTokens && chars > 0) {
 					chars = Math.min(Math.floor((chars * targetTokens) / tokens), Math.floor(chars * 0.98));
-					unfolded = snapcompact.viewWithoutFrames(entry.summary, archive, { ...options, maxChars: chars });
+					unfolded = snapcompact.viewWithoutFrames(entry.summary, archive, {
+						...options,
+						maxChars: chars,
+					});
 					tokens = tokenizer.countTokens(keptText(unfolded));
 				}
 			}
@@ -5161,7 +5294,10 @@ export class SessionMaintenance {
 				entry.summary,
 				archive,
 				Array.isArray(details?.readFiles) && Array.isArray(details?.modifiedFiles)
-					? { readFiles: details.readFiles, modifiedFiles: details.modifiedFiles }
+					? {
+							readFiles: details.readFiles,
+							modifiedFiles: details.modifiedFiles,
+						}
 					: undefined,
 			);
 		const archiveText = snapcompact.archiveSourceText(archive);
@@ -5174,7 +5310,10 @@ export class SessionMaintenance {
 			const rendered = snapcompact.getPreservedArchive(result.preserveData);
 			if (!rendered) throw new Error("The re-render produced no archive");
 			// A summary an extension wrote keeps its own words, without reasoning.
-			view = { summary: snapcompact.viewSummary(entry.summary, result.summary, true), archive: rendered };
+			view = {
+				summary: snapcompact.viewSummary(entry.summary, result.summary, true),
+				archive: rendered,
+			};
 		} catch (error) {
 			logger.warn("Snapcompact archive render without reasoning failed; reading its text without frames", {
 				error: error instanceof Error ? error.message : String(error),
@@ -5185,7 +5324,10 @@ export class SessionMaintenance {
 		const slot = preserveData?.[snapcompact.PRESERVE_KEY];
 		entry.preserveData = {
 			...preserveData,
-			[snapcompact.PRESERVE_KEY]: { ...(isRecord(slot) ? slot : {}), withoutThinking: view },
+			[snapcompact.PRESERVE_KEY]: {
+				...(isRecord(slot) ? slot : {}),
+				withoutThinking: view,
+			},
 		};
 		try {
 			await this.#host.sessionManager.rewriteEntries();
@@ -5374,7 +5516,11 @@ export class SessionMaintenance {
 			// for any listener — and for input routed during this emit's event-loop yield:
 			// a message typed as the compaction loader appears must land in the compaction
 			// queue, not the core steering queue (which handoff's agent.reset() would wipe).
-			const startEvent = { type: "auto_compaction_start" as const, reason, action };
+			const startEvent = {
+				type: "auto_compaction_start" as const,
+				reason,
+				action,
+			};
 			await this.#emitLifecycleEvent(startEvent, false);
 			if (armedSpec) {
 				// A background speculation already produced this compaction's
@@ -5704,20 +5850,12 @@ export class SessionMaintenance {
 			let snapcompactBlocker: string | undefined;
 			if (action === "snapcompact" && compactionPrep.kind !== "fromHook") {
 				const snapcompactIncludeThinking = snapcompact.readerIncludesThinking(this.#model);
-				const text = snapcompact.serializeConversation(
-					this.#host.convertToLlmForSideRequest(
-						preparation.messagesToSummarize.concat(preparation.turnPrefixMessages),
-					),
-					{ includeThinking: snapcompactIncludeThinking },
+				const renderScan = this.#snapcompactPreflight(
+					preparation,
+					snapcompactIncludeThinking,
+					cfgSnapcompactShape.get(this.#host.settings),
 				);
-				const probeText = snapcompact.renderabilityProbeText(
-					text,
-					preparation.previousPreserveData,
-					preparation.previousSummary,
-				);
-				const shapeSetting = cfgSnapcompactShape.get(this.#host.settings);
-				const shape = snapcompact.resolveShapeForText(probeText, this.#model, shapeSetting);
-				const renderScan = snapcompact.scanRenderability(probeText, { shape });
+				const shape = renderScan.shape;
 				if (!renderScan.isSafe) {
 					const percent = (renderScan.unrenderableRatio * 100).toFixed(1);
 					logger.warn("Snapcompact disabled: unsupported characters for selected snapcompact font", {
@@ -5735,12 +5873,26 @@ export class SessionMaintenance {
 						snapcompactBlocker =
 							"snapcompact: kept history alone exceeds the context budget; trying the next preferred compaction method.";
 					} else {
+						// The preflight and the render each block the loop for a long history; let it breathe between them.
+						// The yield lets a model switch land, and the scanned shape and frame cap belong to the model they were sized for.
+						const scannedModel = this.#model;
+						await Bun.sleep(0);
+						if (this.#model !== scannedModel) {
+							logger.warn("Snapcompact skipped: the active model changed during preflight", {
+								from: scannedModel?.id,
+								to: this.#model?.id,
+							});
+							snapcompactBlocker =
+								"snapcompact: the active model changed during preflight; trying the next preferred compaction method.";
+						}
+					}
+					if (!snapcompactBlocker) {
 						const rendered = await this.#renderSnapcompactArchive(
 							preparation,
 							{
 								convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
 								model: this.#model,
-								...(shapeSetting === "auto" ? {} : { shape }),
+								shape,
 								maxFrames,
 								includeThinking: snapcompactIncludeThinking,
 							},
@@ -5913,7 +6065,10 @@ export class SessionMaintenance {
 				firstKeptEntryId = snapcompactResult.firstKeptEntryId;
 				tokensBefore = snapcompactResult.tokensBefore;
 				details = snapcompactResult.details;
-				preserveData = { ...compactionPrep.preserveData, ...snapcompactResult.preserveData };
+				preserveData = {
+					...compactionPrep.preserveData,
+					...snapcompactResult.preserveData,
+				};
 			} else {
 				const liveModel = this.#model;
 				const candidates = this.#getCompactionModelCandidates(
@@ -6023,7 +6178,10 @@ export class SessionMaintenance {
 									},
 								);
 								if (nativeFailure) {
-									nativeCompactionFailure ??= { error, provider: candidate.provider };
+									nativeCompactionFailure ??= {
+										error,
+										provider: candidate.provider,
+									};
 									lastError = nativeCompactionFailure.error;
 								} else {
 									lastError = error;
@@ -6047,7 +6205,10 @@ export class SessionMaintenance {
 									AIError.is(id, AIError.Flag.UsageLimit));
 							if (!shouldRetry) {
 								if (error instanceof NativeCompactionError) {
-									nativeCompactionFailure ??= { error, provider: candidate.provider };
+									nativeCompactionFailure ??= {
+										error,
+										provider: candidate.provider,
+									};
 									lastError = nativeCompactionFailure.error;
 								} else {
 									lastError = error;
@@ -6079,7 +6240,10 @@ export class SessionMaintenance {
 									: Number.POSITIVE_INFINITY;
 							if (delayMs > maxAcceptableDelayMs) {
 								if (error instanceof NativeCompactionError) {
-									nativeCompactionFailure ??= { error, provider: candidate.provider };
+									nativeCompactionFailure ??= {
+										error,
+										provider: candidate.provider,
+									};
 									lastError = nativeCompactionFailure.error;
 									break;
 								}
@@ -6474,7 +6638,13 @@ export class SessionMaintenance {
 		}
 
 		await this.#emitLifecycleEvent(
-			{ type: "auto_compaction_end", action, result, aborted: false, willRetry },
+			{
+				type: "auto_compaction_end",
+				action,
+				result,
+				aborted: false,
+				willRetry,
+			},
 			detachPostCommit,
 		);
 
@@ -6527,7 +6697,10 @@ export class SessionMaintenance {
 		const signal = controller.signal;
 		try {
 			await this.#emitLifecycleEvent({ type: "auto_compaction_start", reason, action }, false);
-			const result = await this.#host.shake("elide", { config: DEFAULT_SHAKE_CONFIG, signal });
+			const result = await this.#host.shake("elide", {
+				config: DEFAULT_SHAKE_CONFIG,
+				signal,
+			});
 			if (signal.aborted) {
 				await this.#emitLifecycleEvent(
 					{

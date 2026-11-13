@@ -397,6 +397,10 @@ type UsageLimitOutcome = {
 	reportResetAtMs: number | undefined;
 };
 
+/** Request-time provider for the main Agent; not serialized into session history. */
+export const kUsageLimitRequestProvider = Symbol("usage-limit-request-provider");
+type IssuedProviderAssistantMessage = AssistantMessage & { [kUsageLimitRequestProvider]?: string };
+
 /** Owns terminal-stop recovery, automatic retries, and fallback routing. */
 export class TurnRecovery {
 	readonly #host: TurnRecoveryHost;
@@ -848,6 +852,9 @@ export class TurnRecovery {
 		const id = this.#classifyRetryMessage(message);
 		const activeModel = this.#host.model();
 		if (!activeModel || !AIError.is(id, AIError.Flag.UsageLimit)) return false;
+		// Only the request-time provider proves a delayed error belongs to the old pool.
+		const requestProvider = (message as IssuedProviderAssistantMessage)[kUsageLimitRequestProvider];
+		if (requestProvider !== undefined && requestProvider !== activeModel.provider) return false;
 
 		let recorded = this.#usageLimitOutcomes.get(message);
 		if (!recorded) {
@@ -2850,6 +2857,12 @@ export class TurnRecovery {
 
 		const errorMessage = message.errorMessage || "Unknown error";
 		const id = this.#classifyRetryMessage(message);
+		const requestProvider = (message as IssuedProviderAssistantMessage)[kUsageLimitRequestProvider];
+		const oldProviderLimitFor = (model: Model | undefined): boolean =>
+			requestProvider !== undefined &&
+			model !== undefined &&
+			AIError.is(id, AIError.Flag.UsageLimit) &&
+			requestProvider !== model.provider;
 		// A refused turn is never preserved, whatever the caller asked for: the
 		// classifier declined this exact request, and the partial turn it left —
 		// plus the synthetic results paired with its unexecuted calls — must not
@@ -2870,8 +2883,10 @@ export class TurnRecovery {
 			(message.errorStatus === 429 || rateLimitReason === "RATE_LIMIT_EXCEEDED");
 		const staleOpenAIResponsesReplayError = AIError.is(id, AIError.Flag.StaleResponsesItem);
 		const accountPolicyDenial = AIError.is(id, AIError.Flag.AccountPolicy);
-		const recordedUsageLimitOutcome = await this.#usageLimitOutcomes.get(message);
-		const parsedRetryAfterMs = this.#parseRetryAfterMsFromError(errorMessage);
+		let recordedUsageLimitOutcome = await this.#usageLimitOutcomes.get(message);
+		let staleUsageLimit = oldProviderLimitFor(this.#host.model());
+		if (staleUsageLimit) recordedUsageLimitOutcome = undefined;
+		let parsedRetryAfterMs = staleUsageLimit ? undefined : this.#parseRetryAfterMsFromError(errorMessage);
 		let delayMs = staleOpenAIResponsesReplayError
 			? 0
 			: calculateRetryBackoffDelayMs(retrySettings.baseDelayMs, this.#retryAttempt);
@@ -2901,7 +2916,7 @@ export class TurnRecovery {
 		// Set when a usage-limit error pinned the wait to credential
 		// availability — suppresses the generic retry-after bump below.
 		let usageLimitWaitMs: number | undefined;
-		const siblingAvailabilityWaitMs =
+		let siblingAvailabilityWaitMs =
 			recordedUsageLimitOutcome?.retryAtMs === undefined
 				? undefined
 				: Math.max(0, recordedUsageLimitOutcome.retryAtMs - Date.now()) + SIBLING_UNBLOCK_BUFFER_MS;
@@ -3018,8 +3033,18 @@ export class TurnRecovery {
 			}
 		}
 
-		const allowModelFallback = options?.allowModelFallback !== false && !this.#host.modelFallbackDisabled?.();
 		const currentModel = this.#host.model();
+		// The model may have changed while the quota reset lookup awaited.
+		if (!staleUsageLimit && oldProviderLimitFor(currentModel)) {
+			staleUsageLimit = true;
+			recordedUsageLimitOutcome = undefined;
+			parsedRetryAfterMs = undefined;
+			usageLimitWaitMs = undefined;
+			siblingAvailabilityWaitMs = undefined;
+			switchedCredential = false;
+			delayMs = calculateRetryBackoffDelayMs(retrySettings.baseDelayMs, this.#retryAttempt);
+		}
+		const allowModelFallback = options?.allowModelFallback !== false && !this.#host.modelFallbackDisabled?.();
 		const currentSelector = currentModel
 			? formatRetryFallbackSelector(currentModel, this.#host.thinkingLevel())
 			: undefined;
@@ -3148,7 +3173,7 @@ export class TurnRecovery {
 		// finish.
 		const billingCap = isBillingCapUsageLimit(message.errorStatus, errorMessage);
 		const exceedsDelayCap = (waitMs: number): boolean => {
-			if (billingCap) return true;
+			if (billingCap && !staleUsageLimit) return true;
 			const waitForUsageReset =
 				retrySettings.waitForUsageReset === true &&
 				recordedUsageLimitOutcome !== undefined &&
@@ -3176,6 +3201,7 @@ export class TurnRecovery {
 				allowModelFallback &&
 				retrySettings.modelFallback &&
 				retryFallbackAdmits(retrySettings.fallbackOn, AIError.is(id, AIError.Flag.UsageLimit)) &&
+				!staleUsageLimit &&
 				!thinkingLoop &&
 				!sameModelSteerReplay &&
 				!waitForSiblingCredential &&
@@ -3256,7 +3282,13 @@ export class TurnRecovery {
 			}
 		}
 
-		if (retryBudgetExhausted) {
+		if (retryBudgetExhausted && staleUsageLimit) {
+			// The spent attempts and their backoff belong to the replaced provider.
+			// Give the selected model its first request without inheriting the old
+			// provider's fail-fast cap or reset window.
+			this.#retryAttempt = 1;
+			delayMs = 0;
+		} else if (retryBudgetExhausted) {
 			// A refusal the cyber map covers keeps its own retries even when the
 			// provider-error budget is spent: the classifier declines the request,
 			// not the model.

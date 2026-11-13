@@ -109,7 +109,7 @@ export async function readFilePayloads(absolutePaths: string[], signal?: AbortSi
  * Set a file input's files to `paths` through `DOM.setFileInputFiles`; the browser reads them itself. Raw CDP rather than
  * `ElementHandle.uploadFile`, which an actionable handle routes back through the upload helpers.
  */
-export async function setFileInputPaths(input: ElementHandle<Node>, paths: string[]): Promise<void> {
+export async function setFileInputPaths(input: ElementHandle, paths: string[]): Promise<void> {
 	await input.frame.client.send("DOM.setFileInputFiles", { objectId: input.remoteObject().objectId, files: paths });
 }
 

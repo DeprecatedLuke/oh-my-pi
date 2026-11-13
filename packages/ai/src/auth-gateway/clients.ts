@@ -18,6 +18,10 @@
  *   such account; only this client's requests keep using them. Without it a
  *   bound account stays available to everyone else.
  *
+ * Chat routes drop a client's attribution, billing and transport options,
+ * upstream headers included (the `gateway` tier in `caller-options.ts`). The
+ * unscoped gateway token keeps them.
+ *
  * Account binding reuses `AuthStorage.sessions.restrict`. Each admitted
  * version of a client (its token, models, accounts and exclusivity) resolves a
  * bound provider's credentials under a session id of its own, restricted before
