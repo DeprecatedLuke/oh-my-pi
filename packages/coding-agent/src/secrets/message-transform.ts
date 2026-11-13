@@ -120,8 +120,14 @@ export function obfuscateToolArguments(
 	sharedRegexSecretValues?: ReadonlySet<string>,
 ): Record<string, unknown> {
 	if (!obfuscator.hasSecrets()) return args;
-	const regexSecretValues = sharedRegexSecretValues ?? collectJsonRegexSecretValues(obfuscator, args as JsonValue);
-	return mapJsonStrings(args as JsonValue, s => obfuscator.obfuscate(s, regexSecretValues)) as Record<string, unknown>;
+	// `batch()` joins an outer batch when one is already open.
+	return obfuscator.batch(() => {
+		const regexSecretValues = sharedRegexSecretValues ?? collectJsonRegexSecretValues(obfuscator, args as JsonValue);
+		return mapJsonStrings(args as JsonValue, s => obfuscator.obfuscate(s, regexSecretValues)) as Record<
+			string,
+			unknown
+		>;
+	});
 }
 
 /** Copy native replay containers only when a provider-visible plaintext field changes. */
@@ -676,6 +682,10 @@ function collectMessageRegexSecretValues(obfuscator: SecretObfuscator, messages:
  */
 export function obfuscateMessages(obfuscator: SecretObfuscator, messages: Message[]): Message[] {
 	if (!obfuscator.obfuscates()) return messages;
+	return obfuscator.batch(() => obfuscateMessageBatch(obfuscator, messages));
+}
+
+function obfuscateMessageBatch(obfuscator: SecretObfuscator, messages: Message[]): Message[] {
 	const sharedRegexSecretValues = collectMessageRegexSecretValues(obfuscator, messages);
 	let changed = false;
 	const result = messages.map((message): Message => {
