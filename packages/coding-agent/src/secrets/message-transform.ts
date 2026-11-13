@@ -120,14 +120,11 @@ export function obfuscateToolArguments(
 	sharedRegexSecretValues?: ReadonlySet<string>,
 ): Record<string, unknown> {
 	if (!obfuscator.hasSecrets()) return args;
-	// `batch()` joins an outer batch when one is already open.
-	return obfuscator.batch(() => {
-		const regexSecretValues = sharedRegexSecretValues ?? collectJsonRegexSecretValues(obfuscator, args as JsonValue);
-		return mapJsonStrings(args as JsonValue, s => obfuscator.obfuscate(s, regexSecretValues)) as Record<
-			string,
-			unknown
-		>;
-	});
+	// No `batch()` here: every batch ages the code transformer's scan memo, so a batch per
+	// tool call evicted the conversation history between provider requests and
+	// forced a full rescan (~0.5s on a 2M-char session) every few turns.
+	const regexSecretValues = sharedRegexSecretValues ?? collectJsonRegexSecretValues(obfuscator, args as JsonValue);
+	return mapJsonStrings(args as JsonValue, s => obfuscator.obfuscate(s, regexSecretValues)) as Record<string, unknown>;
 }
 
 /** Copy native replay containers only when a provider-visible plaintext field changes. */
