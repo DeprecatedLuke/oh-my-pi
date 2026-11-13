@@ -8647,7 +8647,7 @@ describe("AgentSession retry fallback", () => {
 				],
 				settings: { "retry.maxRetries": 2 },
 				failingWrite: "error-turn-after-first-retry",
-				end: { success: false, attempt: 1, finalError: "Refusal (cyber): Classifier declined this retried turn." },
+				end: { success: false, attempt: 2, finalError: "Refusal (cyber): Classifier declined this retried turn." },
 			});
 		});
 
