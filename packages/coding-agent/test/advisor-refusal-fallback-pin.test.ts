@@ -240,8 +240,8 @@ describe("advisor classifier-refusal fallback", () => {
 			cyberFallbackModels: { "*sonnet*": `${secondFallback.provider}/${secondFallback.id}` },
 		});
 
-		// Three same-model retries, then the mapped model — not the chain's first entry.
-		expect(advisorRequests.filter(id => id === advisorPrimary.id)).toHaveLength(4);
+		// The mapped model at once — not a same-model retry, not the chain's first entry.
+		expect(advisorRequests.filter(id => id === advisorPrimary.id)).toHaveLength(1);
 		expect(advisorRequests).not.toContain(advisorFallback.id);
 		expect(advisorRequests.at(-1)).toBe(secondFallback.id);
 		expect(fallbackRoles).toEqual(["*sonnet*"]);
@@ -257,9 +257,9 @@ describe("advisor classifier-refusal fallback", () => {
 			refusingIds: [advisorFallback.id],
 		});
 
-		// Each model the walk lands on gets its own three retries, then re-matches.
-		expect(advisorRequests.filter(id => id === advisorPrimary.id)).toHaveLength(4);
-		expect(advisorRequests.filter(id => id === advisorFallback.id)).toHaveLength(4);
+		// Each model the walk lands on is re-matched against the map.
+		expect(advisorRequests.filter(id => id === advisorPrimary.id)).toHaveLength(1);
+		expect(advisorRequests.filter(id => id === advisorFallback.id)).toHaveLength(1);
 		expect(advisorRequests.at(-1)).toBe(secondFallback.id);
 		expect(fallbackRoles).toEqual(["*sonnet*", "*gemini*"]);
 		expect(s.getAdvisorAgent()?.state.model.id).toBe(secondFallback.id);
@@ -272,8 +272,8 @@ describe("advisor classifier-refusal fallback", () => {
 			cyberFallbackModels: { "*sonnet*": `${secondFallback.provider}/${secondFallback.id}` },
 		});
 
-		// Three same-account retries, then the mapped model; no credential rotation.
-		expect(advisorRequests.filter(id => id === advisorPrimary.id)).toHaveLength(4);
+		// The mapped model at once; no same-account retry, no credential rotation.
+		expect(advisorRequests.filter(id => id === advisorPrimary.id)).toHaveLength(1);
 		expect(advisorRequests.at(-1)).toBe(secondFallback.id);
 		expect(rotateSpy).not.toHaveBeenCalled();
 		expect(s.getAdvisorAgent()?.state.model.id).toBe(secondFallback.id);

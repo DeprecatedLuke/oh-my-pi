@@ -118,7 +118,6 @@ import { formatSessionDumpText } from "./session-dump-format";
 import type { CompactionEntry, SessionEntry } from "./session-entries";
 import { formatSessionHistoryMarkdown } from "./session-history-format";
 import type { SessionManager } from "./session-manager";
-import { CLASSIFIER_REFUSAL_SAME_MODEL_RETRIES } from "./turn-recovery";
 import { buildSessionMetadata } from "./session-metadata";
 import type { YieldQueue } from "./yield-queue";
 
@@ -373,13 +372,6 @@ interface ActiveAdvisor {
 	 * own budget. Reset with {@link providerWaitRetries}.
 	 */
 	credentialSwitches: { provider: string; count: number } | undefined;
-	/**
-	 * Same-model refusal retries spent per model in the current run, so a
-	 * `retry.cyberFallbackModels`-mapped model is re-prompted
-	 * {@link CLASSIFIER_REFUSAL_SAME_MODEL_RETRIES} times before its replacement
-	 * is tried. Cleared with {@link providerWaitRetries}.
-	 */
-	cyberRefusalRetries: Map<string, number>;
 	/**
 	 * Models a refusal has already moved off in the current run; the map walk
 	 * visits any one model at most once, so entries pointing at each other
@@ -1686,7 +1678,6 @@ export class SessionAdvisors {
 					const parsed = parseRetryFallbackSelector(identity, this.#host.modelRegistry);
 					return parsed ? this.#isCyberRefusalMapped(parsed) : false;
 				},
-				retryRefusedModel: identity => this.#retryRefusedAdvisorModel(advisorRef, identity),
 				onTurnError: async (error, failedMessages, signal) => {
 					try {
 						return await this.#recoverAdvisorTurn(advisorRef, error, failedMessages, signal);
@@ -1771,7 +1762,6 @@ export class SessionAdvisors {
 				retryFallbackPendingSuccess: false,
 				providerWaitRetries: 0,
 				credentialSwitches: undefined,
-				cyberRefusalRetries: new Map(),
 				cyberWalkTried: new Set(),
 				signature,
 				reviewInProgress: undefined,
@@ -2469,31 +2459,12 @@ export class SessionAdvisors {
 	#resetRecoveryBudgets(advisor: ActiveAdvisor): void {
 		advisor.providerWaitRetries = 0;
 		advisor.credentialSwitches = undefined;
-		advisor.cyberRefusalRetries.clear();
 		advisor.cyberWalkTried.clear();
 	}
 
 	/** Whether `retry.cyberFallbackModels` maps `model` to a replacement. */
 	#isCyberRefusalMapped(model: { provider: string; id: string }): boolean {
 		return matchRetryCyberFallbackModels(cfgRetryCyberFallbackModels.get(this.#host.settings), model) !== undefined;
-	}
-
-	/**
-	 * Whether a classifier refusal on `identity` should re-prompt the same model:
-	 * `retry.cyberFallbackModels` maps it and its per-model retry budget is not
-	 * spent. The budget lives here so a model switch starts a fresh one.
-	 */
-	#retryRefusedAdvisorModel(advisor: ActiveAdvisor, identity: string): boolean {
-		const retrySettings = cfgRetry.get(this.#host.settings);
-		if (!retrySettings.enabled || !retrySettings.modelFallback) return false;
-		if (!retryFallbackAdmits(retrySettings.fallbackOn, false)) return false;
-		const parsed = parseRetryFallbackSelector(identity, this.#host.modelRegistry);
-		if (!parsed || !this.#isCyberRefusalMapped(parsed)) return false;
-		const key = `${parsed.provider}/${parsed.id}`;
-		const spent = advisor.cyberRefusalRetries.get(key) ?? 0;
-		if (spent >= CLASSIFIER_REFUSAL_SAME_MODEL_RETRIES) return false;
-		advisor.cyberRefusalRetries.set(key, spent + 1);
-		return true;
 	}
 
 	/**

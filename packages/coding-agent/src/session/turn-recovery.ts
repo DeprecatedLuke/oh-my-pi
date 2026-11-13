@@ -112,12 +112,6 @@ const EMPTY_STOP_MAX_RETRIES = 3;
 const MALFORMED_FUNCTION_CALL_MAX_RETRIES = 3;
 const STREAM_STALL_CONTINUE_MAX_RETRIES = 3;
 const GENERIC_ABORT_MAX_RETRIES = 2;
-/**
- * Same-model retries a classifier refusal gets before it walks
- * `retry.cyberFallbackModels`. The classifier is stochastic, so the model that
- * refused a request often answers the identical one.
- */
-export const CLASSIFIER_REFUSAL_SAME_MODEL_RETRIES = 3;
 const SIBLING_UNBLOCK_BUFFER_MS = 1_000;
 const NON_WHITESPACE_RE = /\S/;
 const USAGE_PREFLIGHT_BLOCKED_PREFIX = "Usage preflight blocked:";
@@ -414,12 +408,6 @@ export class TurnRecovery {
 	 * the exhausted budget, a cancelled wait, an abort), so no turn inherits another turn's walk.
 	 */
 	readonly #refusalWalkTried = new Set<string>();
-	/**
-	 * Same-model retries already spent on the current model's classifier refusal.
-	 * Reset by `resolveRetry()` and by every model switch, so each model a
-	 * refusal walk lands on gets its own {@link CLASSIFIER_REFUSAL_SAME_MODEL_RETRIES}.
-	 */
-	#classifierRefusalRetries = 0;
 	/** Per-model account walk allowance, snapshotted once and cleared when the retry saga ends. */
 	readonly #accountPolicyRotationsRemaining = new Map<string, number>();
 	#requestBodyReadTimeoutRecoveryPromptSequence: number | undefined;
@@ -917,7 +905,6 @@ export class TurnRecovery {
 	/** Resolve the pending retry promise; the saga is over, and so is its refusal walk. */
 	resolveRetry(): void {
 		this.#refusalWalkTried.clear();
-		this.#classifierRefusalRetries = 0;
 		this.#accountPolicyRotationsRemaining.clear();
 		if (this.#retryResolve) {
 			this.#retryResolve();
@@ -2343,8 +2330,6 @@ export class TurnRecovery {
 			if (this.#activeRetryFallback) this.#activeRetryFallback.served = servedBeforeSwap;
 			return false;
 		}
-		// A model a refusal walk lands on gets its own same-model refusal retries.
-		this.#classifierRefusalRetries = 0;
 		this.#host.sessionManager.appendModelChange(candidateSelector, EPHEMERAL_MODEL_CHANGE_ROLE, true);
 		this.#host.settings.getStorage()?.recordModelUsage(candidateSelector);
 		this.#host.setThinkingLevel(nextThinkingLevel);
@@ -2387,10 +2372,14 @@ export class TurnRecovery {
 		options?: { preserveFailedTurn?: boolean },
 	): Promise<boolean> {
 		const ceiling = this.#host.thinkingLevelCeiling();
+		const skipped: Array<{ entry: string; reason: string }> = [];
 		for (const entry of match.selectors) {
 			const resolved = resolveModelOverride([entry], this.#host.modelRegistry, this.#host.settings);
 			const candidate = resolved.model;
-			if (!candidate) continue;
+			if (!candidate) {
+				skipped.push({ entry, reason: "unresolved" });
+				continue;
+			}
 			const selector: RetryFallbackSelector = {
 				raw: entry,
 				provider: candidate.provider,
@@ -2400,11 +2389,16 @@ export class TurnRecovery {
 			// The walk is bounded by resolved model, not by the configured entry: two
 			// entries (`@cyber`, `mistral/deepseek-v4-1-flash-1017`) can name one model.
 			const visitedKey = formatRetryFallbackBaseSelector(selector);
-			if (this.#refusalWalkTried.has(visitedKey)) continue;
-			if (this.isRetryFallbackSelectorSuppressed(selector)) continue;
-			if (this.#isNoOpRetryFallback(candidate, selector)) continue;
-			if (ceiling !== undefined && !modelSupportsEffortCeiling(candidate, ceiling)) continue;
-			if (!this.#host.contextFitsModel(candidate, options?.preserveFailedTurn ? undefined : failedMessage)) {
+			let reason: string | undefined;
+			if (this.#refusalWalkTried.has(visitedKey)) reason = "already refused this turn";
+			else if (this.isRetryFallbackSelectorSuppressed(selector)) reason = "cooling down";
+			else if (this.#isNoOpRetryFallback(candidate, selector)) reason = "same as current model";
+			else if (ceiling !== undefined && !modelSupportsEffortCeiling(candidate, ceiling)) reason = "effort ceiling";
+			else if (!this.#host.contextFitsModel(candidate, options?.preserveFailedTurn ? undefined : failedMessage)) {
+				reason = "context does not fit";
+			}
+			if (reason) {
+				skipped.push({ entry, reason });
 				continue;
 			}
 			let apiKey: string | undefined;
@@ -2413,14 +2407,19 @@ export class TurnRecovery {
 			} catch (error) {
 				if (!(error instanceof AIError.MissingApiKeyError)) throw error;
 			}
-			if (!apiKey) continue;
+			if (!apiKey) {
+				skipped.push({ entry, reason: "no credential" });
+				continue;
+			}
 			const applied = await this.applyRetryFallbackCandidate(match.key, selector, currentSelector, {
 				pinFallback: true,
 				apiKey,
 				reason: `Refused: ${failedMessage.errorMessage ?? "provider classifier refused the turn"}`,
 			});
 			if (applied) return true;
+			skipped.push({ entry, reason: "switch not applied" });
 		}
+		logger.warn("Cyber fallback found no usable model", { key: match.key, from: currentSelector, skipped });
 		return false;
 	}
 
@@ -3063,17 +3062,13 @@ export class TurnRecovery {
 				? matchRetryCyberFallbackModels(cfgRetryCyberFallbackModels.get(this.#host.settings), currentModel)
 				: undefined;
 		// A mapped `cyber_policy` denial is a content refusal the map owns: no sibling
-		// account is spent on it, and its same-model retries always apply.
+		// account is spent on it.
 		const mappedCyberPolicy = accountPolicyDenial && cyberRefusal && cyberFallbackMatch !== undefined;
-		// Set when every account of the failing provider has already been tried this
-		// saga: re-asking the same account cannot clear an account-scoped denial.
-		let accountRotationExhausted = false;
 		if (accountPolicyDenial && currentModel && !mappedCyberPolicy) {
 			const accountPolicyKey = `${currentModel.provider}/${currentModel.id}`;
 			const rotationsRemaining =
 				this.#accountPolicyRotationsRemaining.get(accountPolicyKey) ??
 				Math.max(0, this.#host.modelRegistry.authStorage.credentials.list(currentModel.provider).length - 1);
-			accountRotationExhausted = rotationsRemaining === 0;
 			this.#accountPolicyRotationsRemaining.set(accountPolicyKey, Math.max(0, rotationsRemaining - 1));
 			// `rotate` may sleep out a sibling's short block; register its signal
 			// as the retry controller so `abortRetry()` cancels that wait exactly
@@ -3102,14 +3097,6 @@ export class TurnRecovery {
 			}
 			if (switchedCredential) delayMs = 0;
 		}
-		const cyberRefusalRetry =
-			cyberFallbackMatch !== undefined &&
-			this.#classifierRefusalRetries < CLASSIFIER_REFUSAL_SAME_MODEL_RETRIES &&
-			// An unmapped `cyber_policy` denial keeps the rotation-first behavior: once
-			// every account has been tried, re-asking this one cannot succeed, so the
-			// map walk follows immediately. A mapped denial never rotates, so its
-			// retries always apply.
-			!(accountPolicyDenial && accountRotationExhausted);
 		// A thinking-loop abort is not a provider failure — it is the loop guard
 		// asking for a same-model resample, paired with a hidden
 		// `thinking-loop-redirect` notice that only makes sense on the model that
@@ -3206,8 +3193,6 @@ export class TurnRecovery {
 				!sameModelSteerReplay &&
 				!waitForSiblingCredential &&
 				!refusalWalkRepeats &&
-				// A model `retry.cyberFallbackModels` covers keeps its own retries first.
-				!cyberRefusalRetry &&
 				!this.#isFirstAttemptMidStreamSocketDrop(message, id, retryBudgetExhausted)
 			) {
 				if (cyberRefusal) {
@@ -3289,10 +3274,7 @@ export class TurnRecovery {
 			this.#retryAttempt = 1;
 			delayMs = 0;
 		} else if (retryBudgetExhausted) {
-			// A refusal the cyber map covers keeps its own retries even when the
-			// provider-error budget is spent: the classifier declines the request,
-			// not the model.
-			if (!switchedModel && !switchedCredential && !cyberRefusalRetry) {
+			if (!switchedModel && !switchedCredential) {
 				const attempt = this.#retryAttempt - 1;
 				message.errorMessage = `Retry budget exhausted after ${attempt} ${attempt === 1 ? "retry" : "retries"}: ${errorMessage}`;
 				await this.#closeRetrySaga(
@@ -3311,8 +3293,13 @@ export class TurnRecovery {
 		}
 		// Classifier refusals (e.g. Anthropic cyber) are often false positives on
 		// benign turns: with no fallback available, fall through to the normal
-		// backoff retry, bounded by the retry budget above.
-		if (accountPolicyDenial && !switchedCredential && !switchedModel && !cyberRefusalRetry) {
+		// backoff retry, bounded by the retry budget above. A model the cyber map
+		// covers never retries in place: a failed walk ends the turn.
+		if (
+			(accountPolicyDenial || (cyberRefusal && cyberFallbackMatch !== undefined)) &&
+			!switchedCredential &&
+			!switchedModel
+		) {
 			// A prior attempt in this saga already announced `auto_retry_start`
 			// (retryAttempt was incremented for each call to this method, so > 1
 			// means at least one earlier attempt started the loop) but this
@@ -3371,10 +3358,6 @@ export class TurnRecovery {
 			return false;
 		}
 
-		// A refusal retry is spent here, once it is certain this attempt schedules
-		// another one: every dead end above returns without reaching this point.
-		if (cyberRefusalRetry) this.#classifierRefusalRetries++;
-
 		await this.#recordPendingRetryError(message, id, { switchedCredential, switchedModel, delayMs });
 		// Quota resets elapse while the machine sleeps; capture the deadline before event delivery.
 		const usageResetDeadline = AIError.is(id, AIError.Flag.UsageLimit) ? Date.now() + delayMs : undefined;
@@ -3382,8 +3365,7 @@ export class TurnRecovery {
 		await this.#host.emitSessionEvent({
 			type: "auto_retry_start",
 			attempt: this.#retryAttempt,
-			// A cyber-covered refusal may outlast `retry.maxRetries` on the same model.
-			maxAttempts: cyberRefusalRetry ? Math.max(maxRetries, CLASSIFIER_REFUSAL_SAME_MODEL_RETRIES) : maxRetries,
+			maxAttempts: maxRetries,
 			delayMs,
 			errorMessage,
 			errorId: message.errorId,

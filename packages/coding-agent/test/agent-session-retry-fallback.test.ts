@@ -9453,7 +9453,7 @@ describe("AgentSession retry fallback", () => {
 			};
 		}
 
-		it("retries the refused model three times before switching to the mapped model", async () => {
+		it("switches to the mapped model on the first refusal, with no same-model retry", async () => {
 			const requestedModels: string[] = [];
 			const mock = createMockModel();
 			const agent = new Agent({
@@ -9467,7 +9467,7 @@ describe("AgentSession retry fallback", () => {
 				},
 			});
 
-			// The refusal retries are the map's, not the provider-error budget's.
+			// No provider-error budget: the map hop does not depend on it.
 			const settings = Settings.isolated({
 				"compaction.enabled": false,
 				"retry.baseDelayMs": 1,
@@ -9487,14 +9487,8 @@ describe("AgentSession retry fallback", () => {
 			await session.prompt("Refused by the classifier");
 			await session.waitForIdle();
 
-			expect(requestedModels).toEqual([
-				refusedSelector,
-				refusedSelector,
-				refusedSelector,
-				refusedSelector,
-				mappedSelector,
-			]);
-			expect(retryStartEvents.map(event => event.attempt)).toEqual([1, 2, 3, 1]);
+			expect(requestedModels).toEqual([refusedSelector, mappedSelector]);
+			expect(retryStartEvents.map(event => event.attempt)).toEqual([1]);
 			expect(session.model?.id).toBe(mappedModel.id);
 			expect(getLastAssistantMessage(session).stopReason).toBe("stop");
 		});
@@ -9532,19 +9526,8 @@ describe("AgentSession retry fallback", () => {
 			await session.prompt("Refused twice over");
 			await session.waitForIdle();
 
-			// Each model the walk lands on gets its own three retries, and the map is
-			// re-matched for it: sonnet -> gpt-4o-mini -> @cyber.
-			expect(requestedModels).toEqual([
-				refusedSelector,
-				refusedSelector,
-				refusedSelector,
-				refusedSelector,
-				mappedSelector,
-				mappedSelector,
-				mappedSelector,
-				mappedSelector,
-				cyberRoleSelector,
-			]);
+			// The map is re-matched for each model the walk lands on: sonnet -> gpt-4o-mini -> @cyber.
+			expect(requestedModels).toEqual([refusedSelector, mappedSelector, cyberRoleSelector]);
 			expect(session.model?.id).toBe(cyberRoleModel.id);
 		});
 
@@ -9581,16 +9564,7 @@ describe("AgentSession retry fallback", () => {
 			await session.waitForIdle();
 
 			// Each model is visited once, so the cycle ends instead of alternating.
-			expect(requestedModels).toEqual([
-				refusedSelector,
-				refusedSelector,
-				refusedSelector,
-				refusedSelector,
-				mappedSelector,
-				mappedSelector,
-				mappedSelector,
-				mappedSelector,
-			]);
+			expect(requestedModels).toEqual([refusedSelector, mappedSelector]);
 			expect(retryEndEvents.at(-1)?.finalError).toContain("Refusal (cyber)");
 			// A terminal refusal leaves no refused turn behind in active context.
 			expect(session.agent.state.messages.map(message => message.role)).toEqual(["user"]);
@@ -9689,14 +9663,8 @@ describe("AgentSession retry fallback", () => {
 				await session.prompt("Refused by the Codex cyber policy");
 				await session.waitForIdle();
 
-				// Three same-account retries, then the map hop — no credential switch.
-				expect(requestedModels).toEqual([
-					codexSelector,
-					codexSelector,
-					codexSelector,
-					codexSelector,
-					mappedSelector,
-				]);
+				// The map hop happens at once — no same-account retry, no credential switch.
+				expect(requestedModels).toEqual([codexSelector, mappedSelector]);
 				expect(rotateSpy).not.toHaveBeenCalled();
 				expect(session.model?.id).toBe(mappedModel.id);
 				expect(getLastAssistantMessage(session).stopReason).toBe("stop");
@@ -9811,7 +9779,7 @@ describe("AgentSession retry fallback", () => {
 			expect(session.model?.id).toBe(refusedModel.id);
 		});
 
-		it("hops an OpenAI content filter through the map after its same-model retries", async () => {
+		it("hops an OpenAI content filter through the map", async () => {
 			const requestedModels: string[] = [];
 			const mock = createMockModel();
 			const agent = new Agent({
@@ -9846,15 +9814,7 @@ describe("AgentSession retry fallback", () => {
 			await session.prompt("Blocked by the content filter");
 			await session.waitForIdle();
 
-			// A content filter is not account-scoped, so the map's same-model
-			// retries apply before the hop.
-			expect(requestedModels).toEqual([
-				mappedSelector,
-				mappedSelector,
-				mappedSelector,
-				mappedSelector,
-				cyberRoleSelector,
-			]);
+			expect(requestedModels).toEqual([mappedSelector, cyberRoleSelector]);
 			expect(session.model?.id).toBe(cyberRoleModel.id);
 		});
 

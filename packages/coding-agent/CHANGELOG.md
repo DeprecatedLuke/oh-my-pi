@@ -4,7 +4,7 @@
 
 ### Added
 
-- `retry.cyberFallbackModels` maps a model glob (`*opus-*`, `anthropic/claude-opus-5-5`, or `*` for everything) to the model or models that replace it when a provider's classifier refuses the turn — including Codex `cyber_policy` denials and OpenAI `content_filter` blocks; the refused model is retried three times first (a mapped `cyber_policy` denial skips credential rotation entirely, an unmapped one keeps rotation first), then the map is walked per model (`*sonnet*: openai-codex/gpt-6-astra`, `*astra*: "@cyber"`), advisors consult it before their own chain, and the refused turn no longer replays on the retry
+- `retry.cyberFallbackModels` maps a model glob (`*opus-*`, `anthropic/claude-opus-5-5`, or `*` for everything) to the model or models that replace it when a provider's classifier refuses the turn — including Codex `cyber_policy` denials and OpenAI `content_filter` blocks; a mapped refusal switches at once with no same-model retry (a mapped `cyber_policy` denial skips credential rotation entirely), the map is walked per model (`*sonnet*: openai-codex/gpt-6-astra`, `*astra*: "@cyber"`), advisors consult it before their own chain, and the refused turn no longer replays on the switch
 
 ### Fixed
 

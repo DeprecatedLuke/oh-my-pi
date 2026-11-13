@@ -91,13 +91,6 @@ export interface AdvisorRuntimeHost {
 	 * host's credential rotation.
 	 */
 	isCyberRefusalMapped?(modelIdentity: string): boolean;
-	/**
-	 * Whether a classifier refusal on `modelIdentity` should re-prompt the same
-	 * model instead of walking the fallback chain: `retry.cyberFallbackModels`
-	 * maps it and its same-model retry budget is not spent. The host owns the
-	 * budget so a model switch starts a fresh one.
-	 */
-	retryRefusedModel?(modelIdentity: string): boolean;
 	/** Called when a failed batch is permanently dropped so replay-only state can be discarded. */
 	onTurnAbandoned?(): void;
 	/** Surface a non-recovering advisor failure to the host UI without adding model-visible context. */
@@ -1583,31 +1576,6 @@ export class AdvisorRuntime {
 						// exhaustion (the host returns false once candidates run out); the
 						// tried-set only stops a cyclic chain from revisiting a model. The
 						// primary turn-recovery path already allows fallback on refusals.
-						// A model `retry.cyberFallbackModels` maps gets its same-model retries
-						// first: the classifier is stochastic, and the host owns that budget.
-						let cyberRetry = false;
-						try {
-							cyberRetry = this.host.retryRefusedModel?.(refusalModel) === true;
-						} catch (hookErr) {
-							logger.debug("advisor refusal retry hook failed", { err: String(hookErr) });
-						}
-						if (cyberRetry) {
-							if (this.#epoch !== epoch) continue;
-							if (this.#sessionTransitionPaused) {
-								this.#pending.unshift(...popped);
-								continue;
-							}
-							this.#pending.unshift({
-								text: batch(),
-								rawMessages,
-								renderRevision: this.#renderRevision,
-								turns: finalTurns,
-								wip,
-								overflowRecovery: recoveringOverflow || undefined,
-							});
-							logger.debug("advisor refusal retried on the same model");
-							continue;
-						}
 						let refusalRecovered = false;
 						try {
 							if (!this.#refusalModelsTried.has(refusalModel)) {

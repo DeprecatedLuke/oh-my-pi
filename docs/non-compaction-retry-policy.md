@@ -113,13 +113,13 @@ retry:
 - Keys match the refused model id, or `provider/model-id` when the key contains `/`; `*` is the only wildcard and matches any run, including empty, so `*` is a catch-all.
 - An exact key beats every glob; among globs the one pinning the longest literal run wins; a remaining tie keeps configured order.
 - Values accept one selector or a list, with the same syntax as `retry.fallbackChains` entries — thinking suffixes and `@role` references included. `@role` resolves when the hop happens, so a `modelRoles.cyber` assignment is enough.
-- A refusal on a model some key matches first retries that same model up to three times (the classifier is stochastic), independent of `retry.maxRetries`. Then the matched entries are walked in order.
-- A `cyber_policy` denial on a model the map covers never rotates through sibling accounts: the request opts out of credential rotation for that call, so the same-model retries and the map walk above apply directly. An unmapped `cyber_policy` keeps the rotation-first behavior — the per-account rotation runs before anything else, and once it has tried every account the same-model retries are skipped (re-asking the same account cannot succeed) so the chain walk follows.
+- A refusal on a model some key matches switches at once — no same-model retry — to the matched entries in order.
+- A `cyber_policy` denial on a model the map covers never rotates through sibling accounts: the request opts out of credential rotation for that call, so the map walk applies directly. An unmapped `cyber_policy` keeps the rotation-first behavior.
 - A hop that lands on a model which refuses too re-matches the map for that model, so `*opus* -> gpt-6-astra -> @cyber` chains through its own keys. Each model is visited at most once per turn, so a map whose entries point back at each other terminates.
-- When the map yields nothing untried, the refusal falls through to the `retry.fallbackChains` refusal walk, then the turn ends as before.
+- When the map yields nothing untried, the refusal falls through to the `retry.fallbackChains` refusal walk; a mapped refusal with no model left ends the turn instead of retrying in place. Each skipped map entry is logged with its reason (`Cyber fallback found no usable model`).
 - Gated by `retry.modelFallback` and `retry.fallbackOn`, like the chain walk. A refusal no key matches keeps the immediate chain walk.
 - The refused turn is never preserved: its assistant message and the synthetic results paired with its unexecuted calls leave active context before every retry and hop, so the refused partial turn is not replayed.
-- Advisor reviews use the same map with the same three retries and once-per-run walk, consulted before the advisor's own chain; the advisor's refused turn is rolled back before the retry ([advisor watchdog](./advisor-watchdog.md)).
+- Advisor reviews use the same map with the same immediate switch and once-per-run walk, consulted before the advisor's own chain; the advisor's refused turn is rolled back before the switch ([advisor watchdog](./advisor-watchdog.md)).
 
 ### What resets retry counters
 
