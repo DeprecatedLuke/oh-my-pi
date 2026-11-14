@@ -1,6 +1,7 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { ModelRegistry } from "../config/model-registry";
+import { matchModelGlob } from "../config/model-glob";
 import { cfgModelRoles } from "../config/model-settings";
 import { formatModelSelectorValue, parseModelString } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { formatModelString, formatModelStringWithRouting } from "../config/model-resolver";
@@ -388,58 +389,18 @@ function retryCyberFallbackSelectors(value: string | readonly string[] | undefin
 }
 
 /**
- * Compile a cyber-fallback key to an anchored matcher. `*` is the only
- * metacharacter and matches any run, including an empty one, so `*opus-*`
- * matches `claude-opus-5-5` and `*` matches everything.
- */
-function retryCyberGlobMatcher(pattern: string): (subject: string) => boolean {
-	if (!pattern.includes("*")) {
-		const literal = pattern.toLowerCase();
-		return subject => subject.toLowerCase() === literal;
-	}
-	let source = "";
-	for (const char of pattern) {
-		source += char === "*" ? ".*" : char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-	}
-	const matcher = new RegExp(`^${source}$`, "i");
-	return subject => matcher.test(subject);
-}
-
-/** Characters a glob key pins literally; the tie-breaker between matching globs. */
-function retryCyberGlobLiteralLength(pattern: string): number {
-	let length = 0;
-	for (const char of pattern) if (char !== "*") length++;
-	return length;
-}
-
-/**
- * Match a refused model against `retry.cyberFallbackModels`.
- *
- * Keys containing `/` match `provider/model-id`; every other key matches the
- * bare model id. An exact key beats any glob, and among globs the one pinning
- * the longest literal run wins; a remaining tie keeps configured order.
+ * Match a refused model against `retry.cyberFallbackModels` (glob rules: {@link matchModelGlob}).
  */
 export function matchRetryCyberFallbackModels(
 	models: RetryCyberFallbackModels,
 	model: { provider: string; id: string },
 ): RetryCyberFallbackMatch | undefined {
-	const providerId = `${model.provider}/${model.id}`;
-	let bestKey: string | undefined;
-	let bestSelectors: readonly string[] = [];
-	let bestRank = -1;
-	for (const key in models) {
-		const selectors = retryCyberFallbackSelectors(models[key]);
-		if (selectors.length === 0) continue;
-		const subject = key.includes("/") ? providerId : model.id;
-		if (!retryCyberGlobMatcher(key)(subject)) continue;
-		// An exact key outranks every glob regardless of how much the glob pins.
-		const rank = key.includes("*") ? retryCyberGlobLiteralLength(key) : Number.POSITIVE_INFINITY;
-		if (rank <= bestRank) continue;
-		bestKey = key;
-		bestSelectors = selectors;
-		bestRank = rank;
-	}
-	return bestKey === undefined ? undefined : { key: bestKey, selectors: bestSelectors };
+	const key = matchModelGlob(
+		Object.keys(models),
+		model,
+		candidate => retryCyberFallbackSelectors(models[candidate]).length > 0,
+	);
+	return key === undefined ? undefined : { key, selectors: retryCyberFallbackSelectors(models[key]) };
 }
 
 /**

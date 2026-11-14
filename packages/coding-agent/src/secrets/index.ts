@@ -2,10 +2,11 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseEnv } from "node:util";
-import { getSecretPlaceholderKeyPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
+import { expandTilde, getSecretPlaceholderKeyPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { type SecretEntry, SecretObfuscator } from "./obfuscator";
+import { matchModelGlob } from "../config/model-glob";
+import type { SecretsModelFiles } from "./settings";
 import { CREDENTIAL_PATTERNS } from "./patterns";
 import { sanitizeSecretFriendlyName, secretEntriesNeedPlaceholderKey } from "./placeholder";
 import { compileSecretRegex } from "./regex";
@@ -154,7 +155,7 @@ type RawSecretEntry = Omit<SecretEntry, "friendlyName"> & { friendlyName?: unkno
 
 /** Hand-authored secrets file basename (`<scope>/secrets.yml`). */
 const SECRETS_BASENAME = "secrets.yml";
-/** Machine-managed secrets file basename, written by `/fix-refusal`. */
+/** Managed secrets file basename; older `/fix-refusal` versions wrote it, and it still loads. */
 export const MANAGED_SECRETS_BASENAME = "secrets-managed.yml";
 
 export {
@@ -168,114 +169,41 @@ export * from "./patterns";
 export { secretEntriesNeedPlaceholderKey, secretEntryNeedsPlaceholderKey } from "./placeholder";
 
 /**
- * Load secrets from global/project hand-authored files and their
- * machine-managed `/fix-refusal` siblings. Later scopes override earlier
- * entries with matching content.
+ * Load secrets from global/project hand-authored files and their managed
+ * `secrets-managed.yml` siblings. Later scopes override earlier entries with
+ * matching content. `globalFiles`, when given, replaces the two agent-dir
+ * files (a `secrets.modelFiles` entry); project files always load.
  */
-export async function loadSecrets(cwd: string, agentDir: string): Promise<SecretEntry[]> {
-	const filePromises = new Map<string, Promise<SecretEntry[]>>();
-	const load = (filePath: string, managed: boolean): Promise<SecretEntry[]> => {
+export async function loadSecrets(
+	cwd: string,
+	agentDir: string,
+	globalFiles?: readonly string[],
+): Promise<SecretEntry[]> {
+	const loaded = new Map<string, Promise<SecretEntry[]>>();
+	const load = (filePath: string): Promise<SecretEntry[]> => {
 		const normalizedPath = path.resolve(filePath);
-		const existing = filePromises.get(normalizedPath);
-		if (existing) return existing;
-		const promise = managed ? loadManagedSecretsFile(filePath) : loadSecretsFile(filePath);
-		filePromises.set(normalizedPath, promise);
+		let promise = loaded.get(normalizedPath);
+		if (!promise) {
+			promise = loadSecretsFile(normalizedPath);
+			loaded.set(normalizedPath, promise);
+		}
 		return promise;
 	};
-	const files = [
-		load(path.join(agentDir, SECRETS_BASENAME), false),
-		load(path.join(agentDir, MANAGED_SECRETS_BASENAME), true),
-		load(path.join(cwd, ".omp", SECRETS_BASENAME), false),
-		load(path.join(cwd, ".omp", MANAGED_SECRETS_BASENAME), true),
+	const globals = globalFiles ?? [
+		path.join(agentDir, SECRETS_BASENAME),
+		path.join(agentDir, MANAGED_SECRETS_BASENAME),
 	];
+	const files = [
+		...globals,
+		path.join(cwd, ".omp", SECRETS_BASENAME),
+		path.join(cwd, ".omp", MANAGED_SECRETS_BASENAME),
+	].map(load);
 	const groups = await Promise.all(files);
 	const byContent = new Map<string, SecretEntry>();
 	for (const group of groups) {
 		for (const entry of group) byContent.set(entry.content, entry);
 	}
 	return [...byContent.values()];
-}
-
-/** Outcome of {@link appendManagedSecrets}. */
-export interface AppendManagedSecretsResult {
-	/** Absolute path of the managed secrets file written. */
-	path: string;
-	/** Number of entries newly appended; existing entries are skipped. */
-	added: number;
-	/** Total entry count after the write. */
-	total: number;
-}
-
-/**
- * Append refusal-discovered entries to the global managed secrets file while
- * preserving existing records and deduplicating by type/content/flags.
- */
-export async function appendManagedSecrets(
-	agentDir: string,
-	entries: SecretEntry[],
-): Promise<AppendManagedSecretsResult> {
-	const resolvedAgentDir = path.resolve(agentDir);
-	const filePath = path.join(resolvedAgentDir, MANAGED_SECRETS_BASENAME);
-	await fs.promises.mkdir(resolvedAgentDir, { recursive: true, mode: 0o700 });
-	if (process.platform !== "win32") await fs.promises.chmod(resolvedAgentDir, 0o700);
-
-	return await withFileLock(filePath, async () => {
-		let raw: unknown[] = [];
-		try {
-			const parsed = YAML.parse(await Bun.file(filePath).text());
-			if (Array.isArray(parsed)) raw = parsed;
-		} catch (err) {
-			if (!isEnoent(err)) throw err;
-		}
-
-		const seen = new Set<string>();
-		for (const item of raw) {
-			if (item !== null && typeof item === "object") {
-				const record = item as Record<string, unknown>;
-				if (typeof record.content === "string") {
-					seen.add(secretKey(String(record.type), record.content, record.flags));
-				}
-			}
-		}
-
-		const additions: Record<string, unknown>[] = [];
-		for (const entry of entries) {
-			const key = secretKey(entry.type, entry.content, entry.flags);
-			if (seen.has(key)) continue;
-			seen.add(key);
-			additions.push(toManagedRecord(entry));
-		}
-
-		if (process.platform !== "win32") {
-			try {
-				await fs.promises.chmod(filePath, 0o600);
-			} catch (err) {
-				if (!isEnoent(err)) throw err;
-			}
-		}
-		if (additions.length === 0) return { path: filePath, added: 0, total: raw.length };
-		const merged = [...raw, ...additions];
-		await fs.promises.writeFile(filePath, YAML.stringify(merged, null, 2), { mode: 0o600 });
-		if (process.platform !== "win32") await fs.promises.chmod(filePath, 0o600);
-		return { path: filePath, added: additions.length, total: merged.length };
-	});
-}
-
-function secretKey(type: string, content: string, flags: unknown): string {
-	return `${type}\u0000${content}\u0000${typeof flags === "string" ? flags : ""}`;
-}
-
-/** Serialize a managed entry while omitting empty optional fields. */
-function toManagedRecord(entry: SecretEntry): Record<string, unknown> {
-	const record: Record<string, unknown> = {
-		type: entry.type,
-		content: entry.content,
-		mode: entry.mode ?? "obfuscate",
-	};
-	if (entry.flags) record.flags = entry.flags;
-	if (entry.friendlyName) record.friendlyName = entry.friendlyName;
-	if (entry.replacement) record.replacement = entry.replacement;
-	return record;
 }
 
 /** Minimum env var value length to consider as a secret. */
@@ -438,9 +366,42 @@ export async function buildSecretObfuscator(
 	cwd: string,
 	agentDir: string,
 	keyDir?: string,
+	modelFiles?: SecretsModelFiles,
+): Promise<SecretObfuscator | undefined> {
+	const keys = modelFiles ? Object.keys(modelFiles) : [];
+	if (keys.length === 0) return await buildOne(cwd, agentDir, keyDir, undefined);
+	const resolveFiles = (key: string): string[] => {
+		const value = modelFiles![key];
+		const list = typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
+		return list
+			.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+			.map(entry => path.resolve(agentDir, expandTilde(entry.trim())));
+	};
+	const [base, ...perKey] = await Promise.all([
+		buildOne(cwd, agentDir, keyDir, undefined),
+		...keys.map(key => buildOne(cwd, agentDir, keyDir, resolveFiles(key))),
+	]);
+	// Every model needs a transformer to select, even when its file set holds nothing.
+	const fallback = base ?? new SecretObfuscator([]);
+	const byKey = new Map<string, SecretObfuscator>();
+	keys.forEach((key, index) => byKey.set(key, perKey[index] ?? new SecretObfuscator([])));
+	const members = [fallback, ...byKey.values()];
+	const select = (model: { provider: string; id: string }): SecretObfuscator => {
+		const key = matchModelGlob(keys, model);
+		return key === undefined ? fallback : byKey.get(key)!;
+	};
+	for (const member of members) member.linkModelGroup(members, select);
+	return fallback;
+}
+
+async function buildOne(
+	cwd: string,
+	agentDir: string,
+	keyDir: string | undefined,
+	globalFiles: readonly string[] | undefined,
 ): Promise<SecretObfuscator | undefined> {
 	const [fileEntries, dotenvEntries] = await Promise.all([
-		logger.time("loadSecrets", loadSecrets, cwd, agentDir),
+		logger.time("loadSecrets", loadSecrets, cwd, agentDir, globalFiles),
 		collectDotenvFileSecrets(cwd),
 	]);
 	const envEntries = collectEnvSecrets();
@@ -466,31 +427,6 @@ export async function buildSecretObfuscator(
 		obfuscator = new SecretObfuscator([{ type: "plain", mode: "replace", content: placeholderKey }], placeholderKey);
 	}
 	return obfuscator;
-}
-
-/** Read a managed secrets file while excluding concurrent `/fix-refusal` appends. */
-async function loadManagedSecretsFile(filePath: string): Promise<SecretEntry[]> {
-	const parentDir = path.dirname(filePath);
-	if (!(await isExistingDirectory(parentDir))) return [];
-	try {
-		return await withFileLock(filePath, async () => await loadSecretsFile(filePath));
-	} catch (err) {
-		if (isEnoent(err) || !(await isExistingDirectory(parentDir))) return [];
-		throw err;
-	}
-}
-
-async function isExistingDirectory(directory: string): Promise<boolean> {
-	try {
-		return (await fs.promises.stat(directory)).isDirectory();
-	} catch (err) {
-		if (isEnoent(err)) return false;
-		logger.warn("Failed to access managed secrets parent directory", {
-			path: directory,
-			error: String(err),
-		});
-		return false;
-	}
 }
 
 async function loadSecretsFile(filePath: string): Promise<SecretEntry[]> {

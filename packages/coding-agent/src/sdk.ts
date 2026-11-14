@@ -438,7 +438,7 @@ import {
 	cfgMcpStartupTimeoutMs,
 } from "./mcp/settings";
 import { cfgPlanEnabled } from "./plan-mode/settings";
-import { cfgSecretsEnabled } from "./secrets/settings";
+import { cfgSecretsEnabled, cfgSecretsModelFiles } from "./secrets/settings";
 import {
 	cfgSnapcompactShape,
 	cfgSnapcompactSystemPrompt,
@@ -2225,8 +2225,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	// `secrets.enabled` first turns on mid-session (see the watch after session creation).
 	let obfuscator: SecretObfuscator | undefined =
 		options.obfuscator ??
-		(cfgSecretsEnabled.get(settings) ? await buildSecretObfuscator(cwd, agentDir, options.agentDir) : undefined);
-	// `/fix-refusal` replaces the session's obfuscator; closures read the live one.
+		(cfgSecretsEnabled.get(settings)
+			? await buildSecretObfuscator(cwd, agentDir, options.agentDir, cfgSecretsModelFiles.get(settings))
+			: undefined);
+	// A live `secrets.enabled` switch-on replaces the session's obfuscator; closures read the live one.
 	const liveObfuscator = (): SecretObfuscator | undefined => (hasSession ? session.obfuscator : obfuscator);
 
 	// An abnormal process exit after a non-terminal message tail is durable
@@ -4260,7 +4262,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						? resolveTelemetry(agent.telemetry, agent.sessionId)
 						: resolveTelemetry(options.telemetry, providerSessionId),
 				// Skill text can carry configured secrets; read the session's current
-				// obfuscator so `/fix-refusal` swaps reach progressive compression too.
+				// obfuscator so a live switch-on reaches progressive compression too.
 				redaction: {
 					obfuscate: text => liveObfuscator()?.obfuscate(text) ?? text,
 					deobfuscate: text => liveObfuscator()?.deobfuscate(text) ?? text,
@@ -4700,8 +4702,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		};
 
 		// Final convertToLlm: live provider replay drops API-level refusal errors,
-		// then applies the current session secret obfuscator to the remaining
-		// outbound context. `/fix-refusal` can replace it while this session lives.
+		// then applies the session's secret redaction for its active model to the
+		// remaining outbound context.
 		const convertToLlmFinal = (messages: AgentMessage[]): Message[] => {
 			const converted = filterProviderReplayMessages(convertToLlmWithBlockImages(messages));
 			const currentObfuscator = session?.obfuscator;
@@ -4754,7 +4756,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const createTransformProviderContext = (journal?: DateCwdReminderJournal) => {
 			const dateCwdReminder = new DateCwdReminderInjector(journal);
 			return async (context: Context, transformModel: Model): Promise<Context> => {
-				const currentObfuscator = liveObfuscator();
+				// Advisors and side requests can target another model than the session's: redact with that model's set.
+				const currentObfuscator = liveObfuscator()?.forModel(transformModel);
 				let transformed = currentObfuscator ? obfuscateProviderContext(currentObfuscator, context) : context;
 				// The archive was sized for the model active at the last context build; a model switch may have lowered the budget.
 				transformed = capArchiveFrameBytes(transformed, transformModel);
@@ -5384,7 +5387,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (next.secretsEnabled !== previous.secretsEnabled) {
 				try {
 					if (cfgSecretsEnabled.get(settings) && !obfuscator) {
-						const built = await buildSecretObfuscator(cwd, agentDir, options.agentDir);
+						const built = await buildSecretObfuscator(
+							cwd,
+							agentDir,
+							options.agentDir,
+							cfgSecretsModelFiles.get(settings),
+						);
 						if (!obfuscator && built) {
 							obfuscator = built;
 							session.setObfuscator(built);

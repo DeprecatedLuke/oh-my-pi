@@ -328,6 +328,12 @@ export class SecretObfuscator {
 	/** Whether any secrets were configured */
 	#hasAny: boolean;
 
+	/** Sibling transformers of a per-model group (`secrets.modelFiles`); their placeholders are recovered too. */
+	#recoveryPeers: readonly SecretObfuscator[] = [];
+
+	/** Picks the group member that redacts requests to a model; undefined outside a group. */
+	#modelSelector: ((model: { provider: string; id: string }) => SecretObfuscator) | undefined;
+
 	/** Outbound obfuscation switch (`secrets.enabled`); deobfuscation stays active either way. */
 	#obfuscating = true;
 
@@ -572,7 +578,25 @@ export class SecretObfuscator {
 	}
 
 	hasSecrets(): boolean {
-		return this.#hasAny;
+		return this.#hasAny || this.#recoveryPeers.some(peer => peer.#hasAny);
+	}
+
+	/**
+	 * Join a per-model group: {@link forModel} picks a member, and form recovery
+	 * restores every member's placeholders, so a model switch or resume never
+	 * strands placeholders minted under another member.
+	 */
+	linkModelGroup(
+		members: readonly SecretObfuscator[],
+		select: (model: { provider: string; id: string }) => SecretObfuscator,
+	): void {
+		this.#recoveryPeers = members.filter(member => member !== this);
+		this.#modelSelector = select;
+	}
+
+	/** The group member that redacts requests to `model`; this transformer outside a group. */
+	forModel(model: { provider: string; id: string }): SecretObfuscator {
+		return this.#modelSelector?.(model) ?? this;
 	}
 
 	/** Registry version; bumps on every effective registry write. */
@@ -591,6 +615,7 @@ export class SecretObfuscator {
 	 */
 	setObfuscating(enabled: boolean): void {
 		this.#obfuscating = enabled;
+		for (const peer of this.#recoveryPeers) peer.#obfuscating = enabled;
 	}
 
 	/**
@@ -1143,7 +1168,9 @@ export class SecretObfuscator {
 
 	/** Deobfuscate keyed placeholders for provider output, tool-call arguments, replay, and display. */
 	deobfuscate(text: string): string {
-		return this.#deobfuscate(text);
+		let result = this.#deobfuscate(text);
+		for (const peer of this.#recoveryPeers) result = peer.#deobfuscate(result);
+		return result;
 	}
 
 	// Reverse-direction counterpart to `#isGeneratedPlaceholder`'s guard: the
@@ -1187,7 +1214,7 @@ export class SecretObfuscator {
 
 	/** Deep-walk an object, deobfuscating string values for LIVE paths (keyed placeholders only). */
 	deobfuscateObject<T>(obj: T): T {
-		if (!this.#hasAny) return obj;
+		if (!this.hasSecrets()) return obj;
 		return deepWalkStrings(obj, s => this.deobfuscate(s));
 	}
 

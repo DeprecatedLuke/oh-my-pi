@@ -44,7 +44,25 @@ Define custom secret entries in YAML. Two locations are checked:
 | Global  | `<active-agent-dir>/secrets.yml` (normally `~/.omp/agent/secrets.yml`) | Secrets across projects using that agent directory |
 | Project | `<cwd>/.omp/secrets.yml`                                               | Project-specific secrets                           |
 
-Project entries override global entries with matching `content`. The global location follows the session's agent directory, including named profiles and explicit SDK agent-directory overrides.
+Project entries override global entries with matching `content`. The global location follows the session's agent directory, including named profiles and explicit SDK agent-directory overrides. Each scope also loads a `secrets-managed.yml` beside its `secrets.yml` if one exists (older `/fix-refusal` versions wrote it; `/find-refusal` now only prints patterns for you to paste).
+
+### Per-model secrets files
+
+`secrets.modelFiles` picks different global secrets for different models. Each key is a model glob; its value is a file path or a list of paths that **replace** the global `secrets.yml` and `secrets-managed.yml` for requests to that model:
+
+```yaml
+secrets:
+   enabled: true
+   modelFiles:
+      "*opus-*": ~/.omp/agent/secrets-anthropic.yml
+      "anthropic/*": [secrets-anthropic.yml, secrets-shared.yml]
+      "openai-codex/*": [] # no global secrets for Codex models
+```
+
+- Keys match the model id, or `provider/model-id` when the key contains `/`. `*` is the only wildcard; an exact key beats a glob and the longest literal part wins.
+- Paths expand `~`; relative paths resolve against the agent directory. A missing file contributes nothing.
+- Environment variables, dotenv files, project `.omp/secrets*.yml`, and built-in credential patterns apply to every model.
+- Each request is redacted with the set of the model it goes to, including advisors and side requests on another model. Placeholders minted under any set are restored in replies, tool arguments, resume, and display, so switching models never strands them.
 
 ### Schema
 

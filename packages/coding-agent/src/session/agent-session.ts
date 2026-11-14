@@ -2752,7 +2752,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			onPayload: this.#onPayload,
 			onResponse: this.#onResponse,
 			onSseEvent: this.#onSseEvent,
-			obfuscator: () => this.#obfuscator,
+			obfuscator: () => this.obfuscator,
 			runToolCallIds: () => this.#runToolCallIds,
 		};
 		this.#providerBoundary = new SessionProviderBoundary(providerBoundaryHost);
@@ -2870,7 +2870,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			settings: this.settings,
 			modelRegistry: this.#modelRegistry,
 			yieldQueue: this.yieldQueue,
-			obfuscator: () => this.#obfuscator,
+			obfuscator: () => this.obfuscator,
 			providerSessionState: this.#providerSessionState,
 			preferWebsockets: model => resolveWebsocketPreference(this.settings, model),
 			onPayload: this.#onPayload,
@@ -3086,7 +3086,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			settings: this.settings,
 			modelRegistry: this.#modelRegistry,
 			sideStreamFn: this.#sideStreamFn,
-			obfuscator: () => this.#obfuscator,
+			obfuscator: () => this.obfuscator,
 			model: () => this.model,
 			thinkingLevel: () => this.thinkingLevel,
 			sessionId: () => this.sessionId,
@@ -3528,8 +3528,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	/** Secret obfuscator, when secrets are configured; /share redaction reuses it. */
+	/** The session's transformer for its active model (a `secrets.modelFiles` group member). */
 	get obfuscator(): SecretObfuscator | undefined {
-		return this.#obfuscator;
+		const model = this.model;
+		return model ? this.#obfuscator?.forModel(model) : this.#obfuscator;
 	}
 
 	/** Install the obfuscator built after a live `secrets.enabled` switch-on. */
@@ -4812,7 +4814,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// writes `$$HASH$$` tokens to the session file; convertToLlm re-obfuscates outbound
 		// traffic on the next turn. Walks text, thinking, and toolCall arguments/intent.
 		let displayEvent: AgentEvent = event;
-		const obfuscator = this.#obfuscator;
+		const obfuscator = this.obfuscator;
 		if (obfuscator && event.type === "message_end" && event.message.role === "assistant") {
 			const message = event.message;
 			const deobfuscatedContent = deobfuscateAssistantContent(obfuscator, message.content);
@@ -8048,8 +8050,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * secret obfuscation applied. Used by `/find-refusal` to reproduce the refused turn.
 	 */
 	async buildSideRequestContext(messages: AgentMessage[]): Promise<{ systemPrompt: string[]; messages: Message[] }> {
-		const systemPrompt = this.#obfuscator?.hasSecrets()
-			? this.#obfuscator.obfuscateObject(this.systemPrompt)
+		const systemPrompt = this.obfuscator?.hasSecrets()
+			? this.obfuscator.obfuscateObject(this.systemPrompt)
 			: this.systemPrompt;
 		const llmMessages = this.#convertToLlmForSideRequest(messages);
 		const context = await this.agent.buildSideRequestContext(llmMessages, systemPrompt);
@@ -13838,7 +13840,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		}
 		// Apply after context transforms, without mutating a potentially shared context.
 		const context = obfuscateProviderContext(
-			this.#obfuscator,
+			this.obfuscator,
 			args.tools === false ? { ...sideContext, tools: [] } : sideContext,
 		);
 		if (
@@ -13925,8 +13927,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					// 'H.content.filter')`. Normalize to `[]` so the recap surfaces an empty reply
 					// instead of turning a malformed side-channel response into a session-mute crash.
 					const rawContent = Array.isArray(event.message.content) ? event.message.content : [];
-					assistantMessage = this.#obfuscator?.hasSecrets()
-						? { ...event.message, content: deobfuscateAssistantContent(this.#obfuscator, rawContent) }
+					assistantMessage = this.obfuscator?.hasSecrets()
+						? { ...event.message, content: deobfuscateAssistantContent(this.obfuscator, rawContent) }
 						: { ...event.message, content: rawContent };
 					reportUsage(assistantMessage);
 					break;
@@ -15129,7 +15131,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			maxFrameDataBytes: frameDataBytesBudget(this.model),
 			model: this.model,
 		});
-		const displayContext = this.#withEvalStateContext(deobfuscateSessionContext(stateContext, this.#obfuscator));
+		const displayContext = this.#withEvalStateContext(deobfuscateSessionContext(stateContext, this.obfuscator));
 		this.replaceMessagesFromSessionContext(displayContext.messages);
 		this.#rehydrateCheckpointRewindState();
 		this.#advisors.resetSessionState({ preserveCost: true });
@@ -15221,8 +15223,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					);
 					if (!toolCall) return undefined;
 					if (toolCall.name !== "ask") return undefined;
-					const args = this.#obfuscator?.hasSecrets()
-						? deobfuscateToolArguments(this.#obfuscator, toolCall.arguments)
+					const args = this.obfuscator?.hasSecrets()
+						? deobfuscateToolArguments(this.obfuscator, toolCall.arguments)
 						: toolCall.arguments;
 					return recoverAskHtml(args);
 				}
@@ -16091,7 +16093,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const subagentRoot = sessionFile?.endsWith(".jsonl") ? sessionFile.slice(0, -6) : undefined;
 		let subagentCount = 0;
 		for (const [key, sub] of Object.entries(subSessions)) {
-			const context = deobfuscateSessionContext(buildSessionContext(sub.entries, sub.leafId), this.#obfuscator);
+			const context = deobfuscateSessionContext(buildSessionContext(sub.entries, sub.leafId), this.obfuscator);
 			const liveRef = subagentRoot
 				? liveByFile.get(path.resolve(path.join(subagentRoot, ...key.split("/")) + ".jsonl"))
 				: undefined;

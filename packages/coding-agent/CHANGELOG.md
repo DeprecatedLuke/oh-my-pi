@@ -5,6 +5,7 @@
 ### Added
 
 - `retry.cyberFallbackModels` maps a model glob (`*opus-*`, `anthropic/claude-opus-5-5`, or `*` for everything) to the model or models that replace it when a provider's classifier refuses the turn — including Codex `cyber_policy` denials and OpenAI `content_filter` blocks; a mapped refusal switches at once with no same-model retry (a mapped `cyber_policy` denial skips credential rotation entirely), the map is walked per model (`*sonnet*: openai-codex/gpt-6-astra`, `*astra*: "@cyber"`) including past entries whose context window is too small, the switch survives session resume, subagent revival and prewalk handoffs to a mapped model, advisors consult it before their own chain, and the refused turn no longer replays on the switch
+- `secrets.modelFiles` maps a model glob to the secrets file(s) used for that model instead of the global `secrets.yml`/`secrets-managed.yml` (e.g. `{"*opus-*": "~/.omp/agent/secrets-anthropic.yml", "openai-codex/*": []}`); each request is redacted with the set of the model it goes to, and placeholders from every set still restore after a model switch or resume
 
 ### Breaking Changes
 
