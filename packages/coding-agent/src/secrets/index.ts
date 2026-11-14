@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseEnv } from "node:util";
 import { expandTilde, getSecretPlaceholderKeyPath, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { YAML } from "bun";
 import { type SecretEntry, SecretObfuscator } from "./obfuscator";
 import { matchModelGlob } from "../config/model-glob";
@@ -184,7 +185,10 @@ export async function loadSecrets(
 		const normalizedPath = path.resolve(filePath);
 		let promise = loaded.get(normalizedPath);
 		if (!promise) {
-			promise = loadSecretsFile(normalizedPath);
+			promise =
+				path.basename(normalizedPath) === MANAGED_SECRETS_BASENAME
+					? loadManagedSecretsFile(normalizedPath)
+					: loadSecretsFile(normalizedPath);
 			loaded.set(normalizedPath, promise);
 		}
 		return promise;
@@ -427,6 +431,34 @@ async function buildOne(
 		obfuscator = new SecretObfuscator([{ type: "plain", mode: "replace", content: placeholderKey }], placeholderKey);
 	}
 	return obfuscator;
+}
+
+/**
+ * Read a managed secrets file under its file lock: omp processes older than the
+ * `/find-refusal` rename may still append to it while this one reads.
+ */
+async function loadManagedSecretsFile(filePath: string): Promise<SecretEntry[]> {
+	const parentDir = path.dirname(filePath);
+	if (!(await isExistingDirectory(parentDir))) return [];
+	try {
+		return await withFileLock(filePath, async () => await loadSecretsFile(filePath));
+	} catch (err) {
+		if (isEnoent(err) || !(await isExistingDirectory(parentDir))) return [];
+		throw err;
+	}
+}
+
+async function isExistingDirectory(directory: string): Promise<boolean> {
+	try {
+		return (await fs.promises.stat(directory)).isDirectory();
+	} catch (err) {
+		if (isEnoent(err)) return false;
+		logger.warn("Failed to access managed secrets parent directory", {
+			path: directory,
+			error: String(err),
+		});
+		return false;
+	}
 }
 
 async function loadSecretsFile(filePath: string): Promise<SecretEntry[]> {

@@ -13839,8 +13839,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			);
 		}
 		// Apply after context transforms, without mutating a potentially shared context.
+		// Redact with the target model's set (`secrets.modelFiles`), not the session model's.
 		const context = obfuscateProviderContext(
-			this.obfuscator,
+			this.obfuscator?.forModel(model),
 			args.tools === false ? { ...sideContext, tools: [] } : sideContext,
 		);
 		if (
