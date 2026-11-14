@@ -25,6 +25,7 @@ import {
 	cfgPrewalkFrom,
 	cfgPrewalkInto,
 	cfgRetryBaseDelayMs,
+	cfgRetryCyberFallbackModels,
 	cfgRetryFallbackChains,
 	cfgRetryFallbackRevertPolicy,
 } from "@oh-my-pi/pi-coding-agent/session/settings";
@@ -1811,5 +1812,68 @@ describe("AgentSession prewalk", () => {
 		// The hand-off clears automatic thinking.
 		expect(session.isAutoThinking).toBe(false);
 		expect(notices.some(message => message.includes("nothing to switch"))).toBe(false);
+	});
+
+	describe("after a retry.cyberFallbackModels hop", () => {
+		const refusal: MockResponse = {
+			content: [],
+			stopReason: "error",
+			stopDetails: { type: "refusal", category: "cyber", explanation: "Declined." },
+			errorMessage: "Refusal (cyber): Declined.",
+		};
+
+		// Source claude-sonnet-4-5 refuses, the map hops to claude-opus-4-6, then the
+		// agent inits its todo list and performs the first write, which arms the handoff.
+		async function runRefusedThenWrite(coverTarget: boolean) {
+			const replacement = modelOrThrow("claude-opus-4-6");
+			const created = createLifecycleSession([
+				refusal,
+				toolCall("todo", "todo"),
+				toolCall("write", "write"),
+				{ content: ["done"] },
+			]);
+			const replacementSelector = `${replacement.provider}/${replacement.id}`;
+			cfgRetryBaseDelayMs.override(created.settings, 1);
+			cfgRetryCyberFallbackModels.override(created.settings, {
+				[`*${created.primary.id}`]: replacementSelector,
+				...(coverTarget ? { [`*${created.target.id}`]: replacementSelector } : {}),
+			});
+			const notices: string[] = [];
+			created.session.subscribe(event => {
+				if (event.type === "notice" && event.source === "prewalk") notices.push(event.message);
+			});
+			await created.session.prompt("task the source refuses");
+			await created.session.waitForIdle();
+			return { ...created, replacement, notices };
+		}
+
+		it("stays on the cyber replacement when the map covers the prewalk target", async () => {
+			const {
+				session: active,
+				primary,
+				replacement,
+				target,
+				requested,
+				nudges,
+				notices,
+			} = await runRefusedThenWrite(true);
+
+			expect(requested).toEqual([primary.id, replacement.id, replacement.id, replacement.id]);
+			expect(active.model?.id).toBe(replacement.id);
+			// The handoff is consumed (not re-attempted later) and the checklist still follows the first write.
+			expect(active.getPrewalkState()).toBeUndefined();
+			expect(nudges[3]).toContain("prewalk-checklist");
+			expect(
+				notices.some(message => message.includes(`instead of switching to ${target.provider}/${target.id}`)),
+			).toBe(true);
+		});
+
+		it("still hands off to the prewalk target when the map does not cover it", async () => {
+			const { session: active, primary, replacement, target, requested, nudges } = await runRefusedThenWrite(false);
+
+			expect(requested).toEqual([primary.id, replacement.id, replacement.id, target.id]);
+			expect(active.model?.id).toBe(target.id);
+			expect(nudges[3]).toContain("prewalk-checklist");
+		});
 	});
 });

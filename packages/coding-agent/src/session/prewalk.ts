@@ -26,9 +26,10 @@ import type { PlanProposalHandler } from "../tools/resolve";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { PlanYolo, Prewalk } from "./agent-session-types";
 import { PREWALK_PLAN_MESSAGE_TYPE } from "./messages";
+import { matchRetryCyberFallbackModels } from "./retry-fallback-chains";
 import { CYBER_FALLBACK_MODEL_CHANGE_ROLE, PREWALK_MODEL_CHANGE_ROLE } from "./session-entries";
 import type { SessionManager } from "./session-manager";
-import { cfgPrewalkAuto } from "./settings";
+import { cfgPrewalkAuto, cfgRetryCyberFallbackModels } from "./settings";
 const PREWALK_CONTINUE_MESSAGE_TYPE = "prewalk-continue";
 const PREWALK_CHECKLIST_MESSAGE_TYPE = "prewalk-checklist";
 
@@ -390,6 +391,18 @@ export class PrewalkCoordinator {
 			return;
 		}
 		const source = this.#host.model();
+		if (this.#cyberFallbackHolds(target)) {
+			// The context that got the source refused is still there, and the map says the
+			// target refuses too: handing off would only trade the replacement for a refusal.
+			this.#clearPrewalkState();
+			this.#host.emitNotice(
+				"info",
+				`Prewalk: staying on ${source?.provider}/${source?.id} (cyber fallback) instead of switching to ${target.provider}/${target.id}, which retry.cyberFallbackModels maps as refusing.`,
+				"prewalk",
+			);
+			this.#steerChecklist();
+			return;
+		}
 		const sourceThinkingLevel = this.#host.configuredThinkingLevel();
 		const auto = this.#autoArm === prewalk;
 		await this.#host.setModelTemporary(target, prewalk.thinkingLevel);
@@ -408,6 +421,10 @@ export class PrewalkCoordinator {
 			`Prewalk: switched to ${target.provider}/${target.id} after first ${action.toolName} call.`,
 			"prewalk",
 		);
+		this.#steerChecklist();
+	}
+
+	#steerChecklist(): void {
 		this.#host.agent.steer({
 			role: "custom",
 			customType: PREWALK_CHECKLIST_MESSAGE_TYPE,
@@ -416,6 +433,18 @@ export class PrewalkCoordinator {
 			display: false,
 			timestamp: Date.now(),
 		});
+	}
+
+	/**
+	 * Whether the session sits on a cyber-fallback hop's replacement (the newest
+	 * session-local model change, so a revived session counts too) and the
+	 * `retry.cyberFallbackModels` map covers `target`.
+	 */
+	#cyberFallbackHolds(target: Model): boolean {
+		if (this.#host.sessionManager.getSessionLocalModelChange()?.role !== CYBER_FALLBACK_MODEL_CHANGE_ROLE) {
+			return false;
+		}
+		return matchRetryCyberFallbackModels(cfgRetryCyberFallbackModels.get(this.#host.settings), target) !== undefined;
 	}
 
 	/** Drops a pending prewalk hand-off (e.g. `prewalk.enabled` turned off); no-op when none is armed. */
