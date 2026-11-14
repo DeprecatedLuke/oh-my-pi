@@ -13,7 +13,7 @@ const HASH_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 // base. A collision would let a persisted placeholder deobfuscate to the wrong
 // secret when the configured secret set or its ordering changes across sessions.
 const HASH_LEN = 12;
-const MAX_FRIENDLY_NAME_LEN = 32;
+export const MAX_FRIENDLY_NAME_LEN = 32;
 // Plain/regex obfuscate matches shorter than this are toned down (never placed
 // behind a reversible placeholder) to avoid redacting small words/fragments.
 export const MIN_OBFUSCATE_SECRET_LEN = 8;
@@ -101,7 +101,7 @@ export class SecretValueSet extends Set<string> {
 		if (super.has(value)) return this;
 		super.add(value);
 		this.#contentKey = undefined;
-		this.#revision?.bump();
+		this.#revision?.bumpWith(value);
 		const normalized = sanitizeForCollisionCheck(value);
 		if (normalized.length === 0) return this;
 		const count = this.#normalized.get(normalized) ?? 0;

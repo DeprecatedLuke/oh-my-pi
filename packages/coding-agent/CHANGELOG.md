@@ -9,6 +9,7 @@
 ### Fixed
 
 - Fixed 15–25s UI freezes after each history prune in long sessions with an advisor and secret redaction: pruning or shaking messages the advisor already reviewed no longer replays the whole transcript to it, and per-turn advisor updates no longer re-redact its entire history
+- Fixed 0.5–5s UI freezes on the two requests after a tool result introduced a new secret-like value: redaction now reuses its cached results for every text the new value does not occur in, instead of re-redacting the whole context
 - Fixed multi-second UI freezes before every model request in long sessions with secret redaction enabled; unchanged history is no longer re-scanned and re-redacted on each turn ([#18664](https://github.com/can1357/oh-my-pi/pull/18664) by [@DeprecatedLuke](https://github.com/DeprecatedLuke))
 ### Fixed
 

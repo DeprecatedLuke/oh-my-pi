@@ -6,6 +6,7 @@ import {
 	inferCaseHint,
 	labelCollidesWithAnySecret,
 	lookupFriendlyPlaceholderAlias,
+	MAX_FRIENDLY_NAME_LEN,
 	MIN_OBFUSCATE_SECRET_LEN,
 	PLACEHOLDER_RE,
 	placeholderWithoutFriendlyName,
@@ -97,6 +98,8 @@ export type JsonRecord = { [key: string]: JsonValue | undefined };
 
 const EMPTY_SECRET_VALUES: ReadonlySet<string> = new Set();
 const NO_VALUES: readonly string[] = [];
+/** Distinct logged strings whose derived forms are cached at once; see `#writeConcernsText`. */
+const MAX_NEEDLE_FORMS = 8192;
 const NON_ASCII_RE = /[^\x00-\x7F]/;
 
 /** Distinct placeholder prefixes whose regex verdict is memoized; forged prefixes beyond this are just re-tested. */
@@ -133,8 +136,15 @@ interface TextScan {
 	/** Registry revision and shared-values epoch `output` was computed under. */
 	outputRevision: number;
 	outputEpoch: number;
+	/** The shared-values set `output` was computed against; diffed on an epoch change to revalidate. */
+	outputShared: ReadonlySet<string> | undefined;
 	/** Last {@link SecretObfuscator.obfuscate} result for this text. */
 	output: string | undefined;
+	/** Lazily derived forms of the text and of `output` that revalidation compares logged writes against. */
+	lowerText: string | undefined;
+	sanitizedText: string | undefined;
+	lowerOutput: string | undefined;
+	sanitizedOutput: string | undefined;
 }
 
 interface RegexScanMemo {
@@ -291,6 +301,16 @@ export class SecretObfuscator {
 	#batchCount = 0;
 	/** Shared-values {@link SecretValueSet.contentKey} → epoch, so equal sets from different batches share memoized outputs. */
 	readonly #epochByContent = new Map<string, number>();
+	/** Contents of each remembered shared-values epoch, for diffing against the set a result was computed with. */
+	readonly #snapshotByEpoch = new Map<number, ReadonlySet<string>>();
+
+	#writtenMemo: { since: number; revision: number; strings: readonly string[] | undefined } | undefined;
+	#sharedDifferenceMemo:
+		| { previous: ReadonlySet<string>; current: ReadonlySet<string>; values: readonly string[] }
+		| undefined;
+
+	/** Lowercased and collision-normalized forms of recently logged writes, shared by every revalidation. */
+	readonly #needleForms = new Map<string, { lower: string; sanitized: string }>();
 	#epochCount = 0;
 
 	/** Placeholder ranges and expanded scan view of the last text `#collectRegexMatches` scanned. */
@@ -644,7 +664,8 @@ export class SecretObfuscator {
 
 	/**
 	 * Obfuscate all secrets in text. Bidirectional placeholders for obfuscate mode, one-way for replace.
-	 * Inside a {@link batch}, the result is reused while the registry and the shared values are unchanged.
+	 * Inside a {@link batch}, the result is reused while the registry and the shared values are unchanged,
+	 * or while every change since it was computed provably cannot concern this text.
 	 */
 	obfuscate(text: string, sharedRegexSecretValues?: ReadonlySet<string>): string {
 		if (!this.obfuscates()) return text;
@@ -653,25 +674,142 @@ export class SecretObfuscator {
 		const epoch = this.#sharedEpoch(sharedValues);
 		const revision = this.#revision.value;
 		const memo = this.#scans.get(text);
-		if (memo !== undefined && memo.outputRevision === revision && memo.outputEpoch === epoch) {
-			memo.batch = this.#batchCount;
-			return memo.output!;
+		// The set may grow after this call; revalidation compares the contents the epoch names.
+		const sharedSnapshot = epoch === undefined ? undefined : this.#sharedSnapshot(epoch, sharedValues);
+		if (memo !== undefined && sharedSnapshot !== undefined && memo.output !== undefined) {
+			if (
+				(memo.outputRevision === revision && memo.outputEpoch === epoch) ||
+				this.#outputStillValid(text, memo, sharedSnapshot, epoch!, revision)
+			) {
+				memo.batch = this.#batchCount;
+				return memo.output;
+			}
 		}
 		const result = this.#obfuscateNow(text, sharedValues);
-		// A call that minted is recomputed next time: its result may differ once the mint is known.
+		// Recorded at the revision seen before the call: if it minted, the mint is a write after
+		// that revision, and its strings occur in this text or result, so the next call recomputes.
 		const scan = this.#scans.get(text);
-		if (scan !== undefined && epoch !== undefined && this.#revision.value === revision) {
+		if (scan !== undefined && epoch !== undefined) {
 			scan.output = result;
 			scan.outputRevision = revision;
 			scan.outputEpoch = epoch;
+			scan.outputShared = sharedSnapshot;
+			scan.lowerOutput = undefined;
+			scan.sanitizedOutput = undefined;
 		}
 		return result;
+	}
+
+	/**
+	 * Whether `memo.output` is still what `#obfuscateNow` would return, decided from the
+	 * writes since it was computed: registry writes after `memo.outputRevision` and shared
+	 * values that joined or left the set. A write can only change the result when one of its
+	 * strings occurs in the text or output (case-insensitively), or when its collision-normalized
+	 * form occurs in the normalized text or output (a friendly label, whether already in the text or
+	 * minted into the output, colliding with it).
+	 * Updates the memo's stamps on success.
+	 */
+	#outputStillValid(
+		text: string,
+		memo: TextScan,
+		sharedValues: ReadonlySet<string>,
+		epoch: number,
+		revision: number,
+	): boolean {
+		let written: readonly string[] = NO_VALUES;
+		if (memo.outputRevision !== revision) {
+			const logged = this.#writtenSince(memo.outputRevision, revision);
+			if (logged === undefined) return false;
+			written = logged;
+		}
+		let shared: readonly string[] | undefined;
+		if (memo.outputEpoch !== epoch) {
+			const previous = memo.outputShared;
+			if (previous === undefined) return false;
+			shared = this.#sharedDifference(previous, sharedValues);
+		}
+		for (const value of written) if (this.#writeConcernsText(value, text, memo, true)) return false;
+		if (shared !== undefined)
+			for (const value of shared) if (this.#writeConcernsText(value, text, memo, true)) return false;
+		memo.outputRevision = revision;
+		memo.outputEpoch = epoch;
+		memo.outputShared = sharedValues;
+		return true;
+	}
+
+	/** {@link RegistryRevision.writtenSince}, shared by the many memos of one batch that carry the same revision. */
+	#writtenSince(since: number, revision: number): readonly string[] | undefined {
+		const cached = this.#writtenMemo;
+		if (cached !== undefined && cached.since === since && cached.revision === revision) return cached.strings;
+		const strings = this.#revision.writtenSince(since);
+		this.#writtenMemo = { since, revision, strings };
+		return strings;
+	}
+
+	/** Symmetric difference of two shared-values sets, shared by the many memos of one batch computed against the same set. */
+	#sharedDifference(previous: ReadonlySet<string>, current: ReadonlySet<string>): readonly string[] {
+		const cached = this.#sharedDifferenceMemo;
+		if (cached !== undefined && cached.previous === previous && cached.current === current) return cached.values;
+		const values: string[] = [];
+		for (const value of previous) if (!current.has(value)) values.push(value);
+		for (const value of current) if (!previous.has(value)) values.push(value);
+		this.#sharedDifferenceMemo = { previous, current, values };
+		return values;
+	}
+
+	/**
+	 * Whether the registry writes since `scan.collectedRevision` provably cannot change the
+	 * standalone collection of `text` (same occurrence test as {@link #outputStillValid}, without
+	 * an output). Updates the stamp on success.
+	 */
+	#collectedStillValid(text: string, scan: TextScan, revision: number): boolean {
+		const written = this.#writtenSince(scan.collectedRevision, revision);
+		if (written === undefined) return false;
+		for (const value of written) if (this.#writeConcernsText(value, text, scan, false)) return false;
+		scan.collectedRevision = revision;
+		return true;
+	}
+
+	#writeConcernsText(value: string, text: string, memo: TextScan, checkOutput: boolean): boolean {
+		if (value.length === 0) return false;
+		let forms = this.#needleForms.get(value);
+		if (forms === undefined) {
+			if (this.#needleForms.size >= MAX_NEEDLE_FORMS) this.#needleForms.clear();
+			forms = {
+				lower: value.toLowerCase(),
+				sanitized: sanitizeForCollisionCheck(value).slice(0, MAX_FRIENDLY_NAME_LEN),
+			};
+			this.#needleForms.set(value, forms);
+		}
+		memo.lowerText ??= text.toLowerCase();
+		if (memo.lowerText.includes(forms.lower)) return true;
+		if (checkOutput) {
+			memo.lowerOutput ??= memo.output === text ? memo.lowerText : memo.output!.toLowerCase();
+			if (memo.lowerOutput.includes(forms.lower)) return true;
+		}
+		if (forms.sanitized.length === 0) return false;
+		memo.sanitizedText ??= sanitizeForCollisionCheck(text);
+		if (memo.sanitizedText.includes(forms.sanitized)) return true;
+		if (!checkOutput || memo.output === text) return false;
+		memo.sanitizedOutput ??= sanitizeForCollisionCheck(memo.output!);
+		return memo.sanitizedOutput.includes(forms.sanitized);
 	}
 
 	/**
 	 * Identifies the contents of a shared-values set: 0 when empty, equal for
 	 * equal {@link SecretValueSet}s, undefined (not memoizable) for other sets.
 	 */
+	#sharedSnapshot(epoch: number, values: ReadonlySet<string>): ReadonlySet<string> {
+		if (epoch === 0) return EMPTY_SECRET_VALUES;
+		let snapshot = this.#snapshotByEpoch.get(epoch);
+		if (snapshot === undefined) {
+			if (this.#snapshotByEpoch.size >= MAX_SHARED_EPOCHS) this.#snapshotByEpoch.clear();
+			snapshot = new Set(values);
+			this.#snapshotByEpoch.set(epoch, snapshot);
+		}
+		return snapshot;
+	}
+
 	#sharedEpoch(values: ReadonlySet<string>): number | undefined {
 		if (values.size === 0) return 0;
 		if (!(values instanceof SecretValueSet)) return undefined;
@@ -1445,7 +1583,12 @@ export class SecretObfuscator {
 			collectedValues: undefined,
 			outputRevision: -1,
 			outputEpoch: -1,
+			outputShared: undefined,
 			output: undefined,
+			lowerText: undefined,
+			sanitizedText: undefined,
+			lowerOutput: undefined,
+			sanitizedOutput: undefined,
 		};
 		if (this.#inBatch) this.#scans.set(text, scan);
 		return scan;
@@ -1464,10 +1607,14 @@ export class SecretObfuscator {
 		const values = new Set(scan.initialValues);
 		const reusable =
 			this.#inBatch && this.#currentRegexSecretValues.size === 0 && this.#sharedRegexSecretValues.size === 0;
-		if (reusable && scan.collectedValues !== undefined && scan.collectedRevision === this.#revision.value) {
+		const revision = this.#revision.value;
+		if (
+			reusable &&
+			scan.collectedValues !== undefined &&
+			(scan.collectedRevision === revision || this.#collectedStillValid(text, scan, revision))
+		) {
 			return { values: new Set(scan.collectedValues), literalFree: scan.literalFree };
 		}
-		const revision = this.#revision.value;
 		const collected = this.#collectAfterReplaceSimulation(text, values);
 		if (reusable && this.#revision.value === revision) {
 			scan.collectedValues = [...collected];
