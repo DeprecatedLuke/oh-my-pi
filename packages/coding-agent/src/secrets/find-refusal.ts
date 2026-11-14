@@ -4,10 +4,10 @@ import { parseRateLimitReason } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
 import { extractTextContent, extractToolCall } from "../commit/utils";
-import fixRefusalDiagnoseTemplate from "../prompts/secrets/fix-refusal-diagnose.md" with { type: "text" };
-import fixRefusalNameTemplate from "../prompts/secrets/fix-refusal-name.md" with { type: "text" };
-import fixRefusalSelectTemplate from "../prompts/secrets/fix-refusal-select.md" with { type: "text" };
-import fixRefusalSystemPrompt from "../prompts/secrets/fix-refusal-system.md" with { type: "text" };
+import findRefusalDiagnoseTemplate from "../prompts/secrets/find-refusal-diagnose.md" with { type: "text" };
+import findRefusalNameTemplate from "../prompts/secrets/find-refusal-name.md" with { type: "text" };
+import findRefusalSelectTemplate from "../prompts/secrets/find-refusal-select.md" with { type: "text" };
+import findRefusalSystemPrompt from "../prompts/secrets/find-refusal-system.md" with { type: "text" };
 import { buildNamedToolChoice } from "../utils/tool-choice";
 import { type SecretEntry, SecretObfuscator } from "./obfuscator";
 import { PLACEHOLDER_RE } from "./placeholder";
@@ -93,14 +93,14 @@ const selectRemovableTool: Tool = {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** A single stateless model call. Abstracts api-key resolution / telemetry so the orchestrator stays pure and testable. */
-export type FixRefusalComplete = (request: {
+export type FindRefusalComplete = (request: {
 	model: Model;
 	context: Context;
 	toolChoice?: ToolChoice;
 	temperature?: number;
 }) => Promise<AssistantMessage>;
 
-export interface FixRefusalOptions {
+export interface FindRefusalOptions {
 	/** The model that produced the refusal; re-probed after each masking round. */
 	mainModel: Model;
 	/** The uncensored model that authors the redaction patterns. */
@@ -109,10 +109,10 @@ export interface FixRefusalOptions {
 	systemPrompt: string[];
 	/** Conversation to re-probe, ending at the last user turn (already secret-obfuscated). */
 	probeMessages: Message[];
-	/** The original refusal text that prompted /fix-refusal. */
+	/** The original refusal text that prompted /find-refusal. */
 	refusalText: string;
 	/** Stateless completion driver. */
-	complete: FixRefusalComplete;
+	complete: FindRefusalComplete;
 	signal?: AbortSignal;
 	/** Max diagnose/re-probe rounds before giving up (default 6). */
 	maxIterations?: number;
@@ -130,7 +130,7 @@ export interface FixRefusalOptions {
 	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
-export interface FixRefusalResult {
+export interface FindRefusalResult {
 	/** Whether the refusal was cleared. */
 	resolved: boolean;
 	/** Final minimal (and named, when verified) regex entries. Empty when nothing needed masking. */
@@ -144,10 +144,10 @@ export interface FixRefusalResult {
 }
 
 /** Thrown when the run is aborted via the provided signal. */
-export class FixRefusalAbort extends Error {
+export class FindRefusalAbort extends Error {
 	constructor() {
-		super("fix-refusal aborted");
-		this.name = "FixRefusalAbort";
+		super("find-refusal aborted");
+		this.name = "FindRefusalAbort";
 	}
 }
 
@@ -186,13 +186,13 @@ function transientBackoffMs(attempt: number): number {
 }
 
 /**
- * Drive the refusal-fix loop: ask the uncensored model for redaction patterns,
+ * Drive the refusal-finding loop: ask the uncensored model for redaction patterns,
  * re-probe the main model with the accumulated masks, and repeat until the main
  * model stops refusing. Then shrink the pattern set to the load-bearing minimum
  * and attach verified innocuous friendly names. Returns the resulting regex
- * {@link SecretEntry}s; the caller persists and applies them.
+ * {@link SecretEntry}s; the caller decides what to do with them.
  */
-export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefusalResult> {
+export async function runFindRefusal(options: FindRefusalOptions): Promise<FindRefusalResult> {
 	const { mainModel, uncensoredModel, systemPrompt, probeMessages, complete, signal } = options;
 	const maxIterations = Math.max(1, options.maxIterations ?? DEFAULT_MAX_ITERATIONS);
 	const step = (line: string) => options.onStep?.(line);
@@ -218,7 +218,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 	// backoff. A refusal-shaped error or a non-transient error is returned/thrown unchanged so the
 	// caller's normal handling runs. On exhaustion the last response/error is surfaced as-is (the run
 	// then fails and its discovered patterns persist for resume).
-	const completeWithRetry = async (request: Parameters<FixRefusalComplete>[0]): Promise<AssistantMessage> => {
+	const completeWithRetry = async (request: Parameters<FindRefusalComplete>[0]): Promise<AssistantMessage> => {
 		for (let attempt = 0; ; attempt++) {
 			throwIfAborted(signal);
 			let transientText: string | undefined;
@@ -235,7 +235,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 					return response;
 				}
 			} catch (err) {
-				if (signal?.aborted) throw new FixRefusalAbort();
+				if (signal?.aborted) throw new FindRefusalAbort();
 				const message = err instanceof Error ? err.message : String(err);
 				if (!isTransientProviderError(message)) throw err;
 				if (attempt >= maxTransientRetries) throw err;
@@ -248,7 +248,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 			try {
 				await sleep(delay, signal);
 			} catch (sleepErr) {
-				if (signal?.aborted) throw new FixRefusalAbort();
+				if (signal?.aborted) throw new FindRefusalAbort();
 				throw sleepErr;
 			}
 		}
@@ -272,7 +272,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 			// structured `stopDetails` discarded. Treat a refusal-shaped error as
 			// "still refusing" — return its text so the judge proposes more patterns
 			// — and only abort on a real abort or a genuine error.
-			if (signal?.aborted) throw new FixRefusalAbort();
+			if (signal?.aborted) throw new FindRefusalAbort();
 			const message = err instanceof Error ? err.message : String(err);
 			if (isRefusalErrorMessage(message)) return { text: message, structural: true };
 			throw err;
@@ -290,7 +290,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 	// so already-covered spans appear as placeholders.
 	const askUncensored = async (latestResponse: string, entries: SecretEntry[]): Promise<SubmitPatternsPayload> => {
 		throwIfAborted(signal);
-		const instruction = prompt.render(fixRefusalDiagnoseTemplate, {
+		const instruction = prompt.render(findRefusalDiagnoseTemplate, {
 			transcript: serializeTranscript(maskMessages(entries)),
 			latestResponse,
 			patterns: entries.map(entry => ({ regex: entry.content, flags: entry.flags ?? "" })),
@@ -298,7 +298,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 		const response = await completeWithRetry({
 			model: uncensoredModel,
 			context: {
-				systemPrompt: [prompt.render(fixRefusalSystemPrompt)],
+				systemPrompt: [prompt.render(findRefusalSystemPrompt)],
 				messages: [{ role: "user", content: [{ type: "text", text: instruction }], timestamp: Date.now() }],
 				tools: [submitPatternsTool],
 			},
@@ -340,7 +340,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 	// the result is the subset of `kept` to remove.
 	const selectRemovals = async (kept: readonly SecretEntry[], target: number): Promise<SecretEntry[]> => {
 		throwIfAborted(signal);
-		const instruction = prompt.render(fixRefusalSelectTemplate, {
+		const instruction = prompt.render(findRefusalSelectTemplate, {
 			transcript: serializeTranscript(maskMessages(kept)),
 			patterns: kept.map((entry, i) => ({
 				index: i + 1,
@@ -354,7 +354,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 		const response = await completeWithRetry({
 			model: uncensoredModel,
 			context: {
-				systemPrompt: [prompt.render(fixRefusalSystemPrompt)],
+				systemPrompt: [prompt.render(findRefusalSystemPrompt)],
 				messages: [{ role: "user", content: [{ type: "text", text: instruction }], timestamp: Date.now() }],
 				tools: [selectRemovableTool],
 			},
@@ -521,7 +521,7 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 			}
 		}
 	} catch (err) {
-		if (err instanceof FixRefusalAbort) throw err;
+		if (err instanceof FindRefusalAbort) throw err;
 		const msg = err instanceof Error ? err.message : String(err);
 		step(
 			`Skipped minimization/naming after a provider error (${preview(msg, 80)}); keeping the ${plural(entries.length, "pattern")} that cleared the refusal.`,
@@ -538,17 +538,17 @@ export async function runFixRefusal(options: FixRefusalOptions): Promise<FixRefu
 async function namePatterns(
 	entries: SecretEntry[],
 	model: Model,
-	complete: FixRefusalComplete,
+	complete: FindRefusalComplete,
 	signal: AbortSignal | undefined,
 ): Promise<SecretEntry[]> {
 	throwIfAborted(signal);
-	const instruction = prompt.render(fixRefusalNameTemplate, {
+	const instruction = prompt.render(findRefusalNameTemplate, {
 		patterns: entries.map(entry => ({ regex: entry.content, flags: entry.flags ?? "" })),
 	});
 	const response = await complete({
 		model,
 		context: {
-			systemPrompt: [prompt.render(fixRefusalSystemPrompt)],
+			systemPrompt: [prompt.render(findRefusalSystemPrompt)],
 			messages: [{ role: "user", content: [{ type: "text", text: instruction }], timestamp: Date.now() }],
 			tools: [submitPatternsTool],
 		},
@@ -698,13 +698,13 @@ function parseSelectRemovable(response: AssistantMessage): number[] {
 }
 
 function assertCompleted(response: AssistantMessage, label: string): void {
-	if (response.stopReason === "aborted") throw new FixRefusalAbort();
+	if (response.stopReason === "aborted") throw new FindRefusalAbort();
 	if (response.stopReason === "error")
 		throw new Error(`${label} request failed: ${response.errorMessage ?? "unknown error"}`);
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
-	if (signal?.aborted) throw new FixRefusalAbort();
+	if (signal?.aborted) throw new FindRefusalAbort();
 }
 
 /**
@@ -831,7 +831,7 @@ function isRefusalErrorMessage(message: string): boolean {
  * True when `message` is a refusal — either a structured classifier refusal
  * (stopDetails) or an error-stop whose `errorMessage` is refusal-shaped (the
  * provider often throws away stopDetails, leaving only the text). Used to decide
- * whether to auto-run /fix-refusal.
+ * whether to auto-run /find-refusal.
  */
 export function isRefusalMessage(message: AssistantMessage | undefined): boolean {
 	if (!message) return false;

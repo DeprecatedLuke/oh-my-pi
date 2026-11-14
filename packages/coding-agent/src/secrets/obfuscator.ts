@@ -1088,7 +1088,7 @@ export class SecretObfuscator {
 				} else {
 					// Regex entries are explicit author- or judge-specified redaction
 					// rules. Unlike plain literals, short matches are intentional
-					// triggers and must remain maskable for /fix-refusal.
+					// triggers and must remain maskable for /find-refusal.
 					if (match.preserveInputPlaceholders) {
 						// The match straddled a prior-call placeholder. When the placeholder's
 						// own value already satisfies the regex on its own AND the surrounding

@@ -455,7 +455,7 @@ export class AgentRegistry implements AgentRegistryApi {
 	/**
 	 * Re-point a session's live descendants at a replaced secret obfuscator.
 	 * Children inherit their spawner's obfuscator by identity, so after
-	 * `/fix-refusal` swaps it they would otherwise keep redacting with the stale
+	 * it is replaced (e.g. a live secrets switch-on) they would otherwise keep redacting with the stale
 	 * set. Returns how many live sessions were re-pointed.
 	 */
 	propagateObfuscator(

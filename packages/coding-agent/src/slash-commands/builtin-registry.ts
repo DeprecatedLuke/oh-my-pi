@@ -19,7 +19,7 @@ import { BUILTIN_MARKETPLACE_SLASH_COMMANDS, reloadTuiPluginState } from "./buil
 import { BUILTIN_MODE_SLASH_COMMANDS } from "./builtin-modes";
 import { BUILTIN_SESSION_SLASH_COMMANDS } from "./builtin-session";
 import { BUILTIN_SKILLS_SLASH_COMMANDS } from "./builtin-skills";
-import { createTuiFixRefusalUi, executeFixRefusal } from "./helpers/fix-refusal";
+import { createTuiFindRefusalUi, executeFindRefusal } from "./helpers/find-refusal";
 import { commandConsumed, errorMessage, parseSlashCommand, usage } from "./helpers/parse";
 import type {
 	BuiltinSlashCommand,
@@ -41,20 +41,18 @@ export interface TuiBuiltinSlashCommand extends BuiltinSlashCommand {
 	getAutocompleteDescription?: () => string | undefined;
 }
 
-const FIX_REFUSAL_SLASH_COMMAND: SlashCommandSpec = {
-	name: "fix-refusal",
-	description: "Mask whatever made the model refuse, then save the redaction patterns",
+const FIND_REFUSAL_SLASH_COMMAND: SlashCommandSpec = {
+	name: "find-refusal",
+	description: "Find whatever made the model refuse and list the redaction patterns (list only)",
 	handleTui: async (_command, runtime) => {
 		const ctx = runtime.ctx;
 		ctx.editor.setText("");
-		const ui = createTuiFixRefusalUi(ctx);
-		const signal = ctx.beginFixRefusal?.();
+		const ui = createTuiFindRefusalUi(ctx);
+		const signal = ctx.beginFindRefusal?.();
 		try {
-			await executeFixRefusal({
+			await executeFindRefusal({
 				session: ctx.session,
 				settings: ctx.settings,
-				cwd: ctx.sessionManager.getCwd(),
-				keyDir: ctx.session.getSecretPlaceholderKeyDir(),
 				signal,
 				ui,
 			});
@@ -62,17 +60,15 @@ const FIX_REFUSAL_SLASH_COMMAND: SlashCommandSpec = {
 			ui.step(`Failed: ${errorMessage(err)}`);
 		} finally {
 			ui.done();
-			ctx.endFixRefusal?.();
+			ctx.endFindRefusal?.();
 		}
 		return commandConsumed();
 	},
 	handle: async (_command, runtime) => {
 		try {
-			await executeFixRefusal({
+			await executeFindRefusal({
 				session: runtime.session,
 				settings: runtime.settings,
-				cwd: runtime.cwd,
-				keyDir: runtime.session.getSecretPlaceholderKeyDir(),
 				signal: runtime.signal,
 				ui: { step: line => void runtime.output(line), working: () => {} },
 			});
@@ -91,7 +87,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	...BUILTIN_MARKETPLACE_SLASH_COMMANDS,
 	...BUILTIN_SKILLS_SLASH_COMMANDS,
 	...BUILTIN_CONTROL_SLASH_COMMANDS,
-	FIX_REFUSAL_SLASH_COMMAND,
+	FIND_REFUSAL_SLASH_COMMAND,
 ];
 
 const BUILTIN_SLASH_COMMAND_LOOKUP = new Map<string, SlashCommandSpec>();

@@ -6,6 +6,14 @@
 
 - `retry.cyberFallbackModels` maps a model glob (`*opus-*`, `anthropic/claude-opus-5-5`, or `*` for everything) to the model or models that replace it when a provider's classifier refuses the turn — including Codex `cyber_policy` denials and OpenAI `content_filter` blocks; a mapped refusal switches at once with no same-model retry (a mapped `cyber_policy` denial skips credential rotation entirely), the map is walked per model (`*sonnet*: openai-codex/gpt-6-astra`, `*astra*: "@cyber"`) including past entries whose context window is too small, the switch survives session resume, subagent revival and prewalk handoffs to a mapped model, advisors consult it before their own chain, and the refused turn no longer replays on the switch
 
+### Breaking Changes
+
+- `/fix-refusal` is now `/find-refusal` and only lists what it finds: it prints the trigger patterns as ready-to-paste `secrets.yml` YAML instead of writing `secrets-managed.yml`, swapping the session's redaction, or re-sending the prompt (existing `secrets-managed.yml` files still load)
+
+### Removed
+
+- Removed the `secrets.autoFixRefusal` setting and the automatic refusal-recovery flow
+
 ### Fixed
 
 - Fixed 15–25s UI freezes after each history prune in long sessions with an advisor and secret redaction: pruning or shaking messages the advisor already reviewed no longer replays the whole transcript to it, and per-turn advisor updates no longer re-redact its entire history

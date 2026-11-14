@@ -24,16 +24,3 @@ export const cfgSecretsEnabled = register({
 // Process-wide fallback for requests outside a session; a session's own requests redact per its
 // settings (`withCredentialRedaction` in `sdk.ts`), whichever instance holds the effects.
 effect(cfgSecretsEnabled, configureCredentialRedaction);
-
-export const cfgSecretsAutoFixRefusal = register({
-	id: "secrets.autoFixRefusal",
-	type: "boolean",
-	default: false,
-	ui: {
-		tab: "providers",
-		group: "Privacy",
-		label: "Auto Fix Refusal",
-		description:
-			"When the model refuses, automatically run /fix-refusal (needs the `uncensored` model role) and re-send the prompt",
-	},
-});

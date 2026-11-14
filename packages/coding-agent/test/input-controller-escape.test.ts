@@ -710,6 +710,20 @@ describe("InputController escape behavior", () => {
 		expect(spies.abort).not.toHaveBeenCalled();
 	});
 
+	it("aborts an active /find-refusal run before default Esc handling", () => {
+		const { ctx, editor, spies } = createContext();
+		const abortFindRefusal = vi.fn();
+		ctx.isFindingRefusal = () => true;
+		ctx.abortFindRefusal = abortFindRefusal;
+		const controller = new InputController(ctx);
+
+		controller.setupKeyHandlers();
+		editor.onEscape?.();
+
+		expect(abortFindRefusal).toHaveBeenCalledTimes(1);
+		expect(spies.abort).not.toHaveBeenCalled();
+	});
+
 	it("prefers aborting bash before aborting an overlapping stream", () => {
 		const { ctx, editor, spies } = createContext();
 		(ctx.session as { isStreaming: boolean; isBashRunning: boolean }).isStreaming = true;

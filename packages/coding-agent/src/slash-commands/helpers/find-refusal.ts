@@ -9,25 +9,18 @@ import {
 import type { Settings } from "../../config/settings";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "../../modes/types";
-import { AgentRegistry, MAIN_AGENT_ID } from "../../registry/agent-registry";
-import {
-	appendManagedSecrets,
-	buildSecretObfuscator,
-	clearFixRefusalState,
-	loadFixRefusalState,
-	saveFixRefusalState,
-} from "../../secrets";
+import { YAML } from "bun";
+import { clearFindRefusalState, loadFindRefusalState, type SecretEntry, saveFindRefusalState } from "../../secrets";
 import {
 	classifierRefusalText,
-	FixRefusalAbort,
-	type FixRefusalComplete,
-	type FixRefusalResult,
-	runFixRefusal,
-} from "../../secrets/fix-refusal";
-import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
+	FindRefusalAbort,
+	type FindRefusalComplete,
+	type FindRefusalResult,
+	runFindRefusal,
+} from "../../secrets/find-refusal";
 
 /** Progress sink so the orchestrator renders identically in TUI and ACP modes. */
-export interface FixRefusalUi {
+export interface FindRefusalUi {
 	/** Append a visible progress line. */
 	step(line: string): void;
 	/** Set (or clear) the working/spinner message. */
@@ -35,32 +28,20 @@ export interface FixRefusalUi {
 }
 
 /** TUI progress sink with a final cleanup hook. */
-export interface TuiFixRefusalUi extends FixRefusalUi {
+export interface TuiFindRefusalUi extends FindRefusalUi {
 	done(): void;
 }
 
-export interface FixRefusalDeps {
+export interface FindRefusalDeps {
 	session: InteractiveModeContext["session"];
 	settings: Settings;
-	cwd: string;
-	/** Optional placeholder-key directory used to construct the active session obfuscator. */
-	keyDir?: string;
 	signal?: AbortSignal;
-	ui: FixRefusalUi;
-}
-
-/** Result of an {@link executeFixRefusal} run, so callers can decide whether to re-send the prompt. */
-export interface FixRefusalOutcome {
-	resolved: boolean;
-	/** New patterns written to secrets-managed.yml this run. */
-	saved: number;
-	/** Patterns now active in the session from this run (resumed + new); 0 when nothing needed masking. */
-	patternsActive: number;
+	ui: FindRefusalUi;
 }
 
 /**
- * The uncensored model pattern for /fix-refusal: the configured `uncensored`
- * model role, or undefined when it is not set. /fix-refusal takes no model
+ * The uncensored model pattern for /find-refusal: the configured `uncensored`
+ * model role, or undefined when it is not set. /find-refusal takes no model
  * argument and has no dedicated setting — the role is the single source.
  */
 export function resolveRefusalModelPattern(settings: Settings): string | undefined {
@@ -68,32 +49,52 @@ export function resolveRefusalModelPattern(settings: Settings): string | undefin
 }
 
 /**
- * Resolve models, replay the session context to {@link runFixRefusal}, then
- * persist the resulting patterns to `secrets-managed.yml` and hot-swap the
- * session obfuscator so they apply without a restart.
+ * Render discovered patterns as ready-to-paste `secrets.yml` entries (a YAML
+ * array). Optional fields are omitted when empty, matching what the secrets
+ * loader accepts.
  */
-export async function executeFixRefusal(deps: FixRefusalDeps): Promise<FixRefusalOutcome> {
-	const { session, settings, cwd, keyDir, signal, ui } = deps;
+export function formatPatternsYaml(entries: readonly SecretEntry[]): string {
+	const records = entries.map(entry => {
+		const record: Record<string, unknown> = {
+			type: entry.type,
+			content: entry.content,
+			mode: entry.mode ?? "obfuscate",
+		};
+		if (entry.flags) record.flags = entry.flags;
+		if (entry.friendlyName) record.friendlyName = entry.friendlyName;
+		if (entry.replacement) record.replacement = entry.replacement;
+		return record;
+	});
+	return YAML.stringify(records, null, 2).trimEnd();
+}
+
+/**
+ * Resolve models, replay the session context to {@link runFindRefusal}, then
+ * print the resulting patterns as `secrets.yml` YAML. Nothing is written to
+ * disk, no session state changes, and the prompt is not re-sent.
+ */
+export async function executeFindRefusal(deps: FindRefusalDeps): Promise<void> {
+	const { session, settings, signal, ui } = deps;
 	const registry = session.modelRegistry;
 
 	const mainModel = session.model;
 	if (!mainModel) {
-		ui.step("No active model — nothing to fix a refusal for.");
-		return { resolved: false, saved: 0, patternsActive: 0 };
+		ui.step("No active model — nothing to find a refusal for.");
+		return;
 	}
 
 	const available = registry.getAvailable();
 	if (available.length === 0) {
 		ui.step("No models are available.");
-		return { resolved: false, saved: 0, patternsActive: 0 };
+		return;
 	}
 
 	const pattern = resolveRefusalModelPattern(settings);
 	if (!pattern) {
 		ui.step(
-			"No uncensored model configured for /fix-refusal. Set the `uncensored` model role via the model-role selector.",
+			"No uncensored model configured for /find-refusal. Set the `uncensored` model role via the model-role selector.",
 		);
-		return { resolved: false, saved: 0, patternsActive: 0 };
+		return;
 	}
 
 	const uncensoredModel = resolveModelFromString(
@@ -102,17 +103,17 @@ export async function executeFixRefusal(deps: FixRefusalDeps): Promise<FixRefusa
 		getModelMatchPreferences(settings),
 	);
 	if (!uncensoredModel) {
-		ui.step(`Could not resolve refusal-fix model "${pattern}".`);
-		return { resolved: false, saved: 0, patternsActive: 0 };
+		ui.step(`Could not resolve refusal-finding model "${pattern}".`);
+		return;
 	}
 
 	if (!(await registry.getApiKey(mainModel))) {
 		ui.step(`No API key for ${formatModelString(mainModel)}.`);
-		return { resolved: false, saved: 0, patternsActive: 0 };
+		return;
 	}
 	if (!(await registry.getApiKey(uncensoredModel))) {
 		ui.step(`No API key for ${formatModelString(uncensoredModel)}.`);
-		return { resolved: false, saved: 0, patternsActive: 0 };
+		return;
 	}
 
 	// Replay the live session context up to (but NOT including) the trailing
@@ -124,14 +125,14 @@ export async function executeFixRefusal(deps: FixRefusalDeps): Promise<FixRefusa
 	const sliceEnd = probeSliceEnd(session.messages);
 	if (sliceEnd === null) {
 		ui.step("No user turn in the conversation to re-test.");
-		return { resolved: false, saved: 0, patternsActive: 0 };
+		return;
 	}
 	const { systemPrompt, messages: probeMessages } = await session.buildSideRequestContext(
 		session.messages.slice(0, sliceEnd),
 	);
 	const refusalText = latestRefusalText(session.messages) ?? "(no textual response)";
 	const agentDir = settings.getAgentDir();
-	const resumeState = await loadFixRefusalState(agentDir);
+	const resumeState = await loadFindRefusalState(agentDir);
 	const initialEntries =
 		resumeState && resumeState.sessionId === session.sessionId && resumeState.entries.length > 0
 			? resumeState.entries
@@ -142,19 +143,19 @@ export async function executeFixRefusal(deps: FixRefusalDeps): Promise<FixRefusa
 		);
 	}
 
-	ui.step(`Using ${formatModelString(uncensoredModel)} to clear a refusal from ${formatModelString(mainModel)}.`);
+	ui.step(`Using ${formatModelString(uncensoredModel)} to find what made ${formatModelString(mainModel)} refuse.`);
 
-	const complete: FixRefusalComplete = ({ model, context, toolChoice, temperature }) =>
+	const complete: FindRefusalComplete = ({ model, context, toolChoice, temperature }) =>
 		instrumentedCompleteSimple(
 			model,
 			context,
 			{ apiKey: registry.resolver(model, session.sessionId), signal, toolChoice, temperature },
-			{ telemetry: undefined, oneshotKind: "fix_refusal" },
+			{ telemetry: undefined, oneshotKind: "find_refusal" },
 		);
 
-	let result: FixRefusalResult;
+	let result: FindRefusalResult;
 	try {
-		result = await runFixRefusal({
+		result = await runFindRefusal({
 			mainModel,
 			uncensoredModel,
 			systemPrompt,
@@ -166,7 +167,7 @@ export async function executeFixRefusal(deps: FixRefusalDeps): Promise<FixRefusa
 			onWorking: message => ui.working(message),
 			initialEntries,
 			onProgress: entries =>
-				saveFixRefusalState(agentDir, {
+				saveFindRefusalState(agentDir, {
 					sessionId: session.sessionId,
 					entries,
 					refusalText,
@@ -174,51 +175,32 @@ export async function executeFixRefusal(deps: FixRefusalDeps): Promise<FixRefusa
 				}),
 		});
 	} catch (err) {
-		if (err instanceof FixRefusalAbort) {
+		if (err instanceof FindRefusalAbort) {
 			ui.step("Cancelled.");
-			return { resolved: false, saved: 0, patternsActive: 0 };
+			return;
 		}
 		throw err;
 	}
 
 	if (!result.resolved) {
-		ui.step(`Could not clear the refusal (${result.reason ?? "unknown"}). No patterns saved.`);
-		return { resolved: false, saved: 0, patternsActive: 0 };
+		ui.step(`Could not find the refusal's cause (${result.reason ?? "unknown"}).`);
+		return;
 	}
 	if (result.entries.length === 0) {
 		ui.step(
 			`${formatModelString(uncensoredModel)} judged the last response a normal answer, not a refusal — nothing to mask. If it was a refusal, set a different model for the \`uncensored\` role and retry.`,
 		);
-		await clearFixRefusalState(agentDir);
-		return { resolved: true, saved: 0, patternsActive: 0 };
+		await clearFindRefusalState(agentDir);
+		return;
 	}
 
-	const { path: filePath, added } = await appendManagedSecrets(agentDir, result.entries);
-
-	// Rebuild from every configured source, including built-in credential patterns,
-	// so newly managed patterns take effect without dropping existing protection.
-	// Live children inherited this session's previous obfuscator by identity; hand
-	// them the replacement so their redaction boundary picks up the new patterns.
-	const previousObfuscator = session.obfuscator;
-	const nextObfuscator = await buildSecretObfuscator(cwd, agentDir, keyDir);
-	session.setObfuscator(nextObfuscator);
-	AgentRegistry.global().propagateObfuscator?.(
-		session.getAgentId() ?? MAIN_AGENT_ID,
-		previousObfuscator,
-		nextObfuscator,
-	);
-
+	const count = result.entries.length;
+	ui.step(`Found ${count} pattern${count === 1 ? "" : "s"} behind the refusal. Ready-to-paste secrets.yml entries:`);
+	ui.step(formatPatternsYaml(result.entries));
 	ui.step(
-		added === 0
-			? `Patterns already present in ${shortenPath(filePath)}; applied to this session.`
-			: `Saved ${added} pattern${added === 1 ? "" : "s"} to ${shortenPath(filePath)} and applied them. Re-send your last message to retry.`,
+		"Add them to a project `.omp/secrets.yml`, or to a per-model secrets file listed in the `secrets.modelFiles` setting.",
 	);
-	for (const entry of result.entries) {
-		const label = entry.friendlyName ? ` → ${entry.friendlyName}` : "";
-		ui.step(`  /${entry.content}/${entry.flags ?? ""}${label}`);
-	}
-	await clearFixRefusalState(agentDir);
-	return { resolved: true, saved: added, patternsActive: result.entries.length };
+	await clearFindRefusalState(agentDir);
 }
 
 /**
@@ -233,21 +215,6 @@ function latestRefusalText(messages: AgentMessage[]): string | undefined {
 		if (message.role !== "assistant") continue;
 		const classifier = classifierRefusalText(message);
 		if (classifier) return classifier;
-		const parts: string[] = [];
-		for (const block of message.content) {
-			if (block.type === "text") parts.push(block.text);
-		}
-		return parts.join("\n").trim() || undefined;
-	}
-	return undefined;
-}
-
-/** Text of the most recent user turn (the prompt that triggered the latest refusal), or undefined. */
-export function latestUserPromptText(messages: AgentMessage[]): string | undefined {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const message = messages[i];
-		if (message.role !== "user") continue;
-		if (typeof message.content === "string") return message.content.trim() || undefined;
 		const parts: string[] = [];
 		for (const block of message.content) {
 			if (block.type === "text") parts.push(block.text);
@@ -280,7 +247,7 @@ export function probeSliceEnd(messages: readonly { readonly role: string }[]): n
 	return lastUser + 1;
 }
 
-/** Elapsed-time suffix for the fix-refusal spinner. Empty under 1s (no `· 0s` noise); `14s`; `1m 05s` past a minute. */
+/** Elapsed-time suffix for the find-refusal spinner. Empty under 1s (no `· 0s` noise); `14s`; `1m 05s` past a minute. */
 export function formatElapsedClock(ms: number): string {
 	if (!Number.isFinite(ms) || ms < 1000) return "";
 	const totalSeconds = Math.floor(ms / 1000);
@@ -289,12 +256,12 @@ export function formatElapsedClock(ms: number): string {
 	return minutes > 0 ? `${minutes}m ${String(seconds).padStart(2, "0")}s` : `${seconds}s`;
 }
 
-export interface FixRefusalUiClock {
+export interface FindRefusalUiClock {
 	now(): number;
 	setInterval(handler: () => void, ms: number): NodeJS.Timeout;
 	clearInterval(handle: NodeJS.Timeout): void;
 }
-const defaultFixRefusalClock: FixRefusalUiClock = {
+const defaultFindRefusalClock: FindRefusalUiClock = {
 	now: () => Date.now(),
 	setInterval: (handler, ms) => {
 		const t = setInterval(handler, ms);
@@ -306,16 +273,16 @@ const defaultFixRefusalClock: FixRefusalUiClock = {
 
 /**
  * Build a live TUI progress block: a single growing dim text panel plus a
- * spinner working-message, so the full refusal-fix run stays visible.
+ * spinner working-message, so the full refusal-finding run stays visible.
  */
-export function createTuiFixRefusalUi(
+export function createTuiFindRefusalUi(
 	ctx: InteractiveModeContext,
-	clock: FixRefusalUiClock = defaultFixRefusalClock,
-): TuiFixRefusalUi {
+	clock: FindRefusalUiClock = defaultFindRefusalClock,
+): TuiFindRefusalUi {
 	const lines: string[] = [];
 	let panel: Text | undefined;
 	const render = () => {
-		const body = [theme.fg("accent", "Fix refusal"), ...lines.map(line => theme.fg("dim", `  ${line}`))].join("\n");
+		const body = [theme.fg("accent", "Find refusal"), ...lines.map(line => theme.fg("dim", `  ${line}`))].join("\n");
 		if (panel) {
 			panel.setText(body);
 			ctx.ui.requestRender();
@@ -343,7 +310,7 @@ export function createTuiFixRefusalUi(
 		step(line: string) {
 			clearTimer();
 			baseMessage = undefined;
-			lines.push(line);
+			lines.push(...line.split("\n"));
 			ctx.setWorkingMessage(undefined);
 			render();
 		},

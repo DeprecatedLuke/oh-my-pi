@@ -238,7 +238,7 @@ export interface ToolSession {
 	isDisposed?: () => boolean;
 	/**
 	 * Redact session-derived text before forwarding it to another model. Identity when
-	 * no secrets are configured; live, so `/fix-refusal` replacements apply immediately.
+	 * no secrets are configured; live, so replacements apply immediately.
 	 */
 	obfuscateText?: (text: string) => string;
 	/**
@@ -248,7 +248,7 @@ export interface ToolSession {
 	deobfuscateText?: (text: string) => string;
 	/**
 	 * Current session obfuscator, for children that need their own redaction boundary
-	 * (subagent/sca sessions). Read live so `/fix-refusal` replacements are inherited.
+	 * (subagent/sca sessions). Read live so replacements are inherited.
 	 */
 	getObfuscator?: () => SecretObfuscator | undefined;
 	/**

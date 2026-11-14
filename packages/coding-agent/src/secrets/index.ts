@@ -10,7 +10,7 @@ import { CREDENTIAL_PATTERNS } from "./patterns";
 import { sanitizeSecretFriendlyName, secretEntriesNeedPlaceholderKey } from "./placeholder";
 import { compileSecretRegex } from "./regex";
 import { regexHasUnresolvableShortMatchFallback } from "./replacement";
-export * from "./fix-refusal-state";
+export * from "./find-refusal-state";
 
 const PLACEHOLDER_KEY_RE = /^[A-Za-z0-9_-]{43}$/;
 const cachedPlaceholderKeys = new Map<string, string>();

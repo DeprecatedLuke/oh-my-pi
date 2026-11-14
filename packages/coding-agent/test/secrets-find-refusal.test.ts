@@ -1,7 +1,7 @@
 /**
- * Tests for the /fix-refusal orchestrator loop and the managed-secrets
- * load/append helpers. The model is faked content-drivenly so the assertions
- * exercise the real masking + diagnose/shrink/name flow, not a script.
+ * Tests for the /find-refusal orchestrator loop and its list-only output
+ * formatting. The model is faked content-drivenly so the assertions exercise
+ * the real masking + diagnose/shrink/name flow, not a script.
  */
 
 import { beforeAll, describe, expect, it } from "bun:test";
@@ -14,24 +14,23 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import {
 	classifierRefusalText,
 	dropRedundantlyCoveredPatterns,
-	FixRefusalAbort,
-	type FixRefusalComplete,
+	FindRefusalAbort,
+	type FindRefusalComplete,
 	isRefusalMessage,
 	minimizeBySelection,
-	runFixRefusal,
+	runFindRefusal,
 	trialKey,
-} from "@oh-my-pi/pi-coding-agent/secrets/fix-refusal";
+} from "@oh-my-pi/pi-coding-agent/secrets/find-refusal";
 import type { SecretEntry } from "@oh-my-pi/pi-coding-agent/secrets/index";
-import { appendManagedSecrets, loadSecrets } from "@oh-my-pi/pi-coding-agent/secrets/index";
+import { loadSecrets } from "@oh-my-pi/pi-coding-agent/secrets/index";
 import {
-	createTuiFixRefusalUi,
-	type FixRefusalUiClock,
+	createTuiFindRefusalUi,
+	type FindRefusalUiClock,
 	formatElapsedClock,
-	latestUserPromptText,
+	formatPatternsYaml,
 	probeSliceEnd,
 	resolveRefusalModelPattern,
-} from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/fix-refusal";
-import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
+} from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/find-refusal";
 
 const MAIN = { provider: "anthropic", id: "main", api: "anthropic-messages" } as unknown as Model;
 const UNCENSORED = { provider: "anthropic", id: "uncensored", api: "anthropic-messages" } as unknown as Model;
@@ -90,11 +89,11 @@ function section(tag: string, text: string): string {
  * visible in the transcript.
  */
 function makeDriver(options: { flaggable: string[]; refusalCauses: string[] }): {
-	complete: FixRefusalComplete;
+	complete: FindRefusalComplete;
 	mainCalls: () => number;
 } {
 	let mainCalls = 0;
-	const complete: FixRefusalComplete = async ({ model, context }) => {
+	const complete: FindRefusalComplete = async ({ model, context }) => {
 		if (model === UNCENSORED) {
 			const text = userText(context);
 			// Model-guided minimization: pick the kept patterns whose term is NOT a refusal cause
@@ -136,10 +135,10 @@ const PROBE: Message[] = [
 	{ role: "user", content: [{ type: "text", text: "Tell me about SecretCorp and Bob." }], timestamp: 0 },
 ];
 
-describe("runFixRefusal", () => {
+describe("runFindRefusal", () => {
 	it("masks the trigger, shrinks to the load-bearing pattern, and names it", async () => {
 		const { complete, mainCalls } = makeDriver({ flaggable: ["SecretCorp", "Bob"], refusalCauses: ["SecretCorp"] });
-		const result = await runFixRefusal({
+		const result = await runFindRefusal({
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: ["You are helpful."],
@@ -161,7 +160,7 @@ describe("runFixRefusal", () => {
 
 	it("reports unresolved when re-probing never clears the refusal", async () => {
 		let n = 0;
-		const complete: FixRefusalComplete = async ({ model, context }) => {
+		const complete: FindRefusalComplete = async ({ model, context }) => {
 			if (model === UNCENSORED) {
 				if (userText(context).includes("friendlyName")) return toolResponse({ resolved: true, patterns: [] });
 				// Always still refusing; propose a fresh unique pattern each round.
@@ -171,7 +170,7 @@ describe("runFixRefusal", () => {
 			return textResponse(REFUSAL);
 		};
 
-		const result = await runFixRefusal({
+		const result = await runFindRefusal({
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: [],
@@ -187,8 +186,8 @@ describe("runFixRefusal", () => {
 	});
 
 	it("returns resolved with no entries when the model did not actually refuse", async () => {
-		const complete: FixRefusalComplete = async () => toolResponse({ resolved: true, patterns: [] });
-		const result = await runFixRefusal({
+		const complete: FindRefusalComplete = async () => toolResponse({ resolved: true, patterns: [] });
+		const result = await runFindRefusal({
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: [],
@@ -213,7 +212,7 @@ describe("runFixRefusal", () => {
 			refusalCauses: ["SecretCorp"],
 		});
 		const steps: string[] = [];
-		const result = await runFixRefusal({
+		const result = await runFindRefusal({
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: [],
@@ -235,7 +234,7 @@ describe("runFixRefusal", () => {
 		const probe: Message[] = [
 			{ role: "user", content: [{ type: "text", text: "Tell me about Alpha and Beta." }], timestamp: 0 },
 		];
-		const complete: FixRefusalComplete = async ({ model, context }) => {
+		const complete: FindRefusalComplete = async ({ model, context }) => {
 			if (model === UNCENSORED) {
 				const text = userText(context);
 				// Model-guided minimization: propose the first `target` patterns (front of the list). Either
@@ -261,7 +260,7 @@ describe("runFixRefusal", () => {
 			return textResponse(refused ? REFUSAL : "OK, here is the answer.");
 		};
 		const steps: string[] = [];
-		const result = await runFixRefusal({
+		const result = await runFindRefusal({
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: [],
@@ -282,7 +281,7 @@ describe("runFixRefusal", () => {
 		// Round 1+: the main model still refuses (conceptual trigger), and the judge
 		// misbehaves by proposing a pattern that matches the $$TOKEN$$ placeholder that
 		// now stands in for SecretCorp. The deterministic guard must drop it.
-		const complete: FixRefusalComplete = async ({ model, context }) => {
+		const complete: FindRefusalComplete = async ({ model, context }) => {
 			if (model === UNCENSORED) {
 				const text = userText(context);
 				if (text.includes("friendlyName")) return toolResponse({ resolved: true, patterns: [] });
@@ -296,7 +295,7 @@ describe("runFixRefusal", () => {
 			return textResponse(REFUSAL); // conceptual refusal: masking never clears it
 		};
 		const steps: string[] = [];
-		const result = await runFixRefusal({
+		const result = await runFindRefusal({
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: [],
@@ -313,7 +312,7 @@ describe("runFixRefusal", () => {
 	it("retries a transient provider error then succeeds", async () => {
 		let mainCalls = 0;
 		let sleeps = 0;
-		const complete: FixRefusalComplete = async ({ model, context }) => {
+		const complete: FindRefusalComplete = async ({ model, context }) => {
 			if (model === UNCENSORED) {
 				const text = userText(context);
 				if (text.includes("friendlyName")) return toolResponse({ resolved: true, patterns: [] });
@@ -331,7 +330,7 @@ describe("runFixRefusal", () => {
 			}
 			return textResponse("OK, here is the answer.");
 		};
-		const result = await runFixRefusal({
+		const result = await runFindRefusal({
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: [],
@@ -349,7 +348,7 @@ describe("runFixRefusal", () => {
 
 	it("gives up after maxTransientRetries on a persistent transient error", async () => {
 		let sleeps = 0;
-		const complete: FixRefusalComplete = async ({ model, context }) => {
+		const complete: FindRefusalComplete = async ({ model, context }) => {
 			if (model === UNCENSORED) {
 				const text = userText(context);
 				if (text.includes("friendlyName")) return toolResponse({ resolved: true, patterns: [] });
@@ -364,7 +363,7 @@ describe("runFixRefusal", () => {
 			} as unknown as AssistantMessage;
 		};
 		await expect(
-			runFixRefusal({
+			runFindRefusal({
 				mainModel: MAIN,
 				uncensoredModel: UNCENSORED,
 				systemPrompt: [],
@@ -383,7 +382,7 @@ describe("runFixRefusal", () => {
 	it("seeds initialEntries, prunes inert resumed patterns, and reports the set through onProgress", async () => {
 		const snapshots: string[][] = [];
 		const steps: string[] = [];
-		const complete: FixRefusalComplete = async ({ model, context }) => {
+		const complete: FindRefusalComplete = async ({ model, context }) => {
 			if (model === UNCENSORED) {
 				const text = userText(context);
 				if (text.includes("friendlyName")) return toolResponse({ resolved: true, patterns: [] });
@@ -393,7 +392,7 @@ describe("runFixRefusal", () => {
 			}
 			return textResponse("OK, here is the answer.");
 		};
-		const result = await runFixRefusal({
+		const result = await runFindRefusal({
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: [],
@@ -452,14 +451,14 @@ describe("classifierRefusalText", () => {
 	});
 });
 
-describe("runFixRefusal re-probe resilience", () => {
+describe("runFindRefusal re-probe resilience", () => {
 	it("treats a thrown classifier refusal on re-probe as 'still refusing' instead of aborting", async () => {
 		// The provider THROWS a bare Error(errorMessage) on a still-refusing
 		// classifier re-probe (structured stopDetails lost). The loop must catch it,
 		// keep proposing patterns, and finish unresolved — never crash.
 		let mainCalls = 0;
 		let round = 0;
-		const complete: FixRefusalComplete = async ({ model, context }) => {
+		const complete: FindRefusalComplete = async ({ model, context }) => {
 			if (model === UNCENSORED) {
 				if (userText(context).includes("friendlyName")) return toolResponse({ resolved: true, patterns: [] });
 				round += 1;
@@ -471,7 +470,7 @@ describe("runFixRefusal re-probe resilience", () => {
 			throw new Error("Refusal (cyber): This request triggered restrictions on violative cyber content");
 		};
 
-		const result = await runFixRefusal({
+		const result = await runFindRefusal({
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: [],
@@ -495,7 +494,7 @@ describe("runFixRefusal re-probe resilience", () => {
 		let mainCalls = 0;
 		let round = 0;
 		const steps: string[] = [];
-		const complete: FixRefusalComplete = async ({ model }) => {
+		const complete: FindRefusalComplete = async ({ model }) => {
 			if (model === UNCENSORED) {
 				round += 1;
 				return toolResponse({ resolved: false, patterns: [{ regex: `freshSpan${round}` }] });
@@ -504,7 +503,7 @@ describe("runFixRefusal re-probe resilience", () => {
 			return textResponse(CONSTANT_REFUSAL);
 		};
 
-		const result = await runFixRefusal({
+		const result = await runFindRefusal({
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: [],
@@ -522,12 +521,12 @@ describe("runFixRefusal re-probe resilience", () => {
 	});
 
 	it("rethrows a non-refusal error from the main model (does not swallow real failures)", async () => {
-		const complete: FixRefusalComplete = async ({ model }) => {
+		const complete: FindRefusalComplete = async ({ model }) => {
 			if (model === UNCENSORED) return toolResponse({ resolved: false, patterns: [{ regex: "x" }] });
 			throw new Error("400 invalid request: malformed tool schema");
 		};
 		await expect(
-			runFixRefusal({
+			runFindRefusal({
 				mainModel: MAIN,
 				uncensoredModel: UNCENSORED,
 				systemPrompt: [],
@@ -540,14 +539,14 @@ describe("runFixRefusal re-probe resilience", () => {
 	});
 });
 
-describe("runFixRefusal cancellation", () => {
-	it("aborts the run when the signal fires mid-loop, throwing FixRefusalAbort", async () => {
+describe("runFindRefusal cancellation", () => {
+	it("aborts the run when the signal fires mid-loop, throwing FindRefusalAbort", async () => {
 		const controller = new AbortController();
 		let uncensoredCalls = 0;
 		// The judge proposes a pattern (never resolving), and we abort the signal
 		// right after the first verdict — so the NEXT throwIfAborted (in the
-		// re-probe) must surface FixRefusalAbort instead of grinding on.
-		const complete: FixRefusalComplete = async ({ model }) => {
+		// re-probe) must surface FindRefusalAbort instead of grinding on.
+		const complete: FindRefusalComplete = async ({ model }) => {
 			if (model === UNCENSORED) {
 				uncensoredCalls += 1;
 				controller.abort();
@@ -557,7 +556,7 @@ describe("runFixRefusal cancellation", () => {
 		};
 
 		await expect(
-			runFixRefusal({
+			runFindRefusal({
 				mainModel: MAIN,
 				uncensoredModel: UNCENSORED,
 				systemPrompt: [],
@@ -567,20 +566,20 @@ describe("runFixRefusal cancellation", () => {
 				signal: controller.signal,
 				maxIterations: 6,
 			}),
-		).rejects.toBeInstanceOf(FixRefusalAbort);
+		).rejects.toBeInstanceOf(FindRefusalAbort);
 		// It got exactly one judge verdict in before the abort halted the loop —
 		// proof the abort short-circuits rather than running to maxIterations.
 		expect(uncensoredCalls).toBe(1);
 	});
 
-	it("throws FixRefusalAbort immediately when the signal is already aborted", async () => {
+	it("throws FindRefusalAbort immediately when the signal is already aborted", async () => {
 		let calls = 0;
-		const complete: FixRefusalComplete = async () => {
+		const complete: FindRefusalComplete = async () => {
 			calls += 1;
 			return textResponse(REFUSAL);
 		};
 		await expect(
-			runFixRefusal({
+			runFindRefusal({
 				mainModel: MAIN,
 				uncensoredModel: UNCENSORED,
 				systemPrompt: [],
@@ -589,18 +588,18 @@ describe("runFixRefusal cancellation", () => {
 				complete,
 				signal: AbortSignal.abort(),
 			}),
-		).rejects.toBeInstanceOf(FixRefusalAbort);
+		).rejects.toBeInstanceOf(FindRefusalAbort);
 		// No model call happened — the pre-flight throwIfAborted fired first.
 		expect(calls).toBe(0);
 	});
 });
 
-describe("runFixRefusal progress reporting", () => {
+describe("runFindRefusal progress reporting", () => {
 	it("reports the authoritative judge verdict per round, not a cosmetic refusal guess", async () => {
 		// Stays unresolved for the capped rounds, proposing a fresh pattern each
 		// time, so we observe both the iteration-0 and the later-round verdict lines.
 		let n = 0;
-		const complete: FixRefusalComplete = async ({ model, context }) => {
+		const complete: FindRefusalComplete = async ({ model, context }) => {
 			if (model === UNCENSORED) {
 				if (userText(context).includes("friendlyName")) return toolResponse({ resolved: true, patterns: [] });
 				n += 1;
@@ -610,7 +609,7 @@ describe("runFixRefusal progress reporting", () => {
 		};
 		const steps: string[] = [];
 
-		const result = await runFixRefusal({
+		const result = await runFindRefusal({
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: [],
@@ -634,11 +633,11 @@ describe("runFixRefusal progress reporting", () => {
 	});
 });
 
-describe("runFixRefusal visibility + resilience", () => {
+describe("runFindRefusal visibility + resilience", () => {
 	it("surfaces the refusal text and re-probe responses inline", async () => {
 		const { complete } = makeDriver({ flaggable: ["SecretCorp"], refusalCauses: ["SecretCorp"] });
 		const steps: string[] = [];
-		const result = await runFixRefusal({
+		const result = await runFindRefusal({
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: ["You are helpful."],
@@ -663,7 +662,7 @@ describe("runFixRefusal visibility + resilience", () => {
 
 	it("surfaces the judge's per-pattern reasoning when provided", async () => {
 		const steps: string[] = [];
-		const complete: FixRefusalComplete = async ({ model, context }) => {
+		const complete: FindRefusalComplete = async ({ model, context }) => {
 			if (model === UNCENSORED) {
 				const text = userText(context);
 				if (text.includes("friendlyName")) return toolResponse({ resolved: true, patterns: [] });
@@ -682,7 +681,7 @@ describe("runFixRefusal visibility + resilience", () => {
 			);
 		};
 
-		const result = await runFixRefusal({
+		const result = await runFindRefusal({
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: [],
@@ -704,7 +703,7 @@ describe("runFixRefusal visibility + resilience", () => {
 		];
 		const steps: string[] = [];
 		let clearedOnce = false;
-		const complete: FixRefusalComplete = async ({ model, context }) => {
+		const complete: FindRefusalComplete = async ({ model, context }) => {
 			if (model === UNCENSORED) {
 				const text = userText(context);
 				// Minimization asks which patterns to drop: propose the first `target` (front of the list)
@@ -737,7 +736,7 @@ describe("runFixRefusal visibility + resilience", () => {
 			return textResponse(REFUSAL);
 		};
 
-		const result = await runFixRefusal({
+		const result = await runFindRefusal({
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: [],
@@ -758,7 +757,7 @@ describe("runFixRefusal visibility + resilience", () => {
 		const base = makeDriver({ flaggable: ["SecretCorp"], refusalCauses: ["SecretCorp"] });
 		const steps: string[] = [];
 		let unc = 0;
-		const complete: FixRefusalComplete = async request => {
+		const complete: FindRefusalComplete = async request => {
 			if (request.model === UNCENSORED) {
 				unc += 1;
 				if (unc === 1) return errorResponse("Anthropic stream stalled while waiting for the next event");
@@ -766,7 +765,7 @@ describe("runFixRefusal visibility + resilience", () => {
 			return base.complete(request);
 		};
 
-		const result = await runFixRefusal({
+		const result = await runFindRefusal({
 			mainModel: MAIN,
 			uncensoredModel: UNCENSORED,
 			systemPrompt: [],
@@ -782,150 +781,6 @@ describe("runFixRefusal visibility + resilience", () => {
 		expect(unc).toBeGreaterThanOrEqual(2);
 		expect(steps.some(line => line.startsWith("Transient provider error"))).toBe(true);
 	});
-});
-
-describe("managed secrets load/append", () => {
-	it("appends, dedupes, and merges with hand-authored secrets", async () => {
-		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-agent-"));
-		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-cwd-"));
-		try {
-			await Bun.write(path.join(agentDir, "secrets.yml"), '- { type: plain, content: "HANDWRITTEN" }\n');
-
-			const first = await appendManagedSecrets(agentDir, [
-				{ type: "regex", content: "SecretCorp", mode: "obfuscate", friendlyName: "Company" },
-			]);
-			expect(first.added).toBe(1);
-
-			// Re-appending the same pattern is a no-op.
-			const second = await appendManagedSecrets(agentDir, [
-				{ type: "regex", content: "SecretCorp", mode: "obfuscate" },
-			]);
-			expect(second.added).toBe(0);
-			expect(second.total).toBe(1);
-
-			// A new pattern is appended alongside the existing one.
-			const third = await appendManagedSecrets(agentDir, [{ type: "regex", content: "OtherTerm" }]);
-			expect(third.added).toBe(1);
-			expect(third.total).toBe(2);
-
-			const merged = await loadSecrets(cwd, agentDir);
-			const contents = merged.map(entry => entry.content).sort();
-			expect(contents).toEqual(["HANDWRITTEN", "OtherTerm", "SecretCorp"]);
-			const managed = merged.find(entry => entry.content === "SecretCorp");
-			expect(managed?.friendlyName).toBe("Company");
-		} finally {
-			await fs.rm(agentDir, { recursive: true, force: true });
-			await fs.rm(cwd, { recursive: true, force: true });
-		}
-	});
-	it("loads agent-managed secrets when the project .omp directory is absent", async () => {
-		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-agent-"));
-		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-cwd-"));
-		const projectDir = path.join(cwd, ".omp");
-		try {
-			await fs.rm(projectDir, { recursive: true, force: true });
-			await Bun.write(path.join(agentDir, "secrets-managed.yml"), '- { type: regex, content: "AGENT_ONLY" }\n');
-
-			const loaded = await loadSecrets(cwd, agentDir);
-			expect(loaded.map(entry => entry.content)).toEqual(["AGENT_ONLY"]);
-		} finally {
-			await fs.rm(agentDir, { recursive: true, force: true });
-			await fs.rm(cwd, { recursive: true, force: true });
-		}
-	});
-	it("loads managed secrets once when agentDir is the project .omp directory", async () => {
-		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-cwd-"));
-		const agentDir = path.join(cwd, ".omp");
-		try {
-			await fs.mkdir(agentDir, { recursive: true });
-			await Bun.write(
-				path.join(agentDir, "secrets-managed.yml"),
-				`- { type: regex, content: "SAME_PATH_FIRST" }
-- { type: plain, content: "SAME_PATH_SECOND" }
-`,
-			);
-
-			const loaded = await loadSecrets(cwd, agentDir);
-			expect(loaded.map(entry => ({ type: entry.type, content: entry.content }))).toEqual([
-				{ type: "regex", content: "SAME_PATH_FIRST" },
-				{ type: "plain", content: "SAME_PATH_SECOND" },
-			]);
-		} finally {
-			await fs.rm(cwd, { recursive: true, force: true });
-		}
-	});
-	it("preserves distinct concurrent appends and dedupes duplicate entries", async () => {
-		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-agent-"));
-		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-cwd-"));
-		try {
-			await Promise.all([
-				appendManagedSecrets(agentDir, [{ type: "regex", content: "ConcurrentAlpha" }]),
-				appendManagedSecrets(agentDir, [{ type: "regex", content: "ConcurrentBeta" }]),
-				appendManagedSecrets(agentDir, [{ type: "regex", content: "ConcurrentAlpha" }]),
-			]);
-
-			const merged = await loadSecrets(cwd, agentDir);
-			expect(merged.filter(entry => entry.content === "ConcurrentAlpha")).toHaveLength(1);
-			expect(merged.filter(entry => entry.content === "ConcurrentBeta")).toHaveLength(1);
-		} finally {
-			await fs.rm(agentDir, { recursive: true, force: true });
-			await fs.rm(cwd, { recursive: true, force: true });
-		}
-	});
-	it("waits for the managed-file lock before reading a partial write", async () => {
-		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-agent-"));
-		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-cwd-"));
-		const managedPath = path.join(agentDir, "secrets-managed.yml");
-		const lockHeld = Promise.withResolvers<void>();
-		const releaseLock = Promise.withResolvers<void>();
-		let lockTask: Promise<void> | undefined;
-		try {
-			lockTask = withFileLock(managedPath, async () => {
-				await fs.writeFile(managedPath, '[{ type: regex, content: "partial');
-				lockHeld.resolve();
-				await releaseLock.promise;
-				await fs.writeFile(managedPath, '- { type: regex, content: "LOCKED_VALID" }\n');
-			});
-			await lockHeld.promise;
-
-			let settled = false;
-			const loaded = loadSecrets(cwd, agentDir).then(secrets => {
-				settled = true;
-				return secrets;
-			});
-			await new Promise<void>(resolve => setImmediate(resolve));
-			expect(settled).toBe(false);
-
-			releaseLock.resolve();
-			await lockTask;
-			const secrets = await loaded;
-			expect(secrets.some(entry => entry.type === "regex" && entry.content === "LOCKED_VALID")).toBe(true);
-		} finally {
-			releaseLock.resolve();
-			await lockTask?.catch(() => {});
-			await fs.rm(agentDir, { recursive: true, force: true });
-			await fs.rm(cwd, { recursive: true, force: true });
-		}
-	});
-	it.skipIf(process.platform === "win32")(
-		"repairs managed secret directory and file permissions on POSIX",
-		async () => {
-			const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-secrets-agent-"));
-			const managedPath = path.join(agentDir, "secrets-managed.yml");
-			try {
-				await fs.chmod(agentDir, 0o777);
-				await fs.writeFile(managedPath, "[]\n");
-				await fs.chmod(managedPath, 0o666);
-
-				await appendManagedSecrets(agentDir, [{ type: "regex", content: "SecretCorp" }]);
-
-				expect((await fs.stat(agentDir)).mode & 0o777).toBe(0o700);
-				expect((await fs.stat(managedPath)).mode & 0o777).toBe(0o600);
-			} finally {
-				await fs.rm(agentDir, { recursive: true, force: true });
-			}
-		},
-	);
 });
 
 describe("resolveRefusalModelPattern", () => {
@@ -997,24 +852,45 @@ describe("isRefusalMessage", () => {
 	});
 });
 
-describe("latestUserPromptText", () => {
-	it("returns the most recent user turn's text", () => {
-		const messages = [
-			{ role: "user", content: [{ type: "text", text: "first" }], timestamp: 0 },
-			{ role: "assistant", content: [{ type: "text", text: "reply" }], timestamp: 1 },
-			{ role: "user", content: [{ type: "text", text: "second" }], timestamp: 2 },
-		] as unknown as Parameters<typeof latestUserPromptText>[0];
-		expect(latestUserPromptText(messages)).toBe("second");
+describe("formatPatternsYaml", () => {
+	it("prints entries that the secrets loader accepts verbatim", async () => {
+		const entries: SecretEntry[] = [
+			{ type: "regex", content: "Secret(Corp)?\\d+", flags: "i", mode: "obfuscate", friendlyName: "Company" },
+			{ type: "regex", content: "Alpha" },
+		];
+		const yaml = formatPatternsYaml(entries);
+		expect(yaml.endsWith("\n")).toBe(false);
+
+		const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-find-refusal-yaml-"));
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-find-refusal-cwd-"));
+		try {
+			await Bun.write(path.join(agentDir, "secrets.yml"), `${yaml}\n`);
+			const loaded = await loadSecrets(cwd, agentDir);
+			expect(loaded).toEqual([
+				expect.objectContaining({
+					type: "regex",
+					content: "Secret(Corp)?\\d+",
+					flags: "i",
+					mode: "obfuscate",
+					friendlyName: "Company",
+				}),
+				expect.objectContaining({ type: "regex", content: "Alpha", mode: "obfuscate" }),
+			]);
+		} finally {
+			await fs.rm(agentDir, { recursive: true, force: true });
+			await fs.rm(cwd, { recursive: true, force: true });
+		}
 	});
-	it("returns undefined when there is no user turn", () => {
-		const messages = [
-			{ role: "assistant", content: [{ type: "text", text: "reply" }], timestamp: 0 },
-		] as unknown as Parameters<typeof latestUserPromptText>[0];
-		expect(latestUserPromptText(messages)).toBeUndefined();
+
+	it("omits empty optional fields", () => {
+		const yaml = formatPatternsYaml([{ type: "regex", content: "Alpha" }]);
+		expect(yaml).not.toContain("flags");
+		expect(yaml).not.toContain("friendlyName");
+		expect(yaml).toContain("mode: obfuscate");
 	});
 });
 
-describe("/fix-refusal spinner elapsed clock", () => {
+describe("/find-refusal spinner elapsed clock", () => {
 	// The TUI wrapper's render() colors lines via the global `theme`, which is
 	// undefined until initTheme() runs; initialize it once for this block.
 	beforeAll(async () => {
@@ -1050,8 +926,8 @@ describe("/fix-refusal spinner elapsed clock", () => {
 			},
 			present: () => {},
 			ui: { requestRender: () => {} },
-		} as unknown as Parameters<typeof createTuiFixRefusalUi>[0];
-		const clock: FixRefusalUiClock = {
+		} as unknown as Parameters<typeof createTuiFindRefusalUi>[0];
+		const clock: FindRefusalUiClock = {
 			now: () => state.nowMs,
 			setInterval: h => {
 				state.handler = h;
@@ -1062,7 +938,7 @@ describe("/fix-refusal spinner elapsed clock", () => {
 				state.handler = undefined;
 			},
 		};
-		const ui = createTuiFixRefusalUi(ctx, clock);
+		const ui = createTuiFindRefusalUi(ctx, clock);
 		return { ui, msgs, state };
 	}
 

@@ -8045,7 +8045,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	/**
 	 * Build a provider-format side-request context with the session's current
-	 * secret obfuscation applied. Used by `/fix-refusal` to reproduce the refused turn.
+	 * secret obfuscation applied. Used by `/find-refusal` to reproduce the refused turn.
 	 */
 	async buildSideRequestContext(messages: AgentMessage[]): Promise<{ systemPrompt: string[]; messages: Message[] }> {
 		const systemPrompt = this.#obfuscator?.hasSecrets()

@@ -329,7 +329,7 @@ export class MnemopiSessionState implements MnemopiSessionStateApi {
 	/**
 	 * Redact configured secrets from everything this state hands to a memory model,
 	 * embedding endpoint, or remote store. LIVE: reads the session's current obfuscator
-	 * so `/fix-refusal` entries apply to later writes without rebuilding the state.
+	 * so a live secrets switch-on applies to later writes without rebuilding the state.
 	 */
 	readonly #obfuscateSecretText = (text: string): string => this.session.obfuscateTextForProvider?.(text) ?? text;
 

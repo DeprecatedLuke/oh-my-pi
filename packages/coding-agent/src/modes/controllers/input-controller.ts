@@ -581,6 +581,10 @@ export class InputController {
 					safeAbort("retry", () => viewSession.abortRetry());
 					aborted = true;
 				}
+				if (this.ctx.isFindingRefusal?.()) {
+					safeAbort("find-refusal", () => this.ctx.abortFindRefusal?.());
+					aborted = true;
+				}
 				if (aborted) return;
 			}
 

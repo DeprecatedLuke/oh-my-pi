@@ -173,15 +173,9 @@ import {
 	type WorktreeExitPlan,
 } from "../session/session-worktree";
 import type { ShakeMode } from "../session/shake-types";
-import { isRefusalMessage } from "../secrets/fix-refusal";
+import { isRefusalMessage } from "../secrets/find-refusal";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
-import {
-	createTuiFixRefusalUi,
-	executeFixRefusal,
-	latestUserPromptText,
-	resolveRefusalModelPattern,
-} from "../slash-commands/helpers/fix-refusal";
 import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
 import { type DictationTarget, MicCursor, type SttCallbacks, STTController, type SttState } from "../stt";
 import type { SpaceHoldHandler } from "@oh-my-pi/pi-tui/space-hold";
@@ -466,7 +460,6 @@ import {
 	cfgTuiVimModeDisplay,
 } from "./settings";
 import { cfgTasksTodoClearDelay } from "../tools/settings";
-import { cfgSecretsAutoFixRefusal } from "../secrets/settings";
 import { cfgWorktreeOnExit, cfgWorktreeOnStart } from "../task/settings";
 import { cfgExpandThinkingBlocks, cfgProseOnlyThinking } from "../session/settings";
 import { cfgDefaultThinkingLevel, cfgHideThinkingBlock } from "../session/settings";
@@ -1377,8 +1370,6 @@ export function renderSubagentHudLines(
 	return ["", header, ...itemLines, ...toggleRow];
 }
 
-const AUTO_FIX_REFUSAL_MAX_ROUNDS = 2;
-
 const CTRL_L_APPEARANCE_RESPONSE_DEADLINE_MS = 2000;
 
 /** Repaint cadence of the open jobs sheet: output tails, pids and list ages are polled, not pushed. */
@@ -1724,10 +1715,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	locallySubmittedUserSignatures: Set<string> = new Set();
 	#pendingSubmittedInput: SubmittedUserInput | undefined;
 	#pendingSubmissionDispose: (() => void) | undefined;
-	#autoFixRefusalRounds = 0;
-	#autoFixRefusalInFlight = false;
-	#autoFixRefusalIdleWait = false;
-	#fixRefusalAbort?: AbortController;
+	#findRefusalAbort?: AbortController;
 	#pendingSubmissionPreservesDraft = false;
 	/** Unregisters this mode's transcript-image blob writer (a later mode's registration survives). */
 	#disposeImageBlobWriter: (() => void) | undefined;
@@ -2941,7 +2929,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				// getUserInput pending, so arm the loop's next iteration here instead.
 				if (event.type === "agent_end" && this.onInputCallback) this.#scheduleLoopAutoSubmit();
 				void this.#handleGoalSessionEvent(event);
-				void this.#maybeAutoFixRefusal(event);
 				void this.#saveRefusalDump(event);
 			}),
 			cfgLiveUiSettings.listen(this.settings, (next, previous) => this.#applyUiSettingChanges(next, previous)),
@@ -3332,9 +3319,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		const { promise, resolve } = Promise.withResolvers<SubmittedUserInput>();
 		this.onInputCallback = input => {
-			if (input.customType !== "auto-fix-refusal") {
-				this.#autoFixRefusalRounds = 0;
-			}
 			this.onInputCallback = undefined;
 			resolve(input);
 		};
@@ -5750,72 +5734,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		this.#scheduleGoalContinuation();
 		this.syncIdleMaintenanceView();
-	}
-
-	/**
-	 * When enabled, run the refusal-fix flow after a refusal and resubmit the
-	 * triggering prompt with newly discovered masks. Each user prompt gets a
-	 * bounded number of automatic recovery rounds.
-	 */
-	async #maybeAutoFixRefusal(event: AgentSessionEvent): Promise<void> {
-		if (event.type !== "agent_end" || event.isTerminal === false) return;
-		if (!this.isInitialized || this.#isShuttingDown) return;
-		if (!cfgSecretsAutoFixRefusal.get(this.settings)) return;
-		if (this.#autoFixRefusalInFlight) return;
-		if (this.#isAutoSubmitBlocked()) {
-			if (!this.#autoFixRefusalIdleWait && (this.session.isStreaming || this.session.hasPostPromptWork)) {
-				this.#autoFixRefusalIdleWait = true;
-				void this.session.waitForIdle().then(
-					() => {
-						this.#autoFixRefusalIdleWait = false;
-						void this.#maybeAutoFixRefusal(event);
-					},
-					() => {
-						this.#autoFixRefusalIdleWait = false;
-					},
-				);
-			}
-			return;
-		}
-		if (!this.onInputCallback) return;
-		if (this.#pendingSubmittedInput) return;
-		if (this.editor.getText().trim().length > 0) return;
-		if ((this.editor.pendingImages?.length ?? 0) > 0) return;
-		if (this.planModeEnabled || this.planModePaused) return;
-		if (!isRefusalMessage(this.session.getLastAssistantMessage())) return;
-		if (!resolveRefusalModelPattern(this.settings)) return;
-		if (this.#autoFixRefusalRounds >= AUTO_FIX_REFUSAL_MAX_ROUNDS) {
-			this.showWarning("Auto fix-refusal: retry limit reached; leaving the refusal in place.");
-			return;
-		}
-		const promptText = latestUserPromptText(this.session.messages);
-		if (!promptText) return;
-
-		this.#autoFixRefusalInFlight = true;
-		const ui = createTuiFixRefusalUi(this);
-		const signal = this.beginFixRefusal();
-		try {
-			const outcome = await executeFixRefusal({
-				session: this.session,
-				settings: this.settings,
-				cwd: this.sessionManager.getCwd(),
-				keyDir: this.session.getSecretPlaceholderKeyDir(),
-				signal,
-				ui,
-			});
-			if (outcome.resolved && outcome.patternsActive > 0 && this.onInputCallback) {
-				this.#autoFixRefusalRounds += 1;
-				this.onInputCallback(
-					this.startPendingSubmission({ text: promptText, customType: "auto-fix-refusal", display: true }),
-				);
-			}
-		} catch (err) {
-			ui.step(`Auto fix-refusal failed: ${err instanceof Error ? err.message : String(err)}`);
-		} finally {
-			ui.done();
-			this.#autoFixRefusalInFlight = false;
-			this.endFixRefusal();
-		}
 	}
 
 	/** Preserve refusal-ending turns as transcripts for later analysis. */
@@ -9131,22 +9049,22 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.setWorkingMessage(message);
 	}
 
-	beginFixRefusal(): AbortSignal {
-		this.#fixRefusalAbort?.abort();
-		this.#fixRefusalAbort = new AbortController();
-		return this.#fixRefusalAbort.signal;
+	beginFindRefusal(): AbortSignal {
+		this.#findRefusalAbort?.abort();
+		this.#findRefusalAbort = new AbortController();
+		return this.#findRefusalAbort.signal;
 	}
 
-	endFixRefusal(): void {
-		this.#fixRefusalAbort = undefined;
+	endFindRefusal(): void {
+		this.#findRefusalAbort = undefined;
 	}
 
-	isFixingRefusal(): boolean {
-		return !!this.#fixRefusalAbort && !this.#fixRefusalAbort.signal.aborted;
+	isFindingRefusal(): boolean {
+		return !!this.#findRefusalAbort && !this.#findRefusalAbort.signal.aborted;
 	}
 
-	abortFixRefusal(): void {
-		this.#fixRefusalAbort?.abort();
+	abortFindRefusal(): void {
+		this.#findRefusalAbort?.abort();
 	}
 
 	showNewVersionNotification(newVersion: string): void {

@@ -534,10 +534,10 @@ describe("SecretObfuscator regex behavior", () => {
 		expect(obfuscator.obfuscate("the response despite whitespace")).toBe("the response despite whitespace");
 	});
 
-	it("masks short regex matches — deliberate patterns have no length floor (fix-refusal triggers)", () => {
-		// Regex entries are author-/judge-specified and targeted (fix-refusal proposes
+	it("masks short regex matches — deliberate patterns have no length floor (find-refusal triggers)", () => {
+		// Regex entries are author-/judge-specified and targeted (find-refusal proposes
 		// short trigger terms like /Alpha/). Unlike plain literals (pervasive substring
-		// match, guarded above), a short regex match MUST mask, or fix-refusal can never
+		// match, guarded above), a short regex match MUST mask, or find-refusal can never
 		// resolve a short trigger. Env false-matches are filtered at collectEnvSecrets.
 		const obfuscator = new SecretObfuscator([{ type: "regex", content: "Alpha" }]);
 		const masked = obfuscator.obfuscate("Tell me about Alpha here.");

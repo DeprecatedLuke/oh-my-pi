@@ -350,7 +350,7 @@ export class HindsightSessionState implements HindsightSessionStateApi {
 	/**
 	 * Redact configured secrets from text bound for the Hindsight service. Transcripts and
 	 * recall queries are composed from raw user turns, and the service is remote. LIVE:
-	 * reads the session's current obfuscator so `/fix-refusal` entries apply immediately.
+	 * reads the session's current obfuscator so a live secrets switch-on applies immediately.
 	 */
 	obfuscateTextForService(text: string): string {
 		return this.session.obfuscateTextForProvider?.(text) ?? text;

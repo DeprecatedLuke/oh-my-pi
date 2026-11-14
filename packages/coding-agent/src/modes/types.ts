@@ -490,14 +490,14 @@ export interface InteractiveModeContext {
 	ensureLoadingAnimation(): void;
 	/** Stop and tear down the loading spinner started by {@link ensureLoadingAnimation}. */
 	stopLoadingAnimation(): void;
-	/** Begin tracking an in-flight /fix-refusal run; returns its abort signal. */
-	beginFixRefusal?(): AbortSignal;
-	/** Clear in-flight /fix-refusal tracking after completion or cancellation. */
-	endFixRefusal?(): void;
-	/** True while a /fix-refusal run remains active and un-aborted. */
-	isFixingRefusal?(): boolean;
-	/** Abort the in-flight /fix-refusal run (Esc handler). */
-	abortFixRefusal?(): void;
+	/** Begin tracking an in-flight /find-refusal run; returns its abort signal. */
+	beginFindRefusal?(): AbortSignal;
+	/** Clear in-flight /find-refusal tracking after completion or cancellation. */
+	endFindRefusal?(): void;
+	/** True while a /find-refusal run remains active and un-aborted. */
+	isFindingRefusal?(): boolean;
+	/** Abort the in-flight /find-refusal run (Esc handler). */
+	abortFindRefusal?(): void;
 	/** Interrupt key id for a maintenance working row's stop control; undefined while Esc would not cancel it. */
 	maintenanceInterruptKey(): KeyId | undefined;
 	/** A click on a working row's stop control: the interrupt key's handler. */
