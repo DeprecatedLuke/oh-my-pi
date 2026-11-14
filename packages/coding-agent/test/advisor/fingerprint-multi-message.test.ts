@@ -4,7 +4,8 @@
 //   A. delivered message replaced by a clone differing only in unrendered
 //      fields (timestamp/usage)  -> full-JSON fingerprint mismatch
 //   B. delivered message content rewritten to a `[shaken ...]` placeholder
-//      (auto-shake mutates in place, then rewriteEntries yields a new object)
+//      (auto-shake mutates in place, then rewriteEntries yields a new object);
+//      already-delivered content rewrites remain incremental.
 //   C. wip heading flip (## Session update [in progress ...] vs final)
 //   E. rendered field change (custom.display) must replay
 //
@@ -96,7 +97,7 @@ describe("fingerprint: field-selective fingerprint (applied)", () => {
 		expect(d.tailOnly).toBe(true);
 	});
 
-	it("scenario B: content rewrite to shaken placeholder STILL triggers FULL replay (content is rendered)", async () => {
+	it("scenario B: content rewrite to shaken placeholder is INCREMENTAL (no full replay)", async () => {
 		const { prompts } = await runScenario(
 			history(["seed-body-000", "seed-body-001"]),
 			messages => {
@@ -107,7 +108,7 @@ describe("fingerprint: field-selective fingerprint (applied)", () => {
 			},
 			[mkMsg("user", "tail-body-002", 3)],
 		);
-		expect(describeDelta(prompts).full).toBe(true);
+		expect(describeDelta(prompts).full).toBe(false);
 	});
 
 	it("scenario E: rendered field change (custom.display flip) triggers FULL replay", async () => {

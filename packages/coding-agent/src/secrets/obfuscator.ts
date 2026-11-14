@@ -555,6 +555,11 @@ export class SecretObfuscator {
 		return this.#hasAny;
 	}
 
+	/** Registry version; bumps on every effective registry write. */
+	get revision(): number {
+		return this.#revision.value;
+	}
+
 	/** Whether outbound text is currently obfuscated: secrets exist and obfuscation is switched on. */
 	obfuscates(): boolean {
 		return this.#hasAny && this.#obfuscating;

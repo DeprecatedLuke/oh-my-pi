@@ -45,8 +45,8 @@ describe("advisor context reset observability", () => {
 			runtime.onTurnEnd();
 			expect(await runtime.waitForCatchup(1_000, 1)).toBe(true);
 
-			// Replace a delivered message with a changed clone, then grow the tail.
-			messages[0] = userMessage("turn one body EDITED", 1);
+			// Replace a delivered message with a new identity so replay and logging remain required, then grow the tail.
+			messages[0] = userMessage("turn one body EDITED", 99);
 			messages.push(userMessage("turn three body", 3));
 			runtime.onTurnEnd();
 			expect(await runtime.waitForCatchup(1_000, 1)).toBe(true);

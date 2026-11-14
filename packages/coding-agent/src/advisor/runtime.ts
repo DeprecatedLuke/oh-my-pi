@@ -142,7 +142,10 @@ interface AdvisorOutputHazard {
 }
 
 const ADVISOR_OUTPUT_ONLY_HAZARDS: readonly AdvisorOutputHazard[] = [
-	{ label: "account-deletion claim", pattern: /\buser\b.{0,80}\b(?:deleted|erased)\b.{0,80}\baccount\b/i },
+	{
+		label: "account-deletion claim",
+		pattern: /\buser\b.{0,80}\b(?:deleted|erased)\b.{0,80}\baccount\b/i,
+	},
 	{
 		label: "instruction override",
 		pattern: /\bignore\s+(?:all\s+)?(?:prior|previous|earlier)\s+(?:user\s+)?instructions\b/i,
@@ -151,7 +154,10 @@ const ADVISOR_OUTPUT_ONLY_HAZARDS: readonly AdvisorOutputHazard[] = [
 		label: "destructive shell command",
 		pattern: /\brm\s+(?=(?:-[a-z]+\s*)*-[a-z]*r[a-z]*)(?=(?:-[a-z]+\s*)*-[a-z]*f[a-z]*)(?:-[a-z]+\s*)+/i,
 	},
-	{ label: "denial instruction", pattern: /\bdeny\s+(?:this|it|the\s+request)\s+if\s+(?:asked|questioned)\b/i },
+	{
+		label: "denial instruction",
+		pattern: /\bdeny\s+(?:this|it|the\s+request)\s+if\s+(?:asked|questioned)\b/i,
+	},
 ];
 
 /**
@@ -277,6 +283,27 @@ interface CatchupWaiter {
 interface DeliveredMessage {
 	message: AgentMessage;
 	fingerprint: bigint | undefined;
+	/** Positional identity survives content pruning, but not reordering/branching. */
+	identity: string;
+	rewriteFingerprint: bigint | undefined;
+}
+
+function captureDeliveredMessage(message: AgentMessage): DeliveredMessage {
+	const identity = JSON.stringify([
+		message.role,
+		message.timestamp,
+		"toolCallId" in message ? message.toolCallId : undefined,
+		"responseId" in message ? message.responseId : undefined,
+		"customType" in message ? message.customType : undefined,
+		"display" in message ? message.display : undefined,
+		message.role === "assistant" && message.stopReason === "error",
+	]);
+	return {
+		message,
+		identity,
+		fingerprint: fingerprintMessage(message),
+		rewriteFingerprint: fingerprintMessage({ ...message, content: [] } as AgentMessage),
+	};
 }
 
 export class AdvisorRuntime {
@@ -305,6 +332,29 @@ export class AdvisorRuntime {
 	#renderRevision = 0;
 	/** Regex secret values observed in primary deltas and retained until advisor context resets. */
 	#advisorRegexSecretValues = new SecretValueSet();
+	// The preview and dispatch use the same raw markdown when preparation did
+	// not change it. Fingerprints catch pruning's in-place content rewrites.
+	#probeMarkdown: { fingerprints: bigint[]; includeThinking: boolean; text: string } | undefined;
+
+	#formatProbeMarkdown(messages: AgentMessage[], includeThinking: boolean): string {
+		const fingerprints = messages.map(fingerprintMessage);
+		const cached = this.#probeMarkdown;
+		if (
+			cached?.includeThinking === includeThinking &&
+			fingerprints.length === cached.fingerprints.length &&
+			fingerprints.every((value, index) => value !== undefined && value === cached.fingerprints[index])
+		)
+			return cached.text;
+		const text = formatSessionHistoryMarkdown(messages, {
+			...ADVISOR_RENDER_OPTIONS,
+			includeThinking,
+		});
+		this.#probeMarkdown = fingerprints.every((value): value is bigint => value !== undefined)
+			? { fingerprints, includeThinking, text }
+			: undefined;
+		return text;
+	}
+
 	#pending: PendingDelta[] = [];
 	/**
 	 * Deltas captured at boundaries the review cadence skipped. Their cursor
@@ -476,7 +526,11 @@ export class AdvisorRuntime {
 			// dispatches it, after the primary's per-turn prune may have elided
 			// these tool results in place. Detach the held copies so the review
 			// sees what the primary saw at this boundary.
-			this.#held.push({ ...rendered, rawMessages: rendered.rawMessages.map(message => ({ ...message })), turns: 1 });
+			this.#held.push({
+				...rendered,
+				rawMessages: rendered.rawMessages.map(message => ({ ...message })),
+				turns: 1,
+			});
 			return;
 		}
 		this.#dispatch(rendered ? { ...rendered, turns: 1 } : undefined);
@@ -505,7 +559,11 @@ export class AdvisorRuntime {
 		if (!inFlight && this.#pending.length === 0) return false;
 		this.#backlog = Math.max(0, this.#backlog - this.#pending.reduce((sum, delta) => sum + delta.turns, 0));
 		this.#held = [
-			...this.#pending.map(delta => ({ ...delta, turns: 1, overflowRecovery: undefined })),
+			...this.#pending.map(delta => ({
+				...delta,
+				turns: 1,
+				overflowRecovery: undefined,
+			})),
 			...this.#held,
 		];
 		this.#pending = [];
@@ -539,7 +597,10 @@ export class AdvisorRuntime {
 	 */
 	releaseHeld(): AdvisorHeldUpdates | undefined {
 		if (this.#held.length === 0) return undefined;
-		const held: AdvisorHeldUpdates = { cursor: this.#lastCount, deltas: this.#held };
+		const held: AdvisorHeldUpdates = {
+			cursor: this.#lastCount,
+			deltas: this.#held,
+		};
 		this.#held = [];
 		return held;
 	}
@@ -775,10 +836,7 @@ export class AdvisorRuntime {
 	seedTo(count: number): void {
 		const messages = this.host.snapshotMessages().slice(0, count);
 		this.#lastCount = messages.length;
-		this.#deliveredPrefix = messages.map(message => ({
-			message,
-			fingerprint: fingerprintMessage(message),
-		}));
+		this.#deliveredPrefix = messages.map(captureDeliveredMessage);
 		this.#pending = [];
 		this.#held = [];
 		this.#backlog = 0;
@@ -822,14 +880,17 @@ export class AdvisorRuntime {
 				message.role === "toolResult" &&
 				message.toolCallId === current.toolCallId;
 			if (fingerprint === undefined || (fingerprint !== delivered.fingerprint && !prunedInPlace)) return;
-			rebased.push({ message: current, fingerprint });
+			rebased.push(captureDeliveredMessage(current));
 		}
 		this.#deliveredPrefix = rebased;
 		this.#lastCount = rebased.length;
 		// A quarantine re-prime replays `#latestMessages`; keep it on the rewritten
 		// transcript so the replay does not resurrect pre-prune tool output.
 		this.#latestMessages = all;
-		logger.debug("advisor delivered prefix rebased", { reason, lastCount: this.#lastCount });
+		logger.debug("advisor delivered prefix rebased", {
+			reason,
+			lastCount: this.#lastCount,
+		});
 	}
 
 	#syncModelIdentity(): void {
@@ -934,6 +995,20 @@ export class AdvisorRuntime {
 		// Consumes the ALREADY-prepared view from #prepareBatch: advisor custom
 		// messages are filtered and primary-context dedup is applied there, so
 		// splitting here never double-folds or leaks hidden messages.
+		const secrets = this.host.getObfuscator?.() ?? this.host.obfuscator;
+		return secrets?.hasSecrets()
+			? secrets.batch(() => this.#formatRawDeltaMessageChunksNow(preparedMessages, wip, includeThinking))
+			: this.#formatRawDeltaMessageChunksNow(preparedMessages, wip, includeThinking);
+	}
+
+	#formatRawDeltaMessageChunksNow(
+		preparedMessages: AgentMessage[],
+		wip = false,
+		includeThinking = this.#includeThinking,
+	): AgentMessage[] | null {
+		// Consumes the ALREADY-prepared view from #prepareBatch: advisor custom
+		// messages are filtered and primary-context dedup is applied there, so
+		// splitting here never double-folds or leaks hidden messages.
 		const delta = preparedMessages;
 		if (delta.length === 0) return null;
 
@@ -945,7 +1020,7 @@ export class AdvisorRuntime {
 		// collection site; the single-block text is rendered only on fallback or
 		// requeue, where a repeat collection over the same list is idempotent.
 		if (secrets) {
-			const probeMd = formatSessionHistoryMarkdown(delta, { ...ADVISOR_RENDER_OPTIONS, includeThinking });
+			const probeMd = this.#formatProbeMarkdown(delta, includeThinking);
 			this.#collectAdvisorSecrets(secrets, delta, probeMd);
 		}
 
@@ -1001,13 +1076,21 @@ export class AdvisorRuntime {
 		wip = false,
 		includeThinking = this.#includeThinking,
 	): string | null {
+		const secrets = this.host.getObfuscator?.() ?? this.host.obfuscator;
+		return secrets?.hasSecrets()
+			? secrets.batch(() => this.#renderPreparedDeltaNow(preparedMessages, wip, includeThinking))
+			: this.#renderPreparedDeltaNow(preparedMessages, wip, includeThinking);
+	}
+
+	#renderPreparedDeltaNow(
+		preparedMessages: AgentMessage[],
+		wip = false,
+		includeThinking = this.#includeThinking,
+	): string | null {
 		const delta = preparedMessages;
 		if (delta.length === 0) return null;
 		const obfuscator = this.host.getObfuscator?.() ?? this.host.obfuscator;
-		let md = formatSessionHistoryMarkdown(delta, {
-			...ADVISOR_RENDER_OPTIONS,
-			includeThinking,
-		});
+		let md = this.#formatProbeMarkdown(delta, includeThinking);
 		if (!md.trim()) return null;
 		if (obfuscator?.hasSecrets()) {
 			this.#collectAdvisorSecrets(obfuscator, delta, md);
@@ -1039,9 +1122,39 @@ export class AdvisorRuntime {
 				prefixChanged = true;
 				break;
 			}
-			if (delivered.message === current) continue;
+			const identity = JSON.stringify([
+				current.role,
+				current.timestamp,
+				"toolCallId" in current ? current.toolCallId : undefined,
+				"responseId" in current ? current.responseId : undefined,
+				"customType" in current ? current.customType : undefined,
+				"display" in current ? current.display : undefined,
+				current.role === "assistant" && current.stopReason === "error",
+			]);
+			if (delivered.message === current && delivered.identity === identity) continue;
 			const fingerprint = fingerprintMessage(current);
+			// Timestamp-only metadata churn remains equivalent (scenario A),
+			// but a response/tool/custom identity change must never be hidden
+			// by an unchanged rendered-content fingerprint.
+			const identityWithoutTimestamp: unknown[] = JSON.parse(identity);
+			const deliveredIdentity: unknown[] = JSON.parse(delivered.identity);
+			identityWithoutTimestamp[1] = deliveredIdentity[1];
+			const identityChanged = JSON.stringify(identityWithoutTimestamp) !== delivered.identity;
 			if (
+				delivered.fingerprint !== undefined &&
+				fingerprint !== undefined &&
+				delivered.fingerprint !== fingerprint &&
+				delivered.identity === identity &&
+				delivered.rewriteFingerprint !== undefined &&
+				delivered.rewriteFingerprint === fingerprintMessage({ ...current, content: [] } as AgentMessage)
+			) {
+				// The advisor already reviewed the original bytes. Pruning/shaking
+				// them later does not invalidate that review or require a replay.
+				this.#deliveredPrefix[i] = captureDeliveredMessage(current);
+				continue;
+			}
+			if (
+				identityChanged ||
 				delivered.fingerprint === undefined ||
 				fingerprint === undefined ||
 				delivered.fingerprint !== fingerprint
@@ -1058,15 +1171,22 @@ export class AdvisorRuntime {
 					for (const key of new Set([...Object.keys(oldMsg), ...Object.keys(newMsg)])) {
 						if (JSON.stringify(oldMsg[key]) !== JSON.stringify(newMsg[key])) differingFields.push(key);
 					}
-					logger.debug("advisor delivered prefix changed", { index: i, role: newMsg.role, differingFields });
+					logger.debug("advisor delivered prefix changed", {
+						index: i,
+						role: newMsg.role,
+						differingFields,
+					});
 				} catch {}
 				break;
 			}
-			delivered.message = current;
+			this.#deliveredPrefix[i] = captureDeliveredMessage(current);
 		}
 		if (prefixChanged) {
 			this.#epoch++;
-			logger.debug("advisor context reset", { reason: "delivered-prefix-changed", lastCount: this.#lastCount });
+			logger.debug("advisor context reset", {
+				reason: "delivered-prefix-changed",
+				lastCount: this.#lastCount,
+			});
 			this.#resetAdvisorContext(true, true);
 		}
 		const rawMessages = all
@@ -1075,7 +1195,7 @@ export class AdvisorRuntime {
 		for (let i = this.#lastCount; i < all.length; i++) {
 			const message = all[i];
 			if (message === undefined) continue;
-			this.#deliveredPrefix.push({ message, fingerprint: fingerprintMessage(message) });
+			this.#deliveredPrefix.push(captureDeliveredMessage(message));
 		}
 		this.#lastCount = all.length;
 		// Preview render: do NOT advance #seenContext — the batch's real dedup
@@ -1219,7 +1339,9 @@ export class AdvisorRuntime {
 						signal,
 					);
 				} catch (err) {
-					logger.debug("advisor context maintenance failed", { err: String(err) });
+					logger.debug("advisor context maintenance failed", {
+						err: String(err),
+					});
 				}
 				// Epoch guard — a reset/dispose during the maintainContext await
 				// invalidates this batch.
@@ -1229,7 +1351,11 @@ export class AdvisorRuntime {
 				// before another round can send history or the popped batch to compaction.
 				const obfuscator = this.host.getObfuscator?.() ?? this.host.obfuscator;
 				if (obfuscator?.hasSecrets()) {
-					if (scrubAdvisorHistory(obfuscator, this.agent.state.messages, this.#advisorRegexSecretValues)) {
+					if (
+						obfuscator.batch(() =>
+							scrubAdvisorHistory(obfuscator, this.agent.state.messages, this.#advisorRegexSecretValues),
+						)
+					) {
 						this.#refreshPendingSecretPrefixes(obfuscator);
 					}
 					batchText = obfuscator.stripUnsafeFriendlyPlaceholderPrefixes(batchText, this.#advisorRegexSecretValues);
@@ -1349,7 +1475,9 @@ export class AdvisorRuntime {
 		try {
 			this.host.notifyFailure?.(error);
 		} catch (notifyErr) {
-			logger.warn("advisor failure notification failed", { err: String(notifyErr) });
+			logger.warn("advisor failure notification failed", {
+				err: String(notifyErr),
+			});
 		}
 	}
 	#notifyTurnAbandoned(): void {
@@ -1486,7 +1614,9 @@ export class AdvisorRuntime {
 						try {
 							await raceWithSignal(Promise.resolve(this.host.onTurnSuccess()), iterationAbort.signal);
 						} catch (hookErr) {
-							logger.debug("advisor onTurnSuccess hook failed", { err: String(hookErr) });
+							logger.debug("advisor onTurnSuccess hook failed", {
+								err: String(hookErr),
+							});
 						}
 					}
 				} catch (err) {
@@ -1586,10 +1716,14 @@ export class AdvisorRuntime {
 										iterationAbort.signal,
 									)) === true;
 							} else {
-								logger.debug("advisor refusal chain exhausted", { model: refusalModel });
+								logger.debug("advisor refusal chain exhausted", {
+									model: refusalModel,
+								});
 							}
 						} catch (hookErr) {
-							logger.debug("advisor onTurnError hook failed after refusal", { err: String(hookErr) });
+							logger.debug("advisor onTurnError hook failed after refusal", {
+								err: String(hookErr),
+							});
 						}
 						if (this.#epoch !== epoch) continue;
 						if (this.#sessionTransitionPaused) {
@@ -1628,7 +1762,9 @@ export class AdvisorRuntime {
 								iterationAbort.signal,
 							)) === true;
 					} catch (hookErr) {
-						logger.debug("advisor onTurnError hook failed", { err: String(hookErr) });
+						logger.debug("advisor onTurnError hook failed", {
+							err: String(hookErr),
+						});
 					}
 					if (this.#sessionTransitionPaused) {
 						this.#pending.unshift(...popped);
@@ -1696,7 +1832,9 @@ export class AdvisorRuntime {
 						try {
 							this.host.notifyQuotaExhausted?.();
 						} catch (notifyErr) {
-							logger.warn("advisor quota notification failed", { err: String(notifyErr) });
+							logger.warn("advisor quota notification failed", {
+								err: String(notifyErr),
+							});
 						}
 						break;
 					}
@@ -1794,7 +1932,9 @@ export class AdvisorRuntime {
 				try {
 					this.host.notifyIdle?.();
 				} catch (err) {
-					logger.debug("advisor idle notification failed", { err: String(err) });
+					logger.debug("advisor idle notification failed", {
+						err: String(err),
+					});
 				}
 			}
 		}
@@ -1911,7 +2051,12 @@ function obfuscateAdvisorMessage(
 			) as AgentMessage;
 		case "custom":
 		case "hookMessage": {
-			if (!formatSessionHistoryMarkdown([message], { expandPrimaryContext: true }).trim()) return message;
+			if (
+				!formatSessionHistoryMarkdown([message], {
+					expandPrimaryContext: true,
+				}).trim()
+			)
+				return message;
 			const msg = message as AgentMessage & {
 				content: TextualContent;
 				details?: Record<string, unknown>;
@@ -1965,35 +2110,73 @@ function obfuscateAdvisorMessage(
 	}
 }
 
+interface AdvisorHistoryScrub {
+	secrets: SecretObfuscator;
+	revision: number;
+	sharedKey: string;
+	messages: AgentMessage[];
+	content: unknown[];
+}
+
+// History arrays can be replaced by maintenance/rollback; weak ownership keeps
+// old contexts collectible. Registry writes invalidate earlier fixed points.
+const advisorHistoryScrubs = new WeakMap<AgentMessage[], AdvisorHistoryScrub>();
+
 function scrubAdvisorHistory(
-	obfuscator: SecretObfuscator,
+	secrets: SecretObfuscator,
 	messages: AgentMessage[],
-	sharedRegexSecretValues: Set<string>,
+	sharedRegexSecretValues: SecretValueSet,
 ): boolean {
 	const previousSize = sharedRegexSecretValues.size;
-	// Collect across the entire history first: redacting a search-only regex
-	// value would otherwise erase the evidence needed to scrub an earlier prefix.
-	for (const message of messages) {
+	const previous = advisorHistoryScrubs.get(messages);
+	const revision = secrets.revision;
+	const sharedKey = sharedRegexSecretValues.contentKey;
+	let start = 0;
+	if (previous?.secrets === secrets && previous.revision === revision && previous.sharedKey === sharedKey) {
+		while (start < messages.length && previous.messages[start] === messages[start]) {
+			const message = messages[start]!;
+			if (previous.content[start] !== ("content" in message ? message.content : undefined)) break;
+			start++;
+		}
+	}
+	// Collect ALL unverified native evidence before redacting anything. The
+	// verified prefix's evidence remains in the shared set under this exact key.
+	for (let index = start; index < messages.length; index++) {
+		const message = messages[index]!;
 		if (
 			message.role === "user" ||
 			message.role === "developer" ||
 			message.role === "assistant" ||
 			message.role === "compactionSummary"
 		) {
-			collectNativeReplayRegexSecretValues(obfuscator, message, sharedRegexSecretValues);
+			collectNativeReplayRegexSecretValues(secrets, message, sharedRegexSecretValues);
 		}
 	}
-	for (let index = 0; index < messages.length; index++) {
+	// New values can invalidate friendly prefixes anywhere, even when the raw
+	// value isn't literally present. Let the batch's per-string dependency memo
+	// decide which earlier strings actually require rescanning.
+	if (sharedRegexSecretValues.contentKey !== sharedKey || secrets.revision !== revision) start = 0;
+	const scrubRevision = secrets.revision;
+	for (let index = start; index < messages.length; index++) {
 		const message = messages[index]!;
 		const replay =
 			message.role === "user" ||
 			message.role === "developer" ||
 			message.role === "assistant" ||
 			message.role === "compactionSummary"
-				? obfuscateNativeReplay(obfuscator, message, sharedRegexSecretValues)
+				? obfuscateNativeReplay(secrets, message, sharedRegexSecretValues)
 				: message;
-		const next = obfuscateAdvisorMessage(obfuscator, replay, sharedRegexSecretValues);
+		const next = obfuscateAdvisorMessage(secrets, replay, sharedRegexSecretValues);
 		if (next !== message) messages[index] = next;
 	}
+	// Stamp BEFORE redaction: a mint during this pass must invalidate the prefix
+	// next time, just as the former unconditional second pass did.
+	advisorHistoryScrubs.set(messages, {
+		secrets,
+		revision: scrubRevision,
+		sharedKey: sharedRegexSecretValues.contentKey,
+		messages: messages.slice(),
+		content: messages.map(message => ("content" in message ? message.content : undefined)),
+	});
 	return sharedRegexSecretValues.size !== previousSize;
 }
