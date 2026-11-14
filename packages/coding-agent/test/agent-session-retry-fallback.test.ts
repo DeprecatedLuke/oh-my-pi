@@ -41,6 +41,7 @@ import {
 	validateRetryFallbackChains,
 } from "@oh-my-pi/pi-coding-agent/session/retry-fallback-chains";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { getRestorableSessionModels } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { computerTurnInFlight, registerComputerController } from "@oh-my-pi/pi-coding-agent/tools/computer/supervisor";
 import { convertToLlm, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
@@ -9529,6 +9530,144 @@ describe("AgentSession retry fallback", () => {
 			// The map is re-matched for each model the walk lands on: sonnet -> gpt-4o-mini -> @cyber.
 			expect(requestedModels).toEqual([refusedSelector, mappedSelector, cyberRoleSelector]);
 			expect(session.model?.id).toBe(cyberRoleModel.id);
+		});
+
+		it("hands a refusal past a mapped model whose window cannot hold the context to that model's own entry", async () => {
+			const modelsConfigPath = path.join(tempDir.path(), "cyber-handoff-models.json");
+			await Bun.write(
+				modelsConfigPath,
+				JSON.stringify({
+					providers: {
+						anthropic: { modelOverrides: { "claude-sonnet-4-5": { contextWindow: 1_000_000 } } },
+						openai: { modelOverrides: { "gpt-4o-mini": { contextWindow: 4000 } } },
+						google: { modelOverrides: { "gemini-1.5-flash": { contextWindow: 1_000_000 } } },
+					},
+				}),
+			);
+			modelRegistry = new ModelRegistry(authStorage, modelsConfigPath);
+			const primaryModel = modelRegistry.find(refusedModel.provider, refusedModel.id);
+			if (!primaryModel) throw new Error("Expected override model to resolve");
+			expect(modelRegistry.find(mappedModel.provider, mappedModel.id)?.contextWindow).toBe(4000);
+
+			const requestedModels: string[] = [];
+			const mock = createMockModel();
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					requestedModels.push(`${model.provider}/${model.id}`);
+					if (model.id === refusedModel.id) mock.push(refusal());
+					else mock.push({ content: ["answered past the undersized model"] });
+					return mock.stream(model, context, options);
+				},
+			});
+
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 1,
+				"retry.maxRetries": 0,
+				"retry.cyberFallbackModels": { "*sonnet*": mappedSelector, "*gpt-4o*": cyberRoleSelector },
+			});
+			settings.setModelRole("default", refusedSelector);
+
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.inMemory(),
+				settings,
+				modelRegistry,
+			});
+
+			// ~15k estimated tokens: fits sonnet and gemini, far over gpt-4o-mini's 4000 window.
+			await session.prompt("lorem ipsum ".repeat(5000));
+			await session.waitForIdle();
+
+			// gpt-4o-mini never receives the oversized request; its own entry takes the turn.
+			expect(requestedModels).toEqual([refusedSelector, cyberRoleSelector]);
+			expect(session.model?.id).toBe(cyberRoleModel.id);
+			expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+		});
+
+		it("persists the hop so a resumed or revived session restores the replacement, not the refusing model", async () => {
+			using sessionDir = TempDir.createSync("@omp-cyber-pin-");
+			setAgentDir(path.join(sessionDir.path(), "agent"));
+			try {
+				const mock = createMockModel();
+				const agent = new Agent({
+					getApiKey: model => `${model.provider}-test-key`,
+					initialState: { model: refusedModel, systemPrompt: ["Test"], tools: [], messages: [] },
+					streamFn: (model, context, options) => {
+						if (model.id === refusedModel.id) mock.push(refusal());
+						else mock.push({ content: ["answered on the mapped model"] });
+						return mock.stream(model, context, options);
+					},
+				});
+				const settings = Settings.isolated({
+					"compaction.enabled": false,
+					"retry.baseDelayMs": 1,
+					"retry.maxRetries": 0,
+					"retry.cyberFallbackModels": { "*sonnet*": mappedSelector },
+				});
+				settings.setModelRole("default", refusedSelector);
+
+				const sessionManager = SessionManager.create(sessionDir.path(), sessionDir.path());
+				session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+
+				await session.prompt("Refused by the classifier");
+				await session.waitForIdle();
+				expect(session.model?.id).toBe(mappedModel.id);
+				await sessionManager.flush();
+				const sessionFile = sessionManager.getSessionFile();
+				if (!sessionFile) throw new Error("Expected a persisted session file");
+
+				// Reload from disk, as resume and cold revive do.
+				const reopened = await SessionManager.open(sessionFile, sessionDir.path(), undefined, {
+					suppressBreadcrumb: true,
+				});
+				try {
+					// Subagent revive restores the session-local model change.
+					expect(reopened.getSessionLocalModelChange()?.model).toBe(mappedSelector);
+					// Main-session resume tries the restorable models in order.
+					expect(
+						getRestorableSessionModels(
+							reopened.buildSessionContext().models,
+							reopened.getLastModelChangeRole(),
+						)[0],
+					).toBe(mappedSelector);
+				} finally {
+					await reopened.close();
+				}
+			} finally {
+				// Dispose while the session dir still exists; `using` removes it on return.
+				await session?.dispose();
+				session = undefined;
+			}
+		});
+
+		it("does not restore a plain retry-fallback hop on resume", async () => {
+			const requestedModels: string[] = [];
+			const agent = createFallbackAgent(refusedModel, requestedModels);
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				"retry.fallbackChains": { default: [mappedSelector] },
+			});
+			settings.setModelRole("default", refusedSelector);
+
+			const sessionManager = SessionManager.inMemory();
+			session = new AgentSession({ agent, sessionManager, settings, modelRegistry });
+
+			await session.prompt("Rate limited, then served by the fallback");
+			await session.waitForIdle();
+			expect(session.model?.id).toBe(mappedModel.id);
+
+			// A transient provider failure says nothing about the next session: resume goes back to the primary.
+			expect(sessionManager.getSessionLocalModelChange()).toBeUndefined();
+			expect(
+				getRestorableSessionModels(
+					sessionManager.buildSessionContext().models,
+					sessionManager.getLastModelChangeRole(),
+				),
+			).not.toContain(mappedSelector);
 		});
 
 		it("terminates when two mapped models refuse each other", async () => {

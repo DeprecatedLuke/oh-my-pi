@@ -265,6 +265,22 @@ describe("advisor classifier-refusal fallback", () => {
 		expect(s.getAdvisorAgent()?.state.model.id).toBe(secondFallback.id);
 	});
 
+	it("hands a refusal past a cooling-down mapped model to that model's own entry", async () => {
+		modelRegistry.suppressSelector(`${advisorFallback.provider}/${advisorFallback.id}`, Date.now() + 60 * 60_000);
+		const { s, advisorRequests, fallbackRoles } = await startSession("refusal", {
+			cyberFallbackModels: {
+				"*sonnet*": `${advisorFallback.provider}/${advisorFallback.id}`,
+				"*gemini*": `${secondFallback.provider}/${secondFallback.id}`,
+			},
+		});
+
+		// The cooling model's own map entry takes the request, not the role chain.
+		expect(advisorRequests).not.toContain(advisorFallback.id);
+		expect(advisorRequests.at(-1)).toBe(secondFallback.id);
+		expect(fallbackRoles).toEqual(["*gemini*"]);
+		expect(s.getAdvisorAgent()?.state.model.id).toBe(secondFallback.id);
+	});
+
 	it("hops a mapped advisor cyber_policy denial without rotating accounts", async () => {
 		const rotateSpy = vi.spyOn(authStorage.limits, "rotate");
 		const { s, advisorRequests } = await startSession("refusal", {
