@@ -59,7 +59,8 @@ import {
 	CURRENT_SESSION_VERSION,
 	type CustomEntry,
 	type CustomMessageEntry,
-	EPHEMERAL_MODEL_CHANGE_ROLE,
+	CYBER_FALLBACK_MODEL_CHANGE_ROLE,
+	isTransientModelChangeRole,
 	PREWALK_MODEL_CHANGE_ROLE,
 	type FileEntry,
 	type LabelEntry,
@@ -527,8 +528,8 @@ function orderedByTimestamp(a: SessionTreeNode, b: SessionTreeNode): number {
 
 /**
  * The most recent model role on `branch`, or undefined when no model change
- * was recorded. `skipEphemeral` passes over temporary switches (retry fallback
- * hops, prewalk, context promotion), returning the role last assigned.
+ * was recorded. `skipEphemeral` passes over switches (retry fallback hops,
+ * cyber-fallback hops, prewalk, context promotion), returning the role last assigned.
  */
 export function lastModelChangeRole(
 	branch: readonly SessionEntry[],
@@ -538,7 +539,7 @@ export function lastModelChangeRole(
 		const entry = branch[index];
 		if (entry.type !== "model_change") continue;
 		const role = entry.role ?? "default";
-		if (options?.skipEphemeral && (role === EPHEMERAL_MODEL_CHANGE_ROLE || role === PREWALK_MODEL_CHANGE_ROLE)) {
+		if (options?.skipEphemeral && isTransientModelChangeRole(role)) {
 			continue;
 		}
 		return role;
@@ -3902,15 +3903,20 @@ export class SessionManager {
 
 	/**
 	 * The newest model change on the current branch when it selected a model for
-	 * this session only (`temporary`, or a prewalk handoff); undefined when the
-	 * newest change assigned a role, was a retry fallback hop, or none was recorded.
+	 * this session only (`temporary`, a prewalk handoff, or a cyber-fallback hop);
+	 * undefined when the newest change assigned a role, was a plain retry fallback
+	 * hop, or none was recorded.
 	 */
 	getSessionLocalModelChange(): ModelChangeEntry | undefined {
 		const branch = this.getBranch();
 		for (let index = branch.length - 1; index >= 0; index--) {
 			const entry = branch[index];
 			if (entry.type !== "model_change") continue;
-			return entry.role === "temporary" || entry.role === PREWALK_MODEL_CHANGE_ROLE ? entry : undefined;
+			return entry.role === "temporary" ||
+				entry.role === PREWALK_MODEL_CHANGE_ROLE ||
+				entry.role === CYBER_FALLBACK_MODEL_CHANGE_ROLE
+				? entry
+				: undefined;
 		}
 		return undefined;
 	}

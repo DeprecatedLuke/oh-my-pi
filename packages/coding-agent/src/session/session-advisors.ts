@@ -2352,7 +2352,8 @@ export class SessionAdvisors {
 	 * Walk the `retry.cyberFallbackModels` entry matched for the advisor's refused
 	 * model, visiting each model at most once per run. Entries resolve through the
 	 * same selector path a chain entry uses, so `@role` references and thinking
-	 * suffixes work.
+	 * suffixes work. An entry that cannot take the request hands it to that
+	 * model's own map entry, as the main agent's walk does.
 	 */
 	async #tryAdvisorCyberFallback(
 		advisor: ActiveAdvisor,
@@ -2362,9 +2363,19 @@ export class SessionAdvisors {
 		message: string,
 		signal: AbortSignal,
 	): Promise<boolean> {
-		const match = matchRetryCyberFallbackModels(cfgRetryCyberFallbackModels.get(this.#host.settings), currentModel);
+		const cyberMap = cfgRetryCyberFallbackModels.get(this.#host.settings);
+		const match = matchRetryCyberFallbackModels(cyberMap, currentModel);
 		if (!match) return false;
-		for (const entry of match.selectors) {
+		const expandedKeys = new Set([match.key]);
+		const queue = match.selectors.map(entry => ({ entry, key: match.key }));
+		const handOff = (model: Model) => {
+			const next = matchRetryCyberFallbackModels(cyberMap, model);
+			if (!next || expandedKeys.has(next.key)) return;
+			expandedKeys.add(next.key);
+			for (const entry of next.selectors) queue.push({ entry, key: next.key });
+		};
+		for (let index = 0; index < queue.length; index++) {
+			const { entry, key } = queue[index];
 			const resolved = resolveModelOverride([entry], this.#host.modelRegistry, this.#host.settings);
 			const candidate = resolved.model;
 			if (!candidate) continue;
@@ -2376,19 +2387,27 @@ export class SessionAdvisors {
 			};
 			// Bound by resolved model: two entries can name the same one.
 			const visitedKey = `${candidate.provider}/${candidate.id}`;
-			if (advisor.cyberWalkTried.has(visitedKey)) continue;
-			if (modelsAreEqual(candidate, currentModel)) continue;
-			if (this.#host.isRetryFallbackSelectorSuppressed(selector)) continue;
-			if (!this.#canReplayAdvisorHistory(advisor, candidate)) continue;
+			if (
+				advisor.cyberWalkTried.has(visitedKey) ||
+				modelsAreEqual(candidate, currentModel) ||
+				this.#host.isRetryFallbackSelectorSuppressed(selector) ||
+				!this.#canReplayAdvisorHistory(advisor, candidate)
+			) {
+				handOff(candidate);
+				continue;
+			}
 			const apiKey = await this.#host.modelRegistry.getApiKey(candidate, advisor.providerSessionId, { signal });
-			if (!apiKey) continue;
+			if (!apiKey) {
+				handOff(candidate);
+				continue;
+			}
 			signal.throwIfAborted();
 			advisor.cyberWalkTried.add(visitedKey);
 			await this.#applyAdvisorFallbackCandidate({
 				advisor,
 				candidate,
 				selector,
-				role: match.key,
+				role: key,
 				currentSelector,
 				primaryRefused,
 				message,

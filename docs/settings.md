@@ -592,8 +592,10 @@ retry:
    cyberFallbackModels:
       "*opus*": openai-codex/gpt-6-astra
       "*sonnet*": openai-codex/gpt-6-sol
-      # A mapped model that refuses too is re-matched, so a chain forms; an
-      # @role reference resolves when the hop happens.
+      # A mapped model that refuses too, or cannot take the turn (context
+      # window, credential), is re-matched, so a chain forms; an @role
+      # reference resolves when the hop happens. The hop survives resume and
+      # subagent revival.
       "*astra*": "@cyber"
       "*sol*": "@cyber"
 

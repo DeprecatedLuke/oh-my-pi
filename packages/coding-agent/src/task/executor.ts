@@ -4449,7 +4449,7 @@ function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 		// dispatch and persisted revival do, never the spawn-time copy.
 		const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(capture.settings.parent));
 		capture.spec.prompt.reviving = true;
-		// A session-local switch since spawn (a prewalk handoff) owns the model and effort: the
+		// A session-local switch since spawn (a prewalk handoff, a cyber-fallback hop) owns the model and effort: the
 		// transcript restores the effort, and the spawn selection only backs the model up when it is
 		// unavailable. The spawn's prewalk stays configured; the coordinator sees it was spent. A seance
 		// fork's selections belong to its source run, never to the consult.

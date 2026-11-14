@@ -82,7 +82,7 @@ import {
 } from "./retry-fallback-chains";
 import { describeUsageFallback } from "./retry-fallback-reason";
 import { getLatestCompactionEntry } from "./session-context";
-import { EPHEMERAL_MODEL_CHANGE_ROLE, type SessionEntry } from "./session-entries";
+import { CYBER_FALLBACK_MODEL_CHANGE_ROLE, EPHEMERAL_MODEL_CHANGE_ROLE, type SessionEntry } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 import { isUserQueuedMessage } from "./queued-messages";
 import { sameMessageContent, sessionMessagePersistenceKey } from "./turn-persistence";
@@ -2274,7 +2274,14 @@ export class TurnRecovery {
 		role: string,
 		selector: RetryFallbackSelector,
 		currentSelector: string,
-		options?: { pinFallback?: boolean; apiKey?: string; signal?: AbortSignal; reason?: string },
+		options?: {
+			pinFallback?: boolean;
+			apiKey?: string;
+			signal?: AbortSignal;
+			reason?: string;
+			/** Session-entry role recording the hop; defaults to the ephemeral fallback role. */
+			modelChangeRole?: string;
+		},
 	): Promise<boolean> {
 		const resolved = resolveModelOverride([selector.raw], this.#host.modelRegistry, this.#host.settings);
 		const candidate = resolved.model ?? this.#host.modelRegistry.find(selector.provider, selector.id);
@@ -2330,7 +2337,11 @@ export class TurnRecovery {
 			if (this.#activeRetryFallback) this.#activeRetryFallback.served = servedBeforeSwap;
 			return false;
 		}
-		this.#host.sessionManager.appendModelChange(candidateSelector, EPHEMERAL_MODEL_CHANGE_ROLE, true);
+		this.#host.sessionManager.appendModelChange(
+			candidateSelector,
+			options?.modelChangeRole ?? EPHEMERAL_MODEL_CHANGE_ROLE,
+			true,
+		);
 		this.#host.settings.getStorage()?.recordModelUsage(candidateSelector);
 		this.#host.setThinkingLevel(nextThinkingLevel);
 		if (!this.#activeRetryFallback) {
@@ -2362,8 +2373,13 @@ export class TurnRecovery {
 	 * Each entry is resolved through the same selector path a chain entry uses
 	 * (`@role` references and thinking suffixes included), and a model the walk
 	 * has already been refused on this turn is skipped, so a map whose entries
-	 * point back at each other terminates. Returns true when the active model
-	 * switched.
+	 * point back at each other terminates. An entry that cannot take the turn
+	 * (its window cannot hold the context, no credential, cooling down) hands it
+	 * to that model's own map entry, as a refusal on it would: `*opus*: astra`,
+	 * `*astra*: @cyber` reaches `@cyber` when the context outgrew astra. The hop
+	 * is recorded under {@link CYBER_FALLBACK_MODEL_CHANGE_ROLE}, so resume and
+	 * revive keep the session off the refusing model. Returns true when the
+	 * active model switched.
 	 */
 	async #tryCyberFallback(
 		currentSelector: string,
@@ -2372,8 +2388,18 @@ export class TurnRecovery {
 		options?: { preserveFailedTurn?: boolean },
 	): Promise<boolean> {
 		const ceiling = this.#host.thinkingLevelCeiling();
+		const cyberMap = cfgRetryCyberFallbackModels.get(this.#host.settings);
 		const skipped: Array<{ entry: string; reason: string }> = [];
-		for (const entry of match.selectors) {
+		const expandedKeys = new Set([match.key]);
+		const queue = match.selectors.map(entry => ({ entry, key: match.key }));
+		const handOff = (model: Model) => {
+			const next = matchRetryCyberFallbackModels(cyberMap, model);
+			if (!next || expandedKeys.has(next.key)) return;
+			expandedKeys.add(next.key);
+			for (const entry of next.selectors) queue.push({ entry, key: next.key });
+		};
+		for (let index = 0; index < queue.length; index++) {
+			const { entry, key } = queue[index];
 			const resolved = resolveModelOverride([entry], this.#host.modelRegistry, this.#host.settings);
 			const candidate = resolved.model;
 			if (!candidate) {
@@ -2399,6 +2425,7 @@ export class TurnRecovery {
 			}
 			if (reason) {
 				skipped.push({ entry, reason });
+				handOff(candidate);
 				continue;
 			}
 			let apiKey: string | undefined;
@@ -2409,15 +2436,22 @@ export class TurnRecovery {
 			}
 			if (!apiKey) {
 				skipped.push({ entry, reason: "no credential" });
+				handOff(candidate);
 				continue;
 			}
-			const applied = await this.applyRetryFallbackCandidate(match.key, selector, currentSelector, {
+			const applied = await this.applyRetryFallbackCandidate(key, selector, currentSelector, {
 				pinFallback: true,
 				apiKey,
 				reason: `Refused: ${failedMessage.errorMessage ?? "provider classifier refused the turn"}`,
+				modelChangeRole: CYBER_FALLBACK_MODEL_CHANGE_ROLE,
 			});
-			if (applied) return true;
+			if (applied) {
+				if (skipped.length > 0)
+					logger.debug("Cyber fallback skipped entries", { key, from: currentSelector, skipped });
+				return true;
+			}
 			skipped.push({ entry, reason: "switch not applied" });
+			handOff(candidate);
 		}
 		logger.warn("Cyber fallback found no usable model", { key: match.key, from: currentSelector, skipped });
 		return false;

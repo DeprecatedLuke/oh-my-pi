@@ -26,7 +26,7 @@ import type { PlanProposalHandler } from "../tools/resolve";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { PlanYolo, Prewalk } from "./agent-session-types";
 import { PREWALK_PLAN_MESSAGE_TYPE } from "./messages";
-import { PREWALK_MODEL_CHANGE_ROLE } from "./session-entries";
+import { CYBER_FALLBACK_MODEL_CHANGE_ROLE, PREWALK_MODEL_CHANGE_ROLE } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 import { cfgPrewalkAuto } from "./settings";
 const PREWALK_CONTINUE_MESSAGE_TYPE = "prewalk-continue";
@@ -148,13 +148,23 @@ export class PrewalkCoordinator {
 		const prewalk = options.prewalk;
 		const handoff = prewalk ? host.sessionManager.getSessionLocalModelChange() : undefined;
 		// A revived session still on the target its recorded handoff switched to has spent this prewalk;
-		// one that starts elsewhere (an explicit startup model, a fallback) keeps the arm.
+		// one that starts elsewhere (an explicit startup model, a fallback) keeps the arm. A cyber-fallback
+		// hop after the handoff restores onto its replacement, which the spent prewalk must not override.
 		const target = prewalk ? `${prewalk.target.provider}/${prewalk.target.id}` : undefined;
 		const current = host.model();
 		const spent =
-			handoff?.role === PREWALK_MODEL_CHANGE_ROLE &&
-			handoff.model === target &&
-			`${current?.provider}/${current?.id}` === target;
+			(handoff?.role === PREWALK_MODEL_CHANGE_ROLE &&
+				handoff.model === target &&
+				`${current?.provider}/${current?.id}` === target) ||
+			(handoff?.role === CYBER_FALLBACK_MODEL_CHANGE_ROLE &&
+				host.sessionManager
+					.getBranch()
+					.some(
+						entry =>
+							entry.type === "model_change" &&
+							entry.role === PREWALK_MODEL_CHANGE_ROLE &&
+							entry.model === target,
+					));
 		this.#prewalk = spent ? undefined : prewalk;
 		this.#planYolo = options.planYolo;
 		this.#autoSuppressed = options.suppressAutoPrewalk === true;

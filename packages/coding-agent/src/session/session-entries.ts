@@ -39,6 +39,22 @@ export const EPHEMERAL_MODEL_CHANGE_ROLE = "fallback";
 /** A prewalk or plan-yolo handoff: restored on resume, passed over when looking up the assigned role. */
 export const PREWALK_MODEL_CHANGE_ROLE = "prewalk";
 
+/**
+ * A `retry.cyberFallbackModels` hop. The refused model would refuse the same
+ * context again, so unlike a plain fallback hop it is restored on resume and
+ * revive; passed over when looking up the assigned role.
+ */
+export const CYBER_FALLBACK_MODEL_CHANGE_ROLE = "cyber-fallback";
+
+/** Whether `role` records a switch rather than a role assignment. */
+export function isTransientModelChangeRole(role: string): boolean {
+	return (
+		role === EPHEMERAL_MODEL_CHANGE_ROLE ||
+		role === PREWALK_MODEL_CHANGE_ROLE ||
+		role === CYBER_FALLBACK_MODEL_CHANGE_ROLE
+	);
+}
+
 export interface SessionHeader {
 	type: "session";
 	version?: number; // v1 sessions don't have this

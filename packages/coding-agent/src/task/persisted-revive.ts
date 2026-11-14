@@ -400,7 +400,7 @@ export async function revivePersistedSubagent(spec: PersistedReviveSpec, expecte
 		: init.modelRole && init.modelRole !== "default"
 			? [formatModelRoleAlias(init.modelRole), ...(init.resolvedModel ? [init.resolvedModel] : [])]
 			: init.resolvedModel;
-	// A session-local switch since spawn (a prewalk handoff) is the model the agent
+	// A session-local switch since spawn (a prewalk handoff, a cyber-fallback hop) is the model the agent
 	// was working on; the spawn selection only backs it up when it is unavailable. A
 	// seance fork's selections belong to its source run, never to the consult.
 	const sessionLocalModel = restoredSeance ? undefined : reopened.getSessionLocalModelChange()?.model;
