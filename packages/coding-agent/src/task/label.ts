@@ -2,7 +2,9 @@
  * Tiny-model UI labels for spawned subagents.
  */
 import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { cfgOffline } from "../config/auxiliary-model-policy";
 import type { ModelRegistry } from "../config/model-registry";
+import { resolveModelOverride } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import taskLabelSystemPrompt from "../prompts/system/task-label.md" with { type: "text" };
 import { generateSessionTitle } from "../utils/title-generator";
@@ -29,6 +31,10 @@ export interface TaskLabelOptions {
 	obfuscate?: (text: string) => string;
 	/** Restores placeholders the label model echoed, so the UI shows real values instead of tokens. */
 	deobfuscate?: (text: string) => string;
+	/** Parent's active model selector; offline mode labels with it. */
+	parentActiveModelPattern?: string;
+	/** Parent's active provider; the offline label model must share it. */
+	parentActiveProvider?: string;
 }
 
 /** Compresses a delegated assignment into a one-sentence UI label via the tiny title model — fired by the executor spawn path because the task wire schema no longer carries a `description`; null on empty input or failure. */
@@ -41,12 +47,20 @@ export async function generateTaskLabel(
 	const text = assignment.trim();
 	if (!text) return null;
 	try {
+		const resolvedModel =
+			cfgOffline.get(settings) && options.parentActiveModelPattern
+				? resolveModelOverride([options.parentActiveModelPattern], registry, settings, { exactOnly: true }).model
+				: undefined;
+		const currentModel =
+			resolvedModel && (!options.parentActiveProvider || resolvedModel.provider === options.parentActiveProvider)
+				? resolvedModel
+				: undefined;
 		const label = await generateSessionTitle(
 			options.obfuscate?.(text) ?? text,
 			registry,
 			settings,
 			options.sessionId,
-			undefined,
+			currentModel,
 			undefined,
 			TASK_LABEL_SYSTEM_PROMPT,
 			options.signal,

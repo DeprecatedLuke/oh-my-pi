@@ -25,6 +25,7 @@ export function startSharpshooterScheduler(options: {
 	sessionId: string;
 	/** Live session secret redactor applied to consolidation model input. */
 	obfuscate?: (text: string) => string;
+	getSessionProvider?: () => string | undefined;
 }): () => void {
 	const bankDir = sharpshooterBankDir(options.agentDir, options.cwd);
 	const existing = schedulers.get(bankDir);
