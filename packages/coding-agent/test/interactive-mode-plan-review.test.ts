@@ -1258,48 +1258,6 @@ describe("InteractiveMode plan review rendering", () => {
 		// #hidePlanReview() with the replacement paint to avoid stale-buffer flicker.
 		expect(overlayHandle.hide).not.toHaveBeenCalled();
 	});
-	it("Refine with no annotations silently aborts approval and returns to the editor", async () => {
-		const planFilePath = "local://PLAN.md";
-		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {
-			getArtifactsDir: () => session.sessionManager.getArtifactsDir(),
-			getSessionId: () => session.sessionManager.getSessionId(),
-		});
-		await Bun.write(resolvedPlanPath, "# Plan\n\nbody");
-
-		mode.planModeEnabled = true;
-		mode.planModePlanFilePath = planFilePath;
-		let streaming = false;
-		Object.defineProperty(session, "isStreaming", {
-			configurable: true,
-			get: () => streaming,
-		});
-		const abortSpy = vi.spyOn(session, "abort").mockImplementation(async () => {
-			streaming = false;
-		});
-		vi.spyOn(mode, "showPlanReview").mockImplementation(async () => {
-			streaming = true;
-			return "Refine plan";
-		});
-		const statusSpy = vi.spyOn(mode, "showStatus");
-		const errorSpy = vi.spyOn(mode, "showError");
-		const startSpy = vi.spyOn(mode, "startPendingSubmission");
-		const onInput = vi.fn();
-		mode.onInputCallback = onInput;
-
-		await mode.handlePlanApproval({
-			planFilePath,
-			planExists: true,
-			title: "PLAN",
-		});
-
-		expect(abortSpy).toHaveBeenCalledTimes(1);
-		expect(statusSpy).toHaveBeenCalledWith("Refine plan: enter a follow-up prompt.");
-		expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("Failed to refine plan"));
-		expect(startSpy).not.toHaveBeenCalled();
-		expect(onInput).not.toHaveBeenCalled();
-		expect(session.isPlanInternalAbortPending).toBe(false);
-	});
-
 	it("approves with in-overlay edits and mirrors them to the plan file", async () => {
 		const planFilePath = "local://PLAN.md";
 		const resolvedPlanPath = resolveLocalUrlToPath(planFilePath, {

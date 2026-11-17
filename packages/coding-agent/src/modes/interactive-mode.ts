@@ -3368,7 +3368,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Background jobs still running: don't fire the goal continuation yet.
 		// Their completion delivers a follow-up turn whose agent_end re-schedules
 		// this, so the goal resumes once background work has settled.
-		if (this.session.hasPendingAsyncWork()) return;
+		if (this.session.isRunActive) return;
 		const prompt = this.session.goalRuntime.buildContinuationPrompt();
 		if (!prompt) return;
 		this.#goalContinuationTimer = setTimeout(() => {
@@ -3429,7 +3429,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.session.isStreaming ||
 			this.session.isCompacting ||
 			this.session.hasPostPromptWork ||
-			this.session.hasPendingAsyncWork()
+			this.session.isRunActive
 		);
 	}
 
@@ -5776,7 +5776,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Preserve refusal-ending turns as transcripts for later analysis. */
 	async #saveRefusalDump(event: AgentSessionEvent): Promise<void> {
-		if (event.type !== "agent_end" || event.isTerminal === false) return;
+		if (event.type !== "agent_end") return;
 		const refusal = this.session.getLastAssistantMessage();
 		if (!refusal || !isRefusalMessage(refusal)) return;
 		try {

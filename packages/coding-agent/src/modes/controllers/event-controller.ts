@@ -2984,9 +2984,6 @@ export class EventController {
 	}
 
 	sendCompletionNotification(event: Extract<AgentSessionEvent, { type: "agent_end" }>): void {
-		// A nonterminal agent_end (scheduled continuation) must never produce a
-		// completion notification — the turn is still in progress.
-		if (event.isTerminal === false) return;
 		const notify = cfgCompletionNotify.get(settings);
 		if (notify === "off") return;
 

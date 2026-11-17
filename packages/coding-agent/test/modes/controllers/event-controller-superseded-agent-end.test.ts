@@ -28,7 +28,6 @@ function createContext(options: { viewSessionIsMain?: boolean } = {}) {
 				return streamState.mainRunActive;
 			},
 			getToolByName: () => undefined,
-			hasPendingAsyncWork: () => false,
 			get isStreaming() {
 				return streamState.viewIsStreaming;
 			},

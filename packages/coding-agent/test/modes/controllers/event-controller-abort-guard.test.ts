@@ -89,11 +89,9 @@ function makeTurnEndContext(options: { lastAssistantMessage?: AssistantMessage }
 		sessionManager: { getSessionName: () => "test-session" },
 		session: {
 			getAsyncJobSnapshot: () => null,
-			hasPendingAsyncWork: () => false,
 		},
 		viewSession: {
 			getLastAssistantMessage: () => options.lastAssistantMessage,
-			hasPendingAsyncWork: () => false,
 			getAsyncJobSnapshot: () => null,
 		},
 	});
@@ -208,26 +206,20 @@ describe("EventController.sendErrorNotification", () => {
 });
 
 describe("EventController — notifications through the real turn-end path (#handleAgentEnd)", () => {
-	it("suppresses a nonterminal normal stop and notifies exactly once on the terminal settle in desktop mode", async () => {
+	it("suppresses a mid-run pause and notifies exactly once on the run's agent_end in desktop mode", async () => {
 		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
 		cfgCompletionNotify.override(settings, "on");
 		const controller = new EventController(makeTurnEndContext());
 
-		await controller.handleEvent({
-			...makeAgentEndEvent([makeAssistantMessage("stop")]),
-			isTerminal: false,
-		} as Extract<AgentSessionEvent, { type: "agent_end" }>);
+		await controller.handleEvent(agentPause(true));
 		expect(notify).not.toHaveBeenCalled();
 
-		await controller.handleEvent({
-			...makeAgentEndEvent([makeAssistantMessage("stop")]),
-			isTerminal: true,
-		} as Extract<AgentSessionEvent, { type: "agent_end" }>);
+		await controller.handleEvent(makeAgentEndEvent([makeAssistantMessage("stop")]));
 		expect(notify).toHaveBeenCalledTimes(1);
 		expect(notify).toHaveBeenCalledWith(expect.objectContaining({ body: "Complete", type: "completion" }));
 	});
 
-	it("suppresses a nonterminal normal stop and uses the terminal bell protocol on the legacy terminal settle", async () => {
+	it("suppresses a mid-run pause and uses the terminal bell protocol on the run's agent_end", async () => {
 		mutableTerminal.notifyProtocol = NotifyProtocol.Bell;
 		const formatted: string[] = [];
 		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(message => {
@@ -236,13 +228,9 @@ describe("EventController — notifications through the real turn-end path (#han
 		cfgCompletionNotify.override(settings, "on");
 		const controller = new EventController(makeTurnEndContext());
 
-		await controller.handleEvent({
-			...makeAgentEndEvent([makeAssistantMessage("stop")]),
-			isTerminal: false,
-		} as Extract<AgentSessionEvent, { type: "agent_end" }>);
+		await controller.handleEvent(agentPause(true));
 		expect(notify).not.toHaveBeenCalled();
 
-		// Undefined isTerminal is the legacy terminal event shape.
 		await controller.handleEvent(makeAgentEndEvent([makeAssistantMessage("stop")]));
 		expect(notify).toHaveBeenCalledTimes(1);
 		expect(formatted).toEqual([NotifyProtocol.Bell]);

@@ -88,11 +88,10 @@ it("redacts the spawning session's project secret from a subagent running in ano
 	const authStorage = createInMemoryAuthStorage();
 	authStorage.keys.setRuntime("mock", "test-key");
 	const modelRegistry = new ModelRegistry(authStorage);
+	const isChildTurn = (tools: readonly { name: string }[] | undefined) =>
+		(tools ?? []).some(tool => tool.name === "read");
 	const mock = createMockModel({
-		handler: context =>
-			(context.tools ?? []).some(tool => tool.name === "yield")
-				? { content: [{ type: "toolCall", name: "yield", arguments: { type: "result", data: "done" } }] }
-				: { content: ["label"] },
+		handler: context => ({ content: [isChildTurn(context.tools) ? "done" : "label"] }),
 	});
 	const catalogAvailable = modelRegistry.getAvailable.bind(modelRegistry);
 	vi.spyOn(modelRegistry, "getAvailable").mockImplementation(kind => [mock, ...catalogAvailable(kind)]);
@@ -150,9 +149,9 @@ it("redacts the spawning session's project secret from a subagent running in ano
 		});
 		expect(result.exitCode).toBe(0);
 
-		// The subagent's own turns are the ones offered the `yield` tool.
+		// The subagent's own turns are the ones offered its `read` tool.
 		const childRequests = mock.calls
-			.filter(call => (call.context.tools ?? []).some(tool => tool.name === "yield"))
+			.filter(call => isChildTurn(call.context.tools))
 			.map(call => JSON.stringify(call.context.messages));
 		expect(childRequests.length).toBeGreaterThan(0);
 		expect(childRequests.some(request => request.includes("Rotate the deploy token"))).toBe(true);

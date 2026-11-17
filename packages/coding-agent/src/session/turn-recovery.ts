@@ -3294,7 +3294,7 @@ export class TurnRecovery {
 		// A refusal of a request that carried none would only be refused again.
 		const sessionId = this.#host.sessionManager.getSessionId();
 		const stripDemotedReasoning =
-			classifierRefusal &&
+			cyberRefusal &&
 			!retryBudgetExhausted &&
 			message.stopDetails?.category === "reasoning_extraction" &&
 			(message.demotedReasoningBlocks ?? 0) > 0 &&

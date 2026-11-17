@@ -33,7 +33,6 @@ function createContext(options: { terminalProgress?: boolean } = {}) {
 				return streamState.isStreaming;
 			},
 			getToolByName: () => undefined,
-			hasPendingAsyncWork: () => false,
 		},
 	});
 	const { statusContainer } = ctx;

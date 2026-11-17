@@ -41,7 +41,7 @@ import { hasWaitTool } from "../tools/wait";
 import { isIrcEnabled } from "../irc/messaging";
 import { isReadOnlyAgent } from "./read-only-policy";
 import { formatTaskResultSummary } from "./result-summary";
-import { isScoutSpawnable, type ResolvedSpawnPolicy, resolveSpawnPolicy } from "./spawn-policy";
+import { isScoutSpawnable, resolveSpawnPolicy } from "./spawn-policy";
 import {
 	type AgentDefinition,
 	canSpawnAtDepth,
