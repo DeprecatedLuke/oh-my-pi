@@ -1,6 +1,7 @@
 import type { Agent, AgentMessage, AgentToolResult, AgentTurnEndContext } from "@oh-my-pi/pi-agent-core";
 import { invalidateMessageCache } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import type { AutoPrewalkDecision } from "../auto-prewalk/classifier";
 import { cfgOffline } from "../config/auxiliary-model-policy";
@@ -89,7 +90,11 @@ export interface PrewalkCoordinatorHost {
 	/** Judges a new task for `prewalk.auto`; undefined when there is nothing to judge. */
 	classifyAutoPrewalk(request: string, signal: AbortSignal): Promise<AutoPrewalkDecision | undefined>;
 	emitNotice(level: "info" | "warning" | "error", message: string, source?: string): void;
-	setModelTemporary(model: Model, thinkingLevel?: ConfiguredThinkingLevel): Promise<void>;
+	setModelTemporary(
+		model: Model,
+		thinkingLevel?: ConfiguredThinkingLevel,
+		isCurrent?: () => boolean,
+	): Promise<boolean>;
 	setActiveToolsByName(names: string[]): Promise<void>;
 	restoreNonMCPToolPresentation(
 		nonMCPToolNames: string[],
@@ -140,6 +145,9 @@ export class PrewalkCoordinator {
 	#planYoloPreviousNonMCPPresentation: { enabled: string[]; mounted: string[]; registered: string[] } | undefined;
 	#planYoloArmed = false;
 	#handoff: PrewalkHandoff | undefined;
+	#selectionEpoch = 0;
+	/** The arm whose switch is in flight; `disarm()` clears it to cancel that switch and report it itself. */
+	#switching: Prewalk | undefined;
 	/** The pending arm `prewalk.auto` made, as opposed to a manual or configured one. */
 	#autoArm: Prewalk | undefined;
 	/** Session-local opt-out from auto-prewalk: `/prewalk off`, or `--no-prewalk` at startup. `/new` clears it. */
@@ -200,8 +208,16 @@ export class PrewalkCoordinator {
 		this.#todoSeen = false;
 	}
 
-	/** A later model/effort selection owns the active model, even if its identity is unchanged. */
+	/**
+	 * A later model/effort selection owns the active model, even if its identity is unchanged: it drops the handoff,
+	 * cancels a pending auto arm, and supersedes any prewalk switch still in flight. Manual and configured arms stay.
+	 */
 	releaseHandoff(): void {
+		this.#selectionEpoch++;
+		if (this.#autoArm && this.#autoArm === this.#prewalk) {
+			this.#scrubPlanNudge(undefined, true);
+			this.#clearPrewalkState();
+		}
 		this.#handoff = undefined;
 	}
 
@@ -209,10 +225,7 @@ export class PrewalkCoordinator {
 	async resetForNewSession(enabled: boolean): Promise<void> {
 		const handoff = this.#handoff;
 		this.#autoSuppressed = false;
-		const restoreSource =
-			handoff !== undefined &&
-			(enabled || (handoff.auto && this.#autoMode() === "on")) &&
-			this.#onHandoffTarget(handoff);
+		const restoreSource = handoff !== undefined && (enabled || handoff.auto) && this.#onHandoffTarget(handoff);
 		this.#scrubPlanNudge(undefined, true);
 		this.#clearPrewalkState();
 		this.releaseHandoff();
@@ -242,11 +255,17 @@ export class PrewalkCoordinator {
 
 	async #restoreSource(handoff: PrewalkHandoff): Promise<void> {
 		if (cfgOffline.get(this.#host.settings) && handoff.source.provider !== this.#host.model()?.provider) return;
+		const epoch = this.#selectionEpoch;
 		try {
-			await this.#host.setModelTemporary(handoff.source, handoff.sourceThinkingLevel);
+			// A selection made while the planning model loads owns the session; do not override it.
+			const restored = await this.#host.setModelTemporary(
+				handoff.source,
+				handoff.sourceThinkingLevel,
+				() => this.#selectionEpoch === epoch,
+			);
 			// Temporary selection treats undefined as "keep/default"; restoration must preserve
 			// the original selector, including auto or an explicitly inherited effort.
-			this.#host.restoreThinkingLevel(handoff.sourceThinkingLevel);
+			if (restored) this.#host.restoreThinkingLevel(handoff.sourceThinkingLevel);
 		} catch (error) {
 			this.#host.emitNotice(
 				"warning",
@@ -268,12 +287,11 @@ export class PrewalkCoordinator {
 	}
 
 	/**
-	 * Starts a new user task under `prewalk.auto: on`. An auto handoff belongs to the task that armed it, so the
+	 * Starts a new user task. An auto handoff belongs to the task that armed it, so the
 	 * session returns to that task's planning model unless a later explicit selection took ownership. An auto arm
 	 * the previous task never used is dropped so this task is judged on its own. Manual and configured arms stay.
 	 */
 	async beginAutoTask(): Promise<void> {
-		if (this.#autoMode() !== "on") return;
 		if (this.#autoArm && this.#autoArm === this.#prewalk) {
 			this.#scrubPlanNudge(undefined, true);
 			this.#clearPrewalkState();
@@ -393,8 +411,10 @@ export class PrewalkCoordinator {
 		}
 
 		await this.#host.waitForSessionMessagePersistence(context.message);
+		if (this.#prewalk !== prewalk) return;
 		for (const toolResult of context.toolResults) {
 			await this.#host.waitForSessionMessagePersistence(toolResult);
+			if (this.#prewalk !== prewalk) return;
 		}
 		this.#scrubPlanNudge(liveMessages);
 		const target = prewalk.target;
@@ -417,8 +437,38 @@ export class PrewalkCoordinator {
 		}
 		const sourceThinkingLevel = this.#host.configuredThinkingLevel();
 		const auto = this.#autoArm === prewalk;
-		await this.#host.setModelTemporary(target, prewalk.thinkingLevel);
-		this.#clearPrewalkState();
+		const epoch = this.#selectionEpoch;
+		this.#switching = prewalk;
+		const switched = await this.#host.setModelTemporary(
+			target,
+			prewalk.thinkingLevel,
+			() => this.#selectionEpoch === epoch,
+		);
+		const disarmed = this.#switching !== prewalk;
+		this.#switching = undefined;
+		// A newer arm (a re-run `/prewalk`) survives; otherwise this switch consumes its arm.
+		const replaced = this.#prewalk !== undefined && this.#prewalk !== prewalk;
+		if (!replaced) this.#clearPrewalkState();
+		if (!switched) {
+			// `disarm()` already reported its cancellation, and a newer arm owns what comes next.
+			if (disarmed || replaced) return;
+			if (!modelsAreEqual(this.#host.model(), target)) {
+				this.#host.emitNotice(
+					"info",
+					`Prewalk: cancelled the switch to ${target.provider}/${target.id}; the model or thinking level changed while it was switching.`,
+					"prewalk",
+				);
+				return;
+			}
+			// The target landed, but a selection during the switch took ownership: implement here, never restore.
+			this.#host.emitNotice(
+				"info",
+				`Prewalk: switched to ${target.provider}/${target.id} after first ${action.toolName} call; your selection during the switch keeps the session here.`,
+				"prewalk",
+			);
+			this.#steerChecklist();
+			return;
+		}
 		if (source) {
 			this.#handoff = {
 				source,
@@ -465,6 +515,11 @@ export class PrewalkCoordinator {
 		if (!active) return;
 		this.#scrubPlanNudge(undefined, true);
 		this.#clearPrewalkState();
+		if (this.#switching === active) {
+			// Cancel the switch in flight; it stays silent because this notice already reports it.
+			this.#switching = undefined;
+			this.#selectionEpoch++;
+		}
 		this.#host.emitNotice(
 			"info",
 			`Prewalk: disarmed; staying on the active model instead of switching to ${active.target.provider}/${active.target.id}.`,

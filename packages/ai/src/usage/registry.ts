@@ -12,6 +12,7 @@ import { googleGeminiCliUsageProvider } from "./gemini";
 import { githubCopilotUsageProvider } from "./github-copilot";
 import { antigravityRankingStrategy, antigravityUsageProvider } from "./google-antigravity";
 import { kimiRankingStrategy, kimiUsageProvider } from "./kimi";
+import { kiroRankingStrategy, kiroUsageProvider } from "./kiro";
 import { museCodeUsageProvider } from "./muse-code";
 import { minimaxCodeUsageProvider } from "./minimax-code";
 import { mistralUsageProvider } from "./mistral";
@@ -51,6 +52,7 @@ export const DEFAULT_USAGE_PROVIDERS: readonly UsageProvider[] = [
 	charmHyperUsageProvider,
 	commandCodeUsageProvider,
 	mistralUsageProvider,
+	kiroUsageProvider,
 ];
 
 const DEFAULT_USAGE_PROVIDER_MAP = new Map<Provider, UsageProvider>(
@@ -74,6 +76,7 @@ const DEFAULT_RANKING_STRATEGIES = new Map<Provider, CredentialRankingStrategy>(
 	["opencode-go", opencodeGoRankingStrategy],
 	["xai-oauth", xaiOauthRankingStrategy],
 	["commandcode", commandCodeRankingStrategy],
+	["kiro", kiroRankingStrategy],
 ]);
 
 /** Built-in ranking strategy for `provider`. */
