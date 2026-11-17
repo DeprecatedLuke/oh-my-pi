@@ -407,7 +407,7 @@ export async function revivePersistedSubagent(spec: PersistedReviveSpec, expecte
 		({ session } = await createAgentSession({
 			cwd: spec.root.sessionManager.getCwd(),
 			// A revived agent redacts with the root session's secret set, not its own cwd's.
-			code transformer: spec.root.code transformer,
+			obfuscator: spec.root.obfuscator,
 			costGate: spec.costGate,
 			authStorage: spec.authStorage,
 			// Revived agents join the root session tree, so their observability
