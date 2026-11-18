@@ -17,13 +17,14 @@ import { TodoTool, type ToolSession, USER_TODO_EDIT_CUSTOM_TYPE } from "@oh-my-p
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 import { cfgTodoEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import eagerTaskPrompt from "../src/prompts/system/eager-task.md" with { type: "text" };
 
 // Re-injecting eager preludes after compaction: the first-message preludes are the
 // oldest messages, so compaction summarizes them away and the agent silently loses
 // the delegate-via-tasks / phased-todo guidance. The post-compaction auto-continuation
 // turn must carry the gated reminders again (reminder-only — never a forced tool_choice).
 
-const TASK_DELEGATION_MARKER = "Task delegation enabled";
+const EAGER_TASK_REMINDER = eagerTaskPrompt.trim();
 
 type ObservedPromptCall = {
 	callIndex: number;
@@ -223,7 +224,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 				const call: ObservedPromptCall = {
 					callIndex: observedCalls.length,
 					toolChoice: getToolChoiceName(options?.toolChoice),
-					messageTexts: context.messages.map(message => getMessageText(message)),
+					messageTexts: context.messages.map(message => getMessageText(message).trim()),
 				};
 				observedCalls.push(call);
 				for (let i = waiters.length - 1; i >= 0; i--) {
@@ -302,9 +303,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 
 		const continuation = await runToContinuation(session, waitForCall);
 
-		const reminder = continuation.messageTexts.find(text => text.includes(TASK_DELEGATION_MARKER));
-		expect(reminder).toBeDefined();
-		expect(reminder).toContain("`task`");
+		expect(continuation.messageTexts).toContain(EAGER_TASK_REMINDER);
 		// Reminder-only: the post-compaction nudge never forces a tool on the resumed turn.
 		expect(continuation.toolChoice).toBeUndefined();
 	});
@@ -314,7 +313,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 
 		const continuation = await runToContinuation(session, waitForCall);
 
-		expect(continuation.messageTexts.some(text => text.includes(TASK_DELEGATION_MARKER))).toBe(false);
+		expect(continuation.messageTexts).not.toContain(EAGER_TASK_REMINDER);
 	});
 	it("does not re-inject the eager task reminder when task.eager is preferred", async () => {
 		const { session, waitForCall } = await createHarness({ "task.eager": "preferred" });
@@ -322,7 +321,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 
 		const continuation = await runToContinuation(session, waitForCall);
 
-		expect(continuation.messageTexts.some(text => text.includes(TASK_DELEGATION_MARKER))).toBe(false);
+		expect(continuation.messageTexts).not.toContain(EAGER_TASK_REMINDER);
 	});
 	it("does not re-inject the eager task reminder for subagent sessions", async () => {
 		const { session, waitForCall } = await createHarness({}, { agentId: "SubAgent", agentKind: "sub" });
@@ -330,7 +329,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 
 		const continuation = await runToContinuation(session, waitForCall);
 
-		expect(continuation.messageTexts.some(text => text.includes(TASK_DELEGATION_MARKER))).toBe(false);
+		expect(continuation.messageTexts).not.toContain(EAGER_TASK_REMINDER);
 	});
 	it("does not re-inject the eager task reminder in plan mode", async () => {
 		const { session, waitForCall } = await createHarness();
@@ -339,7 +338,7 @@ describe("AgentSession eager prelude re-injection after compaction", () => {
 
 		const continuation = await runToContinuation(session, waitForCall);
 
-		expect(continuation.messageTexts.some(text => text.includes(TASK_DELEGATION_MARKER))).toBe(false);
+		expect(continuation.messageTexts).not.toContain(EAGER_TASK_REMINDER);
 	});
 
 	it("re-injects the eager todo reminder on the auto-continuation turn (todo.eager preferred)", async () => {
