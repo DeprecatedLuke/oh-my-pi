@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Codex models routed through the auth gateway showing no thinking levels and a 272K window when the client's catalog lacks them (e.g. `openai-codex/gpt-6.2-sol`): `/v1/models` now reports `context_window` and the reasoning levels for those models
+
 ## [18.22.1] - 2026-11-17
 
 ### Added
