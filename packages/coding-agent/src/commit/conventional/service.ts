@@ -9,6 +9,7 @@ import { cfgCommit } from "../settings";
 import { discoverAuthStorage, loadCliExtensionProviders } from "../../sdk";
 import { buildSecretObfuscator } from "../../secrets";
 import { cfgSecretsEnabled } from "../../secrets/settings";
+import type { ModelUsageLedger } from "../../session/model-usage-journal";
 import { resolvePrimaryModel, resolveSmolModel } from "../model-selection";
 import type { ConventionalCommit } from "../types";
 import { renderStat } from "../utils";
@@ -31,6 +32,8 @@ export interface GenerateGitCommitOptions {
 	stageIfEmpty?: boolean;
 	onProgress?: CommitProgress;
 	signal?: AbortSignal;
+	/** Session the generation runs inside (the git overlay); the standalone commands have none. */
+	usageLedger?: Partial<ModelUsageLedger>;
 }
 
 /** Conventional commit form values plus staging and validation metadata. */
@@ -120,6 +123,7 @@ async function createOmpInference(
 						deobfuscate: (text: string) => obfuscator.deobfuscate(text),
 					}
 				: {}),
+			usageLedger: options.usageLedger,
 		});
 	} catch (error) {
 		authStorage.close();

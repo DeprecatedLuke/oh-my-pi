@@ -7,7 +7,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import { resolveModelOverride } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import taskLabelSystemPrompt from "../prompts/system/task-label.md" with { type: "text" };
-import { generateSessionTitle } from "../utils/title-generator";
+import { generateSessionTitle, type TitleUsageReporter } from "../utils/title-generator";
 
 const TASK_LABEL_SYSTEM_PROMPT = prompt.render(taskLabelSystemPrompt);
 
@@ -35,6 +35,8 @@ export interface TaskLabelOptions {
 	parentActiveModelPattern?: string;
 	/** Parent's active provider; the offline label model must share it. */
 	parentActiveProvider?: string;
+	/** Receives every request that ran, for the spawning session's usage journal. */
+	onUsage?: TitleUsageReporter;
 }
 
 /** Compresses a delegated assignment into a one-sentence UI label via the tiny title model — fired by the executor spawn path because the task wire schema no longer carries a `description`; null on empty input or failure. */
@@ -64,6 +66,8 @@ export async function generateTaskLabel(
 			undefined,
 			TASK_LABEL_SYSTEM_PROMPT,
 			options.signal,
+			undefined,
+			options.onUsage,
 		);
 		if (!label || labelEchoesHandle(options.sessionId, label)) return null;
 		return options.deobfuscate?.(label) ?? label;

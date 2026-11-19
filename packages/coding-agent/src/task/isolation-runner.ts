@@ -180,7 +180,15 @@ export function makeIsolationCommitMessage(session: ToolSession): BuildCommitMes
 		const sessionId = session.getSessionId?.() ?? undefined;
 		const redaction = { obfuscate: session.obfuscateText, deobfuscate: session.deobfuscateText };
 		return async (diff: string) =>
-			generateCommitMessage(diff, registry, settings, sessionId, session.getActiveModel?.()?.provider, redaction);
+			generateCommitMessage(
+				diff,
+				registry,
+				settings,
+				sessionId,
+				session.getActiveModel?.()?.provider,
+				session.sessionManager,
+				redaction,
+			);
 	};
 }
 

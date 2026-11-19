@@ -19,6 +19,7 @@ import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { cfgOffline } from "../config/auxiliary-model-policy";
 import { resolveRoleSelection } from "../config/model-resolver";
 import type { WritethroughCallback } from "../lsp";
+import { journalCompletion } from "../session/model-usage-journal";
 import type { ToolSession } from "../tools";
 import repairPromptSource from "./auto-repair.md" with { type: "text" };
 import type { AppliedEditSnapshot } from "./blackbox";
@@ -382,6 +383,7 @@ export async function attemptEditAutoRepair(options: {
 	const complete = async (builtPrompt: string): Promise<string> => {
 		// The region and its neighbors come from disk and can hold configured secrets.
 		const content = session.obfuscateText ? session.obfuscateText(builtPrompt) : builtPrompt;
+		const journal = journalCompletion(session.sessionManager, { purpose: "edit-repair", role: "smol" });
 		const response = await retryTransientCompletion(
 			async () => {
 				session.costGate?.admit();
@@ -397,6 +399,7 @@ export async function attemptEditAutoRepair(options: {
 					},
 				);
 				session.costGate?.record(attempt.usage.cost.total);
+				journal?.(attempt, builtPrompt);
 				return attempt;
 			},
 			{ signal, provider: model.provider },

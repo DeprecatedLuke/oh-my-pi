@@ -10,7 +10,7 @@ export interface AsyncJobsChangedPayload {
 
 /** Forward process-global background-job changes to extensions bound to the root session. */
 export function forwardAsyncJobChanges(jobManager: AsyncJobManager, eventBus: EventBus): () => void {
-	return jobManager.onChange(() => {
+	return jobManager.onJobsChanged(() => {
 		eventBus.emit(ASYNC_JOBS_CHANGED_CHANNEL, {
 			running: jobManager.getRunningJobs().length,
 		} satisfies AsyncJobsChangedPayload);

@@ -400,6 +400,7 @@ export class EventController {
 						obfuscate: text => session.obfuscateTextForProvider(text),
 						deobfuscate: text => session.obfuscator?.deobfuscate(text) ?? text,
 						getSessionProvider: () => session.model?.provider,
+						usageLedger: session.sessionManager,
 					})
 				: null,
 		);

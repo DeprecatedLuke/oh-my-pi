@@ -156,6 +156,7 @@ export class PatchTool implements AgentTool<typeof patchSchema, PatchToolDetails
 								this.session.settings,
 								this.session.getSessionId?.() ?? undefined,
 								this.session.getActiveModel?.()?.provider,
+								this.session.sessionManager,
 								{ obfuscate: this.session.obfuscateText, deobfuscate: this.session.deobfuscateText },
 							);
 						},

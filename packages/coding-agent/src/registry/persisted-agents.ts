@@ -5,7 +5,7 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { ADVISOR_TRANSCRIPT_FILENAME, isAdvisorTranscriptName } from "../advisor/transcript-recorder";
 import { resolveExplicitModelRole } from "../config/model-resolver";
 import { assistantTurnProducedOutput, usageContextTokens } from "../session/messages";
-import { isTransientModelChangeRole } from "../session/session-entries";
+import { modelRoleOf } from "../session/session-entries";
 import { readSessionHeaderId, visitEntriesFromFileStream } from "../session/session-loader";
 import { loadBundledAgents } from "../task/agents";
 import { isReadOnlyAgent } from "../task/read-only-policy";
@@ -267,9 +267,7 @@ async function readPersistedAgentHistory(
 		const modelChange = modelChangeById.get(id);
 		if (modelChange) {
 			latestModelChange ??= modelChange;
-			if (modelChange.role && !isTransientModelChangeRole(modelChange.role)) {
-				modelRole ??= modelChange.role;
-			}
+			modelRole ??= modelRoleOf(modelChange.role);
 			// The transition that installed the serving model: it carries the
 			// fallback flag the raw message lacks. Every writer records the selector
 			// through `formatModelStringWithRouting`, which appends an `@upstream`
@@ -366,9 +364,8 @@ async function readPersistedAgentMetadata(
 				}
 				if (record.type === "model_change") {
 					if (typeof record.model === "string") history.resolvedModel = record.model;
-					if (typeof record.role === "string" && !isTransientModelChangeRole(record.role)) {
-						history.modelRole = record.role;
-					}
+					const role = modelRoleOf(typeof record.role === "string" ? record.role : undefined);
+					if (role) history.modelRole = role;
 					if (typeof record.resolvedModelIsFallback === "boolean") {
 						history.resolvedModelIsFallback = record.resolvedModelIsFallback;
 					}

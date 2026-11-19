@@ -2,6 +2,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, ApiKey, AuthStorage, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { toError } from "@oh-my-pi/pi-utils";
+import { journalCompletion, type ModelUsageLedger } from "../../session/model-usage-journal";
 import { toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
 import type { ResolvedCommitModel } from "../model-selection";
 import { extractTextContent } from "../utils";
@@ -54,6 +55,7 @@ export class OmpCommitInference implements CommitInference {
 	readonly #signal?: AbortSignal;
 	readonly #obfuscate?: (text: string) => string;
 	readonly #deobfuscate?: (text: string) => string;
+	readonly #usageLedger?: Partial<ModelUsageLedger>;
 	readonly #sessionId = Bun.randomUUIDv7();
 
 	constructor(options: {
@@ -70,6 +72,8 @@ export class OmpCommitInference implements CommitInference {
 		obfuscate?: (text: string) => string;
 		/** Restores placeholders the model echoed back so commits never contain them. */
 		deobfuscate?: (text: string) => string;
+		/** Session that asked for the commit; each billed request is journaled there as `commit:<operation>`. */
+		usageLedger?: Partial<ModelUsageLedger>;
 	}) {
 		const secondary = options.forcePrimaryForEveryRole ? options.primary : options.smol;
 		this.#targets = {
@@ -85,6 +89,7 @@ export class OmpCommitInference implements CommitInference {
 		this.#signal = options.signal;
 		this.#obfuscate = options.obfuscate;
 		this.#deobfuscate = options.deobfuscate;
+		this.#usageLedger = options.usageLedger;
 	}
 
 	/** Run one request with cache lookup, parse validation, and exponential retries. */
@@ -123,6 +128,8 @@ export class OmpCommitInference implements CommitInference {
 			user: userPrompt,
 			reasoning,
 		});
+		// Created after the cache lookup: a cache hit sends nothing and journals nothing.
+		const journal = journalCompletion(this.#usageLedger, { purpose: `commit:${request.operation}` });
 		let lastError: Error | undefined;
 		for (let attempt = 1; attempt <= Math.max(1, this.#config.maxRetries); attempt += 1) {
 			this.#signal?.throwIfAborted();
@@ -145,6 +152,8 @@ export class OmpCommitInference implements CommitInference {
 						signal,
 					},
 				);
+				// Before the checks below: a provider error or an unparseable reply was billed as well.
+				journal?.(message, request.userPrompt);
 				responseText = extractTextContent(message);
 				if (message.stopReason === "error") throw new Error(message.errorMessage ?? "Provider error");
 				if (!responseText.trim()) throw new Error("Empty model response");

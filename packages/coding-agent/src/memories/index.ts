@@ -27,6 +27,7 @@ import readPathTemplate from "../prompts/memories/read-path.md" with { type: "te
 import stageOneInputTemplate from "../prompts/memories/stage_one_input.md" with { type: "text" };
 import stageOneSystemTemplate from "../prompts/memories/stage_one_system.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
+import { journalCompletion } from "../session/model-usage-journal";
 import {
 	claimStage1Jobs,
 	clearMemoryData as clearMemoryDataInDb,
@@ -923,6 +924,8 @@ async function runStage1Job(options: {
 			response_items_json: truncatedItems,
 		});
 
+		// Billed to the session running the pipeline, whichever thread the rollout belongs to.
+		const journal = journalCompletion(options.session.sessionManager, { purpose: "memory:extract" });
 		const response = await retryTransientCompletion(
 			() => {
 				if (cfgOffline.get(options.session.settings) && options.session.model?.provider !== model.provider) {
@@ -943,6 +946,7 @@ async function runStage1Job(options: {
 						// OpenAI chat-completions owns its transient retries in the HTTP
 						// transport; never restart that budget at the provider/oneshot layers.
 						maxHttpAttempts: model.api === "openai-completions" ? 3 : undefined,
+						onAttempt: message => journal?.(message, inputPrompt),
 					},
 				);
 			},
@@ -1078,6 +1082,7 @@ async function runConsolidationModel(options: {
 		rollout_summaries: truncateByApproxTokens(rolloutSummaries, 12_000),
 	});
 
+	const journal = journalCompletion(options.session.sessionManager, { purpose: "memory:consolidate" });
 	const response = await retryTransientCompletion(
 		() => {
 			if (cfgOffline.get(options.session.settings) && options.session.model?.provider !== model.provider) {
@@ -1096,6 +1101,7 @@ async function runConsolidationModel(options: {
 					maxTokens: 8192,
 					reasoning: clampThinkingLevelForModel(model, Effort.Medium),
 					maxHttpAttempts: model.api === "openai-completions" ? 3 : undefined,
+					onAttempt: message => journal?.(message, input),
 				},
 			);
 		},

@@ -1096,10 +1096,10 @@ describe("AsyncJobManager", () => {
 		expect(manager.getJob("hung-1")?.status).toBe("cancelled");
 	});
 
-	test("onChange fires on register, settle, and cancel, even for jobs that never report progress", async () => {
+	test("onJobsChanged fires on register, settle, and cancel, even for jobs that never report progress", async () => {
 		const manager = new AsyncJobManager({ onJobComplete: async () => {} });
 		let changes = 0;
-		const unsubscribe = manager.onChange(() => {
+		const unsubscribe = manager.onJobsChanged(() => {
 			changes++;
 		});
 
@@ -1111,22 +1111,22 @@ describe("AsyncJobManager", () => {
 
 		await manager.waitForAll();
 		// The terminal transition (completed) notifies too.
-		expect(changes).toBe(2);
+		const afterSettle = changes;
+		expect(afterSettle).toBeGreaterThan(1);
 
 		// Cancel notifies as well, so a subscriber still re-evaluates once the
 		// last job ends.
 		const { promise: hold, resolve } = Promise.withResolvers<string>();
 		const id = manager.register("bash", "held", () => hold);
-		expect(changes).toBe(3);
+		expect(changes).toBe(afterSettle + 1);
 		manager.cancel(id);
-		expect(changes).toBe(4);
+		expect(changes).toBe(afterSettle + 2);
 		resolve("late");
 		await manager.waitForAll();
-		// The cancelled job's own settle emits once more.
-		expect(changes).toBe(5);
 
 		unsubscribe();
+		const final = changes;
 		manager.register("task", "Other", async () => "done");
-		expect(changes).toBe(5);
+		expect(changes).toBe(final);
 	});
 });

@@ -181,7 +181,7 @@ describe("dotenv file secrets", () => {
 
 		const selected = await tool.execute("partial-dotenv", { path: `${relativePath}:1:raw` });
 		const selectedText = getTextOutput(selected);
-		expect(selectedText).toBe(`VPN_TOKEN=${visibleSecret}`);
+		expect(selectedText).toBe(`VPN_TOKEN=${visibleSecret}\n`);
 		const selectedOutbound = outboundReadText(obfuscator, selectedText);
 		expect(selectedOutbound).not.toContain(visibleSecret);
 		expect(obfuscator.deobfuscate(selectedOutbound)).toBe(selectedText);
