@@ -19,18 +19,15 @@ import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme } from "../../../src/ui/theme/service";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import * as titleGenerator from "@oh-my-pi/pi-coding-agent/utils/title-generator";
-import { NotifyProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
+import * as terminalSession from "@oh-my-pi/pi-tui/driver/session";
 import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
 
 import { cfgCompletionNotify, cfgErrorNotify } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 const originalWarpProtocolVersion = process.env.WARP_CLI_AGENT_PROTOCOL_VERSION;
-const originalNotifyProtocol = TERMINAL.notifyProtocol;
-// TerminalInfo's runtime clone is writable even though constructor fields are readonly.
-const mutableTerminal = TERMINAL as unknown as { notifyProtocol: NotifyProtocol };
 
 function restoreWarpProtocolEnvironment(): void {
 	if (originalWarpProtocolVersion === undefined) {
@@ -56,7 +53,6 @@ afterEach(() => {
 	vi.restoreAllMocks();
 	resetSettingsForTest();
 	restoreWarpProtocolEnvironment();
-	mutableTerminal.notifyProtocol = originalNotifyProtocol;
 });
 
 type StopReason = "stop" | "aborted" | "error";
@@ -87,19 +83,15 @@ function makeAgentEndEvent(messages: AssistantMessage[]): Extract<AgentSessionEv
 function makeTurnEndContext(options: { lastAssistantMessage?: AssistantMessage } = {}) {
 	return createInteractiveModeContext({
 		sessionManager: { getSessionName: () => "test-session" },
-		session: {
-			getAsyncJobSnapshot: () => null,
-		},
 		viewSession: {
 			getLastAssistantMessage: () => options.lastAssistantMessage,
-			getAsyncJobSnapshot: () => null,
 		},
 	});
 }
 
 describe("EventController.sendCompletionNotification — abort guard", () => {
 	it("skips notification when the terminal assistant message stopReason === 'aborted'", () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgCompletionNotify.override(settings, "on");
 		const controller = new EventController(makeContext());
 		controller.sendCompletionNotification(makeAgentEndEvent([makeAssistantMessage("aborted")]));
@@ -107,7 +99,7 @@ describe("EventController.sendCompletionNotification — abort guard", () => {
 	});
 
 	it("skips notification when the terminal assistant message stopReason === 'error'", () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgCompletionNotify.override(settings, "on");
 		const controller = new EventController(makeContext());
 		controller.sendCompletionNotification(makeAgentEndEvent([makeAssistantMessage("error")]));
@@ -115,7 +107,7 @@ describe("EventController.sendCompletionNotification — abort guard", () => {
 	});
 
 	it("fires notification when stopReason === 'stop' (normal completion)", () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgCompletionNotify.override(settings, "on");
 		const controller = new EventController(makeContext());
 		controller.sendCompletionNotification(makeAgentEndEvent([makeAssistantMessage("stop")]));
@@ -126,7 +118,7 @@ describe("EventController.sendCompletionNotification — abort guard", () => {
 
 	it("fires notification when agent_end carries no assistant message (e.g. brand-new session)", () => {
 		// Defensive: `findLast` returns undefined; treat as 'no abort flag', proceed.
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgCompletionNotify.override(settings, "on");
 		const controller = new EventController(makeContext());
 		controller.sendCompletionNotification(makeAgentEndEvent([]));
@@ -134,7 +126,7 @@ describe("EventController.sendCompletionNotification — abort guard", () => {
 	});
 
 	it("honors the existing completion.notify=off gate", () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgCompletionNotify.override(settings, "off");
 		const controller = new EventController(makeContext());
 		controller.sendCompletionNotification(makeAgentEndEvent([makeAssistantMessage("stop")]));
@@ -142,7 +134,7 @@ describe("EventController.sendCompletionNotification — abort guard", () => {
 	});
 
 	it("skips legacy completion notify when Warp CLI-agent protocol is active", () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgCompletionNotify.override(settings, "on");
 		process.env.WARP_CLI_AGENT_PROTOCOL_VERSION = "1";
 		const controller = new EventController(makeContext());
@@ -153,7 +145,7 @@ describe("EventController.sendCompletionNotification — abort guard", () => {
 
 describe("EventController.sendErrorNotification", () => {
 	it("fires an error notification when stopReason === 'error'", () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgErrorNotify.override(settings, "on");
 		const controller = new EventController(makeContext());
 		controller.sendErrorNotification(makeAgentEndEvent([makeAssistantMessage("error")]));
@@ -164,7 +156,7 @@ describe("EventController.sendErrorNotification", () => {
 	});
 
 	it("uses the last assistant message when agent_end carries multiple messages", () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgErrorNotify.override(settings, "on");
 		const controller = new EventController(makeContext());
 		controller.sendErrorNotification(
@@ -174,7 +166,7 @@ describe("EventController.sendErrorNotification", () => {
 	});
 
 	it("honors error.notify=off without changing completion notifications", () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgErrorNotify.override(settings, "off");
 		cfgCompletionNotify.override(settings, "on");
 
@@ -189,7 +181,7 @@ describe("EventController.sendErrorNotification", () => {
 	});
 
 	it("skips user-aborted turns", () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgErrorNotify.override(settings, "on");
 		const controller = new EventController(makeContext());
 		controller.sendErrorNotification(makeAgentEndEvent([makeAssistantMessage("aborted")]));
@@ -197,7 +189,7 @@ describe("EventController.sendErrorNotification", () => {
 	});
 
 	it("skips normal completion turns", () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgErrorNotify.override(settings, "on");
 		const controller = new EventController(makeContext());
 		controller.sendErrorNotification(makeAgentEndEvent([makeAssistantMessage("stop")]));
@@ -207,7 +199,7 @@ describe("EventController.sendErrorNotification", () => {
 
 describe("EventController — notifications through the real turn-end path (#handleAgentEnd)", () => {
 	it("suppresses a mid-run pause and notifies exactly once on the run's agent_end in desktop mode", async () => {
-		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const notify = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgCompletionNotify.override(settings, "on");
 		const controller = new EventController(makeTurnEndContext());
 
@@ -219,24 +211,32 @@ describe("EventController — notifications through the real turn-end path (#han
 		expect(notify).toHaveBeenCalledWith(expect.objectContaining({ body: "Complete", type: "completion" }));
 	});
 
-	it("suppresses a mid-run pause and uses the terminal bell protocol on the run's agent_end", async () => {
-		mutableTerminal.notifyProtocol = NotifyProtocol.Bell;
-		const formatted: string[] = [];
-		const notify = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(message => {
-			formatted.push(TERMINAL.formatNotification(message));
-		});
-		cfgCompletionNotify.override(settings, "on");
+	it("rings the terminal bell exactly once on the run's agent_end when completion.notify is 'bell'", async () => {
+		const notify = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
+		const bell = vi.spyOn(terminalSession, "ringTerminalBell").mockImplementation(() => {});
+		cfgCompletionNotify.override(settings, "bell");
 		const controller = new EventController(makeTurnEndContext());
 
 		await controller.handleEvent(agentPause(true));
-		expect(notify).not.toHaveBeenCalled();
+		expect(bell).not.toHaveBeenCalled();
 
 		await controller.handleEvent(makeAgentEndEvent([makeAssistantMessage("stop")]));
-		expect(notify).toHaveBeenCalledTimes(1);
-		expect(formatted).toEqual([NotifyProtocol.Bell]);
+		expect(bell).toHaveBeenCalledTimes(1);
+		expect(notify).not.toHaveBeenCalled();
 	});
+
+	it("does not ring the bell for an aborted or errored turn when completion.notify is 'bell'", async () => {
+		const bell = vi.spyOn(terminalSession, "ringTerminalBell").mockImplementation(() => {});
+		cfgCompletionNotify.override(settings, "bell");
+		const controller = new EventController(makeTurnEndContext());
+
+		await controller.handleEvent(makeAgentEndEvent([makeAssistantMessage("aborted")]));
+		await controller.handleEvent(makeAgentEndEvent([makeAssistantMessage("error")]));
+		expect(bell).not.toHaveBeenCalled();
+	});
+
 	it("fires the error notification when the dispatched turn settles with stopReason === 'error', even with a stale active-context snapshot", async () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgErrorNotify.override(settings, "on");
 		cfgCompletionNotify.override(settings, "off");
 		// viewSession (active context) reports no assistant at all — the shape a
@@ -249,7 +249,7 @@ describe("EventController — notifications through the real turn-end path (#han
 	});
 
 	it("skips the error notification when the dispatched turn settles with stopReason === 'aborted'", async () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgErrorNotify.override(settings, "on");
 		cfgCompletionNotify.override(settings, "off");
 		const controller = new EventController(makeTurnEndContext());
@@ -262,7 +262,7 @@ describe("EventController — notifications through the real turn-end path (#han
 		// a classifier-refusal turn's stale active context must not let
 		// sendCompletionNotification's own stopReason check pass by reading a
 		// different (non-error) snapshot than sendErrorNotification just used.
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgErrorNotify.override(settings, "on");
 		cfgCompletionNotify.override(settings, "on");
 		const controller = new EventController(makeTurnEndContext({ lastAssistantMessage: undefined }));
@@ -274,7 +274,7 @@ describe("EventController — notifications through the real turn-end path (#han
 
 describe("EventController — error toast gated while auto-retry is pending", () => {
 	it("keeps retry suppression when the next attempt starts before a deferred failed agent_end settles", async () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgErrorNotify.override(settings, "on");
 		const controller = new EventController(makeTurnEndContext());
 
@@ -292,7 +292,7 @@ describe("EventController — error toast gated while auto-retry is pending", ()
 	});
 
 	it("clears a retry latch when the view retargets to a session that is not retrying", async () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgErrorNotify.override(settings, "on");
 		const controller = new EventController(makeTurnEndContext());
 
@@ -310,7 +310,7 @@ describe("EventController — error toast gated while auto-retry is pending", ()
 	});
 
 	it("fires no error toast at all when the retry recovers", async () => {
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgErrorNotify.override(settings, "on");
 		cfgCompletionNotify.override(settings, "off");
 		const controller = new EventController(makeTurnEndContext());
@@ -340,7 +340,7 @@ describe("EventController — error toast gated while auto-retry is pending", ()
 		// whether a retry settled — only `auto_retry_end` can. Two agent_ends
 		// landing back-to-back with no `auto_retry_end` between them must both
 		// stay suppressed.
-		const spy = vi.spyOn(TERMINAL, "sendNotification").mockImplementation(() => {});
+		const spy = vi.spyOn(terminalSession, "notifyTerminal").mockImplementation(() => {});
 		cfgErrorNotify.override(settings, "on");
 		cfgCompletionNotify.override(settings, "off");
 		const controller = new EventController(makeTurnEndContext());

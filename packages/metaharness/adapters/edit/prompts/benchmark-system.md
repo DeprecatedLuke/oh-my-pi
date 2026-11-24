@@ -14,9 +14,17 @@ This benchmark is scored on exactness. Get the edit right.
 - The workspace is isolated: most import paths and other files do not exist. Do not waste turns resolving imports or types — read the target file, make the edit, stop. If the file genuinely lacks the information needed to restore deleted code, one quick directory listing (`read .`) is fine; do not go further.
 {{#if multiFile}}- Only modify the file(s) referenced by the task or follow-up messages. Leave all other files unchanged.
 {{/if}}
+{{#if shellEdits}}
+## Editing with bash
+- Use the smallest unique anchor: replace only the changed span plus enough context to be unique. Ambiguity requires parent context, NEVER retry the bare text.
+- NEVER retype unchanged lines, whole blocks, or whole files; NEVER rebuild a file from line slices.
+- Read narrowly (`rg -n`, `sed -n 'A,Bp'`); NEVER re-print text you already saw.
+- Apply each change once; NEVER re-run an edit that succeeded. Re-check only the changed region.
+
+{{/if}}
 ## Process
 - Treat the first user message as the task definition.
 - Treat later follow-up messages as incremental retry context for the same task.
 - Use follow-up guidance to correct the previous attempt without forgetting the original task.
 
-{{instructions}}
+{{#if editTool}}Apply the fix with the edit or vim tool.{{else}}Apply the fix.{{/if}} Read a file first only when the change needs text or line tags the task does not already give you.

@@ -22,6 +22,7 @@ import { conversationDumpRelativePath } from "./dump-path";
 import benchmarkRetryPrompt from "./prompts/benchmark-retry.md" with { type: "text" };
 import benchmarkSystemPrompt from "./prompts/benchmark-system.md" with { type: "text" };
 import benchmarkTaskPrompt from "./prompts/benchmark-task.md" with { type: "text" };
+import { createScratch } from "./scratch";
 import type { EditTask } from "@oh-my-pi/typescript-edit-benchmark/tasks";
 import {
 	verifyExpectedFileSubset,
@@ -30,7 +31,8 @@ import {
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..", "..", "..");
 const RUNS_DIR = path.join(REPO_ROOT, "runs");
-const TMP = path.join(RUNS_DIR, `rb-${Math.random().toString(36).slice(2, 10)}`);
+/** This process's run logs. They record every run's edit payloads, so no task works under it. */
+const LOG_DIR = path.join(RUNS_DIR, `rb-${Math.random().toString(36).slice(2, 10)}`);
 const CLI_PATH = Bun.fileURLToPath(import.meta.resolve("@oh-my-pi/pi-coding-agent/cli"));
 
 function formatLogPath(logFile: string): string {
@@ -72,14 +74,7 @@ interface BenchmarkClient {
 	dispose(): Promise<void>;
 }
 
-fs.mkdirSync(TMP, { recursive: true });
-
-let n = 0;
-function subtmp(pre: string): string {
-	const dir = path.join(TMP, `${pre}-${n++}`);
-	fs.mkdirSync(dir);
-	return dir;
-}
+fs.mkdirSync(LOG_DIR, { recursive: true });
 
 export interface BenchmarkConfig {
 	provider: string;
@@ -97,6 +92,8 @@ export interface BenchmarkConfig {
 	autoFormat?: boolean;
 	/** If true, abort the agent loop as soon as the formatted file content matches the expected fixture. Default: true. */
 	earlyStopOnMatch?: boolean;
+	/** Tools exposed to the model. Default: {@link BENCHMARK_TOOL_NAMES}. */
+	tools?: string[];
 	editVariant?: string;
 	editFuzzy?: boolean | "auto";
 	editFuzzyThreshold?: number | "auto";
@@ -266,8 +263,13 @@ function isEditTool(toolName: unknown): toolName is (typeof EDIT_TOOL_NAMES)[num
 	return toolName === "edit" || toolName === "vim" || toolName === "apply_patch";
 }
 
+/** Shell calls count as mutations: in a bash-only tool set they are the only way to edit. */
 function isMutationTool(toolName: unknown): boolean {
-	return isEditTool(toolName) || toolName === "write";
+	return isEditTool(toolName) || toolName === "write" || toolName === "bash";
+}
+
+function benchmarkTools(config: BenchmarkConfig): string[] {
+	return config.tools ?? [...BENCHMARK_TOOL_NAMES];
 }
 
 /**
@@ -689,21 +691,17 @@ async function buildGuidedContext(
 	].join("\n\n");
 }
 
-function buildInstructions(config: BenchmarkConfig): string {
-	return config.noEditRequired
-		? "Read the relevant files first, then apply the fix."
-		: "Read the relevant files first, then use the edit or vim tool to apply the fix.";
-}
-
 type BenchmarkPromptDelivery = {
 	kind: "prompt" | "followUp";
 	message: string;
 };
 
 function buildBenchmarkSystemPrompt(params: { multiFile: boolean; config: BenchmarkConfig }): string {
+	const tools = benchmarkTools(params.config);
 	return prompt.render(benchmarkSystemPrompt, {
 		multiFile: params.multiFile,
-		instructions: buildInstructions(params.config),
+		shellEdits: tools.includes("bash") && !tools.some(isEditTool),
+		editTool: !params.config.noEditRequired && tools.some(isEditTool),
 	});
 }
 
@@ -792,7 +790,7 @@ function buildBenchmarkRpcArgs(config: BenchmarkConfig, multiFile: boolean, prov
 		"--append-system-prompt",
 		buildBenchmarkSystemPrompt({ multiFile, config }),
 		"--tools",
-		BENCHMARK_TOOL_NAMES.join(","),
+		benchmarkTools(config).join(","),
 		"--no-skills",
 		"--no-title",
 		"--no-rules",
@@ -803,6 +801,7 @@ function buildBenchmarkRpcArgs(config: BenchmarkConfig, multiFile: boolean, prov
 export interface TokenStats {
 	input: number;
 	output: number;
+	/** Thinking tokens, a subset of `output`; see {@link measureThinkingTokens}. */
 	reasoning: number;
 	total: number;
 }
@@ -1060,9 +1059,10 @@ async function runSingleTask(
 		editAutocorrects: 0,
 		totalInputChars: 0,
 	};
+	let bashCalls = 0;
 	const hashlineSubtypes: Record<string, number> = {};
 
-	const logFile = path.join(TMP, `run-${task.id}-${runIndex}.jsonl`);
+	const logFile = path.join(LOG_DIR, `run-${task.id}-${runIndex}.jsonl`);
 	const logEvent = async (event: unknown) => {
 		await fs.promises.appendFile(logFile, `${JSON.stringify(event)}\n`);
 	};
@@ -1071,13 +1071,6 @@ async function runSingleTask(
 	let zeroToolRetries = 0;
 	let providerFailureRetries = 0;
 
-	const previousEnv = {
-		PI_EDIT_VARIANT: process.env.PI_EDIT_VARIANT,
-		PI_EDIT_FUZZY: process.env.PI_EDIT_FUZZY,
-		PI_EDIT_FUZZY_THRESHOLD: process.env.PI_EDIT_FUZZY_THRESHOLD,
-		PI_STRICT_EDIT_MODE: process.env.PI_STRICT_EDIT_MODE,
-		PI_NO_TITLE: process.env.PI_NO_TITLE,
-	};
 	try {
 		const sessionSetup = await prepareBenchmarkSessionSetup({
 			config,
@@ -1088,17 +1081,8 @@ async function runSingleTask(
 		});
 		await fs.promises.appendFile(
 			logFile,
-			`{"type":"meta","task":"${task.id}","run":${runIndex},"workDir":"${cwd}","providerSessionId":${JSON.stringify(sessionSetup.providerSessionId)}}\n`,
+			`{"type":"meta","task":"${task.id}","run":${runIndex},"providerSessionId":${JSON.stringify(sessionSetup.providerSessionId)}}\n`,
 		);
-
-		if (config.editVariant !== undefined) process.env.PI_EDIT_VARIANT = config.editVariant;
-		if (config.editFuzzy !== undefined)
-			process.env.PI_EDIT_FUZZY = config.editFuzzy === "auto" ? "auto" : config.editFuzzy ? "1" : "0";
-		if (config.editFuzzyThreshold !== undefined)
-			process.env.PI_EDIT_FUZZY_THRESHOLD =
-				config.editFuzzyThreshold === "auto" ? "auto" : String(config.editFuzzyThreshold);
-		process.env.PI_STRICT_EDIT_MODE = "1";
-		process.env.PI_NO_TITLE = "1";
 
 		const useInProcess = config.inProcess !== false;
 		const client: BenchmarkClient = useInProcess
@@ -1106,7 +1090,7 @@ async function runSingleTask(
 					cwd,
 					model: config.model,
 					appendSystemPrompt: buildBenchmarkSystemPrompt({ multiFile: false, config }),
-					tools: [...BENCHMARK_TOOL_NAMES],
+					tools: benchmarkTools(config),
 					editVariant: config.editVariant,
 					editFuzzy: config.editFuzzy,
 					editFuzzyThreshold: config.editFuzzyThreshold,
@@ -1227,7 +1211,7 @@ async function runSingleTask(
 				tokens = {
 					input: tokens.input + attemptTokens.input,
 					output: tokens.output + attemptTokens.output,
-					reasoning: tokens.reasoning + attemptTokens.reasoning,
+					reasoning: tokens.reasoning + measureThinkingTokens(events),
 					total: tokens.total + attemptTokens.total,
 				};
 				await logEvent({ type: "stats", before: statsBefore, after: statsAfter, attempt: attempt + 1 });
@@ -1300,6 +1284,8 @@ async function runSingleTask(
 								pendingEdits.set(e.toolCallId, { args: e.args, rawBlock: rawToolBlocks.get(e.toolCallId) });
 						} else if (toolName === "write") {
 							toolStats.write++;
+						} else if (toolName === "bash") {
+							bashCalls++;
 						}
 
 						// Count input chars from args
@@ -1354,7 +1340,7 @@ async function runSingleTask(
 				// Retry if the model didn't attempt any edit/write (read-only or no tool calls).
 				// But first check if the file is already correct — a previous timed-out
 				// attempt's edit may have applied successfully before the timeout fired.
-				const madeEditAttempt = toolStats.edit > 0 || toolStats.write > 0;
+				const madeEditAttempt = toolStats.edit > 0 || toolStats.write > 0 || bashCalls > 0;
 				if (!madeEditAttempt && zeroToolRetries < noOpRetryLimit) {
 					const earlyVerification = await verifyExpectedFiles(expectedDir, cwd);
 					if (earlyVerification.success) {
@@ -1411,20 +1397,6 @@ async function runSingleTask(
 	} catch (err) {
 		error = err instanceof Error ? err.message : String(err);
 		await logEvent({ type: "error", error });
-	} finally {
-		const restoreEnvKey = (key: keyof typeof previousEnv) => {
-			const value = previousEnv[key];
-			if (value === undefined) {
-				delete process.env[key];
-			} else {
-				process.env[key] = value;
-			}
-		};
-		restoreEnvKey("PI_EDIT_VARIANT");
-		restoreEnvKey("PI_EDIT_FUZZY");
-		restoreEnvKey("PI_EDIT_FUZZY_THRESHOLD");
-		restoreEnvKey("PI_STRICT_EDIT_MODE");
-		restoreEnvKey("PI_NO_TITLE");
 	}
 
 	const duration = Date.now() - startTime;
@@ -1771,7 +1743,40 @@ function estimateTokens(text: string): number {
 	return Math.ceil(text.length / 4);
 }
 
-function diffTokenStats(before: SessionTokenStats, after: SessionTokenStats, systemPromptTokens: number): TokenStats {
+/**
+ * Thinking tokens across an attempt's assistant turns. A provider-reported
+ * `usage.reasoningTokens` counts as is (OpenAI, xAI, Gemini, OpenRouter).
+ * Anthropic bills thinking inside `output` without a separate count, so a turn
+ * that carries thinking blocks but no count contributes `output` minus the
+ * estimated tokens of its text and tool-call arguments.
+ */
+function measureThinkingTokens(events: ReadonlyArray<{ type: string; [key: string]: unknown }>): number {
+	let total = 0;
+	for (const event of events) {
+		if (event.type !== "message_end") continue;
+		const message = event.message as AgentMessage | undefined;
+		if (message?.role !== "assistant") continue;
+		const reported = message.usage.reasoningTokens ?? 0;
+		if (reported > 0) {
+			total += reported;
+			continue;
+		}
+		if (!message.content.some(block => block.type === "thinking")) continue;
+		let visibleChars = 0;
+		for (const block of message.content) {
+			if (block.type === "text") visibleChars += block.text.length;
+			else if (block.type === "toolCall") visibleChars += block.name.length + JSON.stringify(block.arguments).length;
+		}
+		total += Math.max(0, message.usage.output - Math.ceil(visibleChars / 4));
+	}
+	return total;
+}
+
+function diffTokenStats(
+	before: SessionTokenStats,
+	after: SessionTokenStats,
+	systemPromptTokens: number,
+): Omit<TokenStats, "reasoning"> {
 	// `input` here is the total prompt tokens delivered to the model on the wire,
 	// summed across all four buckets the providers expose: non-cached input,
 	// cacheRead, cacheWrite. Summing makes the metric comparable across providers
@@ -1788,13 +1793,12 @@ function diffTokenStats(before: SessionTokenStats, after: SessionTokenStats, sys
 	const afterPrompt = after.tokens.input + after.tokens.cacheRead + after.tokens.cacheWrite;
 	const input = Math.max(0, afterPrompt - beforePrompt - overhead);
 	const output = Math.max(0, after.tokens.output - before.tokens.output);
-	const reasoning = Math.max(0, after.tokens.reasoning - before.tokens.reasoning);
 	const total = input + output;
-	return { input, output, reasoning, total };
+	return { input, output, total };
 }
 
 type SessionTokenStats = {
-	tokens: { input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number };
+	tokens: { input: number; output: number; cacheRead: number; cacheWrite: number };
 	assistantMessages: number;
 };
 
@@ -1912,12 +1916,12 @@ async function runConcurrentBenchmarkRun(
 	onProgress?: (event: ProgressEvent) => void,
 	shared?: SharedInfra,
 ): Promise<{ task: EditTask; result: TaskRunResult }> {
-	const workDir = subtmp(item.task.id);
+	const work = await createScratch();
 
 	try {
-		await copyFixtures(item.task, workDir);
+		await copyFixtures(item.task, work.dir);
 		onProgress?.({ taskId: item.task.id, runIndex: item.runIndex, status: "started" });
-		const result = await runSingleTask(item.task, item.runIndex, config, workDir, item.task.expectedDir, shared);
+		const result = await runSingleTask(item.task, item.runIndex, config, work.dir, item.task.expectedDir, shared);
 		onProgress?.({ taskId: item.task.id, runIndex: item.runIndex, status: "completed", result });
 		return { task: item.task, result };
 	} catch (err) {
@@ -1925,6 +1929,9 @@ async function runConcurrentBenchmarkRun(
 		const result = buildFailureResult(item, message);
 		onProgress?.({ taskId: item.task.id, runIndex: item.runIndex, status: "completed", result });
 		return { task: item.task, result };
+	} finally {
+		// A finished run's files hold the answer for its task's other runs.
+		await work.remove();
 	}
 }
 
@@ -2147,6 +2154,35 @@ export function buildBenchmarkResult(params: {
 	};
 }
 
+/**
+ * Pin the edit tool and session flags for every run of a benchmark; returns the undo.
+ *
+ * The environment is process-wide and these values are constant for a benchmark, so
+ * they are applied once around all runs. Setting and restoring them per run lets one
+ * run's teardown unpin the mode under its concurrent siblings, whose edit tool then
+ * follows the per-model fallback (`resolveEditMode`) in the middle of a conversation.
+ */
+function pinBenchmarkEnv(config: BenchmarkConfig): () => void {
+	const undo: Array<() => void> = [];
+	const pin = (key: string, value: string | undefined) => {
+		if (value === undefined) return;
+		const previous = process.env[key];
+		process.env[key] = value;
+		undo.push(() => {
+			if (previous === undefined) delete process.env[key];
+			else process.env[key] = previous;
+		});
+	};
+	pin("PI_EDIT_VARIANT", config.editVariant);
+	pin("PI_EDIT_FUZZY", typeof config.editFuzzy === "boolean" ? (config.editFuzzy ? "1" : "0") : config.editFuzzy);
+	pin("PI_EDIT_FUZZY_THRESHOLD", config.editFuzzyThreshold?.toString());
+	pin("PI_STRICT_EDIT_MODE", "1");
+	pin("PI_NO_TITLE", "1");
+	return () => {
+		for (const restore of undo) restore();
+	};
+}
+
 export async function runBenchmark(
 	tasks: EditTask[],
 	config: BenchmarkConfig,
@@ -2154,18 +2190,18 @@ export async function runBenchmark(
 	onResultSnapshot?: (result: BenchmarkResult) => void,
 ): Promise<BenchmarkResult> {
 	const startTime = new Date().toISOString();
+	const unpinEnv = pinBenchmarkEnv(config);
+	let shared: SharedInfra | undefined;
 
-	// Discover shared infrastructure once for in-process mode
-	const useInProcess = config.inProcess !== false;
-	const shared = useInProcess
-		? await discoverSharedInfra({
+	try {
+		// Discover shared infrastructure once for in-process mode
+		if (config.inProcess !== false) {
+			shared = await discoverSharedInfra({
 				editVariant: config.editVariant,
 				editFuzzy: config.editFuzzy,
 				editFuzzyThreshold: config.editFuzzyThreshold,
-			})
-		: undefined;
-
-	try {
+			});
+		}
 		const runsPerTask = Math.max(1, Math.floor(config.runsPerTask));
 		const taskQueue = shuffle(tasks.slice());
 		const resultsByTask = new Map<string, TaskRunResult[]>();
@@ -2210,5 +2246,6 @@ export async function runBenchmark(
 		return buildBenchmarkResult({ tasks, config, resultsByTask, startTime });
 	} finally {
 		shared?.authStorage.close();
+		unpinEnv();
 	}
 }

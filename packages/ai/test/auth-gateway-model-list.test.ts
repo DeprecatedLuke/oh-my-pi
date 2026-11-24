@@ -84,23 +84,26 @@ test("model listing exposes one provider-qualified route per upstream model", as
 
 test("pi-native Codex discovery through the gateway keeps reasoning and the window for ids missing from the bundled openai-codex catalog", async () => {
 	const ladder = [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max];
+	// A codex id newer than the bundled catalog (modeled on the bundled
+	// `openai/gpt-6.2-sol` spec), next to a bundled openai-codex reasoning model
+	// that has its own ladder.
+	const unknownId = "gpt-6.9-sol";
 	const openaiSol = getBundledModel("openai", "gpt-6.2-sol");
 	const bundledCodex = getBundledModel("openai-codex", "gpt-6.1-sol");
-	// Preconditions: the unknown id exists only under `openai`, and the known id
-	// is a bundled openai-codex reasoning model with its own ladder.
-	expect(getBundledModel("openai-codex", "gpt-6.2-sol")).toBeUndefined();
+	expect(getBundledModel("openai-codex", unknownId)).toBeUndefined();
 	expect(openaiSol).toBeDefined();
 	expect(bundledCodex?.thinking?.efforts?.length).toBeGreaterThan(0);
 
 	const unknownCodex: Model<Api> = {
 		...openaiSol,
+		id: unknownId,
 		provider: "openai-codex",
 		api: "openai-codex-responses",
 		reasoning: true,
 		thinking: { mode: "effort", efforts: ladder },
 		contextWindow: 1_050_000,
 	};
-	const otherProvider = createMockModel({ provider: "anthropic", id: "gpt-6.2-sol" });
+	const otherProvider = createMockModel({ provider: "anthropic", id: unknownId });
 
 	await withGateway([unknownCodex, { ...bundledCodex }, otherProvider], async url => {
 		const listing = (await (await fetch(`${url}/v1/models`)).json()) as {
@@ -127,9 +130,9 @@ test("pi-native Codex discovery through the gateway keeps reasoning and the wind
 			}),
 		});
 		const byId = new Map(discovered?.models.map(spec => [spec.id, buildModel(spec)]));
-		expect([...byId.keys()].sort()).toEqual(["gpt-6.1-sol", "gpt-6.2-sol"]);
+		expect([...byId.keys()].sort()).toEqual(["gpt-6.1-sol", unknownId].sort());
 
-		const sol = byId.get("gpt-6.2-sol");
+		const sol = byId.get(unknownId);
 		expect(sol?.reasoning).toBe(true);
 		expect(sol?.thinking?.efforts).toEqual(ladder);
 		expect(sol?.contextWindow).toBe(1_050_000);

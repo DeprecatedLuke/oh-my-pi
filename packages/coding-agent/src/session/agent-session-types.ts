@@ -21,7 +21,7 @@ import type {
 	ToolChoice,
 } from "@oh-my-pi/pi-ai";
 import type { postmortem } from "@oh-my-pi/pi-utils";
-import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+import type { AdvisorConfig } from "../advisor/advisor-config-types";
 import type { AsyncJob, AsyncJobDeliveryState, AsyncJobManager, AsyncJobManagerApi } from "../async";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import type { AgentDefinition } from "../task/types";
@@ -32,7 +32,7 @@ import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import type { SkillsSettings } from "../extensibility/settings";
 import type { CursorMcpResourceAdapter } from "../cursor";
-import type { RawSseDebugBuffer } from "@oh-my-pi/pi-tui/apps/debug/raw-sse-buffer";
+import type { RawSseDebugBuffer } from "../debug/raw-sse-buffer";
 import type { EvalPreludeDefinition } from "../eval/preludes";
 import type { TtsrManager } from "../export/ttsr";
 import type { LoadedCustomCommand } from "../extensibility/custom-commands";
@@ -46,11 +46,13 @@ import type { MCPEvalNamespaceCatalog } from "../mcp/eval-namespaces";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import type { FileSlashCommand } from "../extensibility/slash-commands";
 import type { SecretObfuscator } from "../secrets/obfuscator";
-import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
-import type { JobWidgetView } from "@oh-my-pi/pi-tui/tools/job-widget";
-import type { SystemPromptSources } from "@oh-my-pi/pi-tui/status-line/context-usage";
+import type { ConfiguredThinkingLevel } from "../utils/render-utils";
+import type { ShellStream } from "../tools/shell-steps";
+import type { JobWidgetView } from "../tools/details/job-widget";
+import type { ShellTrace } from "@oh-my-pi/pi-wire";
+import type { SystemPromptSources } from "./context-usage";
 import type { ToolSession } from "../tools";
-import type { XdevState } from "../tools/xdev";
+import type { ToolCommandState } from "../tools/tool-commands";
 import type { EventBus } from "../utils/event-bus";
 import type { CodexAutoRedeemCoordinator } from "./codex-auto-reset";
 import type { SettingsGatedToolDelta, SystemPromptRebuilder } from "./session-tools";
@@ -108,10 +110,16 @@ export interface AsyncJobInspection {
 	exitCode?: number;
 	/** Output tail while running; the final result or error text once settled. */
 	output?: string;
+	/** Milliseconds since the UNIX epoch the command last wrote its own output; undefined before it wrote. */
+	outputModified?: number;
 	/** Artifact holding the full output when `output` is cut. */
 	artifactId?: string;
 	/** The job's live widget (frozen once it settles). */
 	widget?: JobWidgetView;
+	/** The command's shell trace (`AsyncJobProcess.trace`): what of it runs now, ran and failed. */
+	trace?: ShellTrace;
+	/** Where the command's output goes besides `output`: its tapped pipes and redirected files, oldest first. */
+	streams?: readonly ShellStream[];
 }
 
 /** Snapshot of running, recent, and pending-delivery asynchronous jobs. */
@@ -217,6 +225,8 @@ export interface AgentSessionConfig {
 	inheritedSessionAgents?: readonly AgentDefinition[];
 	/** Models to cycle through with Ctrl+P (from --models flag). */
 	scopedModels?: Array<{ model: Model; thinkingLevel?: ThinkingLevel }>;
+	/** Whether the cycle scope is derived from enabledModels rather than supplied explicitly. */
+	scopedModelsFromSettings?: boolean;
 	/** Initial session thinking selector. */
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Hard ceiling on the session's thinking effort (e.g. a task spawn's `task.maxEffort`-capped hint); every later change, including retry-fallback recovery, is re-clamped to it. */
@@ -316,20 +326,17 @@ export interface AgentSessionConfig {
 	createVibeTools?: () => AgentTool[];
 	/** Names whose current registry entry is the built-in implementation. */
 	builtInToolNames?: Iterable<string>;
+	/**
+	 * Whether a native built-in of this name survives behind a same-name
+	 * extension override; the tool-command transport needs one to run commands.
+	 */
+	hasNativeTool?: (name: string) => boolean;
 	/** MCP names whose initial registry entries came from the manager snapshot. */
 	mcpManagerToolNames?: Iterable<string>;
 	/** Reconcile browser MCP connections after browser prelude availability changes. */
 	reconcileBrowserMcpFilter?: (enabled: boolean) => Promise<CustomTool[]>;
 	/** Updates tool-session predicates from the live active tool set. */
 	setActiveToolNames?: (names: Iterable<string>) => void;
-	/** Registers the built-in write transport when it is needed at runtime. */
-	ensureWriteRegistered?: () => Promise<boolean>;
-	/** Reports whether the registered write tool is currently transport-only. */
-	isDeviceOnlyWrite?: () => boolean;
-	/** Switches the registered write tool between transport-only and full access. */
-	setDeviceOnlyWrite?: (enabled: boolean) => void;
-	/** Previews the full-write description without changing execution access. */
-	setPendingFullWriteDescription?: (enabled: boolean) => void;
 	/** Registers the hidden `goal` tool when goal mode is enabled at runtime. */
 	ensureGoalRegistered?: () => Promise<boolean>;
 	/** Re-resolves settings-gated tools against live settings; driven by `SessionTools.reconcileBuiltinTools`. */
@@ -364,10 +371,10 @@ export interface AgentSessionConfig {
 	rebuildSystemPrompt?: SystemPromptRebuilder;
 	/** Sources of the initial base prompt, as returned by `buildSystemPrompt`. */
 	systemPromptSources?: SystemPromptSources;
-	/** Tools mounted under `xd://`, for `/tools` display. */
-	getXdevToolEntries?: () => Array<{ name: string; summary: string }>;
-	/** `xd://` presentation state backed by the canonical tool map. */
-	xdev?: XdevState;
+	/** Tools mounted as bash commands, for `/tools` display. */
+	getToolCommandEntries?: () => Array<{ name: string; summary: string }>;
+	/** Tool command presentation state backed by the canonical tool map. */
+	toolCommands?: ToolCommandState;
 	/** Names pinned top-level during runtime repartitioning. */
 	presentationPinnedToolNames?: ReadonlySet<string>;
 	/** Whether enabled MCP tools present as eval namespaces (`mcp.evalNamespaces`); read at every apply. */
@@ -576,8 +583,8 @@ export interface RoleModelCycleResult {
 	role: string;
 }
 
-import type { ResolvedRoleModel } from "@oh-my-pi/pi-tui/overlays/model-picker";
-export type { ResolvedRoleModel } from "@oh-my-pi/pi-tui/overlays/model-picker";
+import type { ResolvedRoleModel } from "../modes/view-model/overlays/model-picker";
+export type { ResolvedRoleModel } from "../modes/view-model/overlays/model-picker";
 
 /** Resolvable role models and the currently active index. */
 export interface RoleModelCycle {

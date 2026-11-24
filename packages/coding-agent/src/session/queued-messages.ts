@@ -72,10 +72,7 @@ export function isUserAuthoredQueuedMessage(message: AgentMessage): boolean {
 }
 
 /** Hidden magic-keyword notice types (`<id>-notice`) queued alongside a user prompt. */
-export const MAGIC_KEYWORD_NOTICE_TYPES: ReadonlySet<string> = new Set([
-	...MAGIC_KEYWORDS.map(keyword => `${keyword.id}-notice`),
-	"ultrasolve-notice",
-]);
+const MAGIC_KEYWORD_NOTICE_TYPES: ReadonlySet<string> = new Set(MAGIC_KEYWORDS.map(keyword => `${keyword.id}-notice`));
 
 /** Hidden companion carrying vision descriptions for a text-only model. */
 export const IMAGE_ATTACHMENT_DESCRIPTION_TYPE = "image-attachment-description";

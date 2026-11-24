@@ -4,13 +4,13 @@
  * the real masking + diagnose/shrink/name flow, not a script.
  */
 
-import { beforeAll, describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it, type Mock } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage, Context, Message, Model } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme } from "../src/ui/theme/service";
 import {
 	classifierRefusalText,
 	dropRedundantlyCoveredPatterns,
@@ -25,12 +25,13 @@ import type { SecretEntry } from "@oh-my-pi/pi-coding-agent/secrets/index";
 import { loadSecrets } from "@oh-my-pi/pi-coding-agent/secrets/index";
 import {
 	createTuiFindRefusalUi,
-	type FindRefusalUiClock,
 	formatElapsedClock,
 	formatPatternsYaml,
 	probeSliceEnd,
 	resolveRefusalModelPattern,
 } from "@oh-my-pi/pi-coding-agent/slash-commands/helpers/find-refusal";
+import type { WorkingSpec } from "../src/ui/dock";
+import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 
 const MAIN = { provider: "anthropic", id: "main", api: "anthropic-messages" } as unknown as Model;
 const UNCENSORED = { provider: "anthropic", id: "uncensored", api: "anthropic-messages" } as unknown as Model;
@@ -891,10 +892,10 @@ describe("formatPatternsYaml", () => {
 });
 
 describe("/find-refusal spinner elapsed clock", () => {
-	// The TUI wrapper's render() colors lines via the global `theme`, which is
-	// undefined until initTheme() runs; initialize it once for this block.
-	beforeAll(async () => {
-		await initTheme(false);
+	// The progress panel colors lines via the active theme, which is
+	// unset until initTheme() runs; initialize it once for this block.
+	beforeAll(() => {
+		initTheme();
 	});
 
 	it("formatElapsedClock: blank under 1s, bare seconds, then minutes past 60s", () => {
@@ -910,83 +911,49 @@ describe("/find-refusal spinner elapsed clock", () => {
 		expect(formatElapsedClock(83000)).toBe("1m 23s");
 	});
 
-	// Fresh wrapper over a fake ctx (records every setWorkingMessage) and a fake
-	// clock (deterministic now() + a manually-invokable interval handler), so the
-	// 1s ticking is exercised without real timers.
+	// A fixture context (its working row records every `showWorking` spec) and a
+	// fake wall clock, so the row's live label is read at chosen times without real timers.
 	function makeHarness() {
-		const msgs: (string | undefined)[] = [];
-		const state = { nowMs: 0, handler: undefined as (() => void) | undefined, cleared: 0, stopCalls: 0 };
-		const ctx = {
-			setWorkingMessage: (m?: string) => {
-				msgs.push(m);
-			},
-			ensureLoadingAnimation: () => {},
-			stopLoadingAnimation: () => {
-				state.stopCalls++;
-			},
-			present: () => {},
-			ui: { requestRender: () => {} },
-		} as unknown as Parameters<typeof createTuiFindRefusalUi>[0];
-		const clock: FindRefusalUiClock = {
-			now: () => state.nowMs,
-			setInterval: h => {
-				state.handler = h;
-				return {} as NodeJS.Timeout;
-			},
-			clearInterval: () => {
-				state.cleared++;
-				state.handler = undefined;
-			},
+		const ctx = createInteractiveModeContext({});
+		const clock = { nowMs: 0 };
+		const ui = createTuiFindRefusalUi(ctx, () => clock.nowMs);
+		const label = (): string => {
+			const spec = (ctx.showWorking as unknown as Mock<(kind: string, spec: WorkingSpec) => void>).mock.calls.at(
+				-1,
+			)?.[1];
+			if (!spec) throw new Error("no working row was shown");
+			return typeof spec.label === "function" ? spec.label() : spec.label;
 		};
-		const ui = createTuiFindRefusalUi(ctx, clock);
-		return { ui, msgs, state };
+		return { ctx, ui, clock, label };
 	}
 
 	const ROUND1_ANALYZE = `Analyzing the refusal (round 1)\u2026`;
 	const ROUND1_REPROBE = `Re-testing with the main model (round 1)\u2026`;
 
-	it("paints the bare base, ticks an elapsed suffix, and restarts the clock per phase", () => {
-		const { ui, msgs, state } = makeHarness();
+	it("shows the bare base, reads an elapsed suffix live, and restarts the clock per phase", () => {
+		const { ui, clock, label } = makeHarness();
 		ui.working(ROUND1_ANALYZE);
-		// Bare base on the first paint (0s elapsed → no suffix), and a clock is scheduled.
-		expect(msgs.at(-1)).toBe(ROUND1_ANALYZE);
-		expect(state.handler).toBeDefined();
-		// A tick at 14s appends the suffix with exactly one `· ` separator (no double space).
-		state.nowMs = 14000;
-		state.handler?.();
-		expect(msgs.at(-1)).toBe(`${ROUND1_ANALYZE} \u00b7 14s`);
-		// A new working() phase tears down the prior interval and resets the base...
-		state.nowMs = 15000;
+		// Bare base on the first read (0s elapsed → no suffix).
+		expect(label()).toBe(ROUND1_ANALYZE);
+		// A read at 14s appends the suffix with exactly one `· ` separator (no double space).
+		clock.nowMs = 14000;
+		expect(label()).toBe(`${ROUND1_ANALYZE} \u00b7 14s`);
+		// A new working() phase resets the base and restarts elapsed from 15000...
+		clock.nowMs = 15000;
 		ui.working(ROUND1_REPROBE);
-		expect(state.cleared).toBe(1);
-		expect(msgs.at(-1)).toBe(ROUND1_REPROBE);
-		// ...restarting elapsed from 15000, so 16000 reads as 1s, never the stale 16s.
-		state.nowMs = 16000;
-		state.handler?.();
-		expect(msgs.at(-1)).toBe(`${ROUND1_REPROBE} \u00b7 1s`);
+		expect(label()).toBe(ROUND1_REPROBE);
+		// ...so 16000 reads as 1s, never the stale 16s.
+		clock.nowMs = 16000;
+		expect(label()).toBe(`${ROUND1_REPROBE} \u00b7 1s`);
 	});
 
-	it("step() tears down the live clock and clears the working message (pitfall c)", () => {
-		const { ui, msgs, state } = makeHarness();
+	it("done() takes the working row down", () => {
+		const { ctx, ui } = makeHarness();
 		ui.working(ROUND1_ANALYZE);
-		ui.step("Main model re-probed (5 chars).");
-		// step() clears the interval AND the working message, so a stale "· Ns" cannot
-		// repaint between phases; the next working() restarts it.
-		expect(state.cleared).toBe(1);
-		expect(state.handler).toBeUndefined();
-		expect(msgs.at(-1)).toBeUndefined();
-	});
-
-	it("done() tears down the live clock and stops the loading animation (pitfall b)", () => {
-		const { ui, msgs, state } = makeHarness();
-		ui.working(ROUND1_ANALYZE);
+		expect(ctx.working).toBe("maintenance");
 		ui.done();
-		// done() clears the interval (so it cannot resurface a stale clock on the next
-		// turn's spinner) and stops the loading animation exactly once.
-		expect(state.cleared).toBe(1);
-		expect(state.stopCalls).toBe(1);
-		expect(state.handler).toBeUndefined();
-		expect(msgs.at(-1)).toBeUndefined();
+		// Nothing is left running to resurface a stale clock on the next turn's row.
+		expect(ctx.working).toBeUndefined();
 	});
 });
 

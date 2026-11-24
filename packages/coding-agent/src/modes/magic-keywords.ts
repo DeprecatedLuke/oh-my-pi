@@ -2,6 +2,7 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import chillaxNotice from "../prompts/system/chillax-notice.md" with { type: "text" };
 import jevifyNotice from "../prompts/system/jevify-notice.md" with { type: "text" };
 import orchestrateNotice from "../prompts/system/orchestrate-notice.md" with { type: "text" };
+import ultrasolveNotice from "../prompts/system/ultrasolve-notice.md" with { type: "text" };
 import ultrathinkNotice from "../prompts/system/ultrathink-notice.md" with { type: "text" };
 import workflowNotice from "../prompts/system/workflow-notice.md" with { type: "text" };
 
@@ -12,7 +13,7 @@ import workflowNotice from "../prompts/system/workflow-notice.md" with { type: "
  * This table is the single source of truth. Every downstream surface derives
  * from it: the `magicKeywords.<id>` settings (`modes/settings.ts`), the notice
  * injection and `<id>-notice` message types (agent-session, queued-messages),
- * and the editor/bubble gradients (`setMagicKeywords` in pi-tui). Adding a
+ * and the composer/bubble gradients (`src/ui/composer/magic-keywords.ts`). Adding a
  * keyword means one row here plus its notice template under `prompts/system/`.
  */
 
@@ -59,6 +60,9 @@ export interface MagicKeyword {
 /** Hidden notice for "ultrathink": careful multi-step reasoning. */
 export const ULTRATHINK_NOTICE: string = ultrathinkNotice.trim();
 
+/** Hidden notice for "ultrasolve": a self-contained solver escalation (ultrathink's maximum thinking plus a handoff contract). */
+export const ULTRASOLVE_NOTICE: string = ultrasolveNotice.trim();
+
 /** Hidden notice for "chillax": brief reasoning, direct path. */
 export const CHILLAX_NOTICE: string = chillaxNotice.trim();
 
@@ -97,6 +101,16 @@ export const MAGIC_KEYWORDS = [
 		description: "Let standalone ultrathink request maximum automatic thinking and append its hidden notice",
 		requires: [],
 		notice: () => ULTRATHINK_NOTICE,
+	},
+	{
+		id: "ultrasolve",
+		word: "ultrasolve",
+		// Ultrathink's full-spectrum sweep.
+		hue: [0, 330],
+		label: "Ultrasolve Keyword",
+		description: "Let standalone ultrasolve inherit maximum thinking and request a self-contained solver escalation",
+		requires: [],
+		notice: () => ULTRASOLVE_NOTICE,
 	},
 	{
 		id: "chillax",

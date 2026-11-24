@@ -6,8 +6,11 @@
  * order progress arrives in.
  */
 import { describe, expect, it } from "bun:test";
-import { type ObservableSession, SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
-import { type AgentProgress } from "@oh-my-pi/pi-tui/tools/task";
+import {
+	type ObservableSession,
+	SessionObserverRegistry,
+} from "@oh-my-pi/pi-coding-agent/task/session-observer-registry";
+import type { AgentProgress } from "@oh-my-pi/pi-coding-agent/task/task-details";
 import {
 	type SubagentLifecyclePayload,
 	type SubagentProgressPayload,

@@ -1,5 +1,5 @@
 import { type AgentMessage, instrumentedCompleteSimple } from "@oh-my-pi/pi-agent-core";
-import { Spacer, Text } from "@oh-my-pi/pi-tui";
+import { jsx, signal } from "@oh-my-pi/pi-tui";
 import {
 	expandRoleAlias,
 	formatModelString,
@@ -7,8 +7,9 @@ import {
 	resolveModelFromString,
 } from "../../config/model-resolver";
 import type { Settings } from "../../config/settings";
-import { theme } from "@oh-my-pi/pi-tui/theme";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
 import type { InteractiveModeContext } from "../../modes/types";
+import { ansiTextRows } from "../../ui/transcript/ansi-text";
 import { YAML } from "bun";
 import { clearFindRefusalState, loadFindRefusalState, type SecretEntry, saveFindRefusalState } from "../../secrets";
 import {
@@ -256,79 +257,40 @@ export function formatElapsedClock(ms: number): string {
 	return minutes > 0 ? `${minutes}m ${String(seconds).padStart(2, "0")}s` : `${seconds}s`;
 }
 
-export interface FindRefusalUiClock {
-	now(): number;
-	setInterval(handler: () => void, ms: number): NodeJS.Timeout;
-	clearInterval(handle: NodeJS.Timeout): void;
-}
-const defaultFindRefusalClock: FindRefusalUiClock = {
-	now: () => Date.now(),
-	setInterval: (handler, ms) => {
-		const t = setInterval(handler, ms);
-		t.unref?.();
-		return t;
-	},
-	clearInterval: handle => clearInterval(handle),
-};
-
 /**
- * Build a live TUI progress block: a single growing dim text panel plus a
- * spinner working-message, so the full refusal-finding run stays visible.
+ * Build a live TUI progress block: a single growing dim text panel in the
+ * transcript plus a maintenance working row (spinner, elapsed clock, stop
+ * control), so the full refusal-finding run stays visible.
  */
-export function createTuiFindRefusalUi(
-	ctx: InteractiveModeContext,
-	clock: FindRefusalUiClock = defaultFindRefusalClock,
-): TuiFindRefusalUi {
-	const lines: string[] = [];
-	let panel: Text | undefined;
-	const render = () => {
-		const body = [theme.fg("accent", "Find refusal"), ...lines.map(line => theme.fg("dim", `  ${line}`))].join("\n");
-		if (panel) {
-			panel.setText(body);
-			ctx.ui.requestRender();
-		} else {
-			panel = new Text(body, 1, 0);
-			ctx.present([new Spacer(1), panel]);
-		}
+export function createTuiFindRefusalUi(ctx: InteractiveModeContext, now: () => number = Date.now): TuiFindRefusalUi {
+	const lines = signal<readonly string[]>([]);
+	const body = () => {
+		const theme = currentTheme();
+		return [theme.fg("accent", "Find refusal"), ...lines().map(line => theme.fg("dim", `  ${line}`))].join("\n");
 	};
-	render();
-	let baseMessage: string | undefined;
-	let startedAt = 0;
-	let timer: NodeJS.Timeout | undefined;
-	const clearTimer = () => {
-		if (timer !== undefined) {
-			clock.clearInterval(timer);
-			timer = undefined;
-		}
-	};
-	const paintWorking = () => {
-		if (baseMessage === undefined) return;
-		const suffix = formatElapsedClock(clock.now() - startedAt);
-		ctx.setWorkingMessage(suffix ? `${baseMessage} · ${suffix}` : baseMessage);
-	};
+	// Live until `done()`: every `step()` repaints the one panel instead of appending another.
+	const panel = ctx.present(
+		() => jsx("canvas", { paint: (width: number) => ["", ...ansiTextRows(body(), width, 1)] }),
+		{ live: true },
+	);
 	return {
 		step(line: string) {
-			clearTimer();
-			baseMessage = undefined;
-			lines.push(...line.split("\n"));
-			ctx.setWorkingMessage(undefined);
-			render();
+			lines.set([...lines.peek(), ...line.split("\n")]);
 		},
 		working(message?: string) {
 			if (!message) return;
-			clearTimer();
-			baseMessage = message;
-			startedAt = clock.now();
-			ctx.setWorkingMessage(message);
-			ctx.ensureLoadingAnimation();
-			timer = clock.setInterval(paintWorking, 1000);
+			const startedAt = now();
+			// The row re-reads a function label every frame; a native surface draws its own elapsed clock.
+			const label = () => {
+				const suffix = ctx.shell.native() ? "" : formatElapsedClock(now() - startedAt);
+				return suffix ? `${message} · ${suffix}` : message;
+			};
+			// Showing the row per phase restarts its clock.
+			ctx.showWorking("maintenance", { label, startedAt, interruptKey: ctx.maintenanceInterruptKey() });
 		},
 		done() {
-			clearTimer();
-			baseMessage = undefined;
-			ctx.setWorkingMessage(undefined);
-			ctx.stopLoadingAnimation();
-			ctx.ui.requestRender();
+			ctx.clearWorking("maintenance");
+			ctx.shell.transcript.settle(panel);
 		},
 	};
 }

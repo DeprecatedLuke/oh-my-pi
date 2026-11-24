@@ -1129,4 +1129,26 @@ describe("AsyncJobManager", () => {
 		manager.register("task", "Other", async () => "done");
 		expect(changes).toBe(final);
 	});
+
+	test("publishFailed notifies onJobsChanged listeners and clears an evicted tombstone for the same id", async () => {
+		const manager = new AsyncJobManager({});
+		const id = manager.register("bash", "old", async () => "done", { id: "bg_1" });
+		await manager.getJob(id)?.promise;
+		manager.evictCompletedJobs();
+		expect(manager.getEvictedJobs().map(record => record.id)).toContain("bg_1");
+
+		let changes = 0;
+		const unsubscribe = manager.onJobsChanged(() => {
+			changes += 1;
+		});
+		try {
+			manager.publishFailed("bash", "sleep 60", "outcome unknown", { id: "bg_1" });
+		} finally {
+			unsubscribe();
+		}
+
+		expect(changes).toBe(1);
+		expect(manager.getJob("bg_1")?.status).toBe("failed");
+		expect(manager.getEvictedJobs().map(record => record.id)).not.toContain("bg_1");
+	});
 });

@@ -1,5 +1,5 @@
 import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
-import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
+import type { AutocompleteItem } from "../autocomplete/autocomplete";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
 import { BUILTIN_COLLABORATION_SLASH_COMMANDS } from "./builtin-collaboration";
 import { BUILTIN_COMMIT_SLASH_COMMANDS } from "./builtin-commit";
@@ -47,7 +47,7 @@ const FIND_REFUSAL_SLASH_COMMAND: SlashCommandSpec = {
 	description: "Find whatever made the model refuse and list the redaction patterns (list only)",
 	handleTui: async (_command, runtime) => {
 		const ctx = runtime.ctx;
-		ctx.editor.setText("");
+		clearSubmittedText(runtime);
 		const ui = createTuiFindRefusalUi(ctx);
 		const signal = ctx.beginFindRefusal?.();
 		try {
@@ -202,7 +202,7 @@ export async function executeBuiltinSlashCommand(
 		runtime.ctx.showStatus(`/${command.name} is host-only during a collab session`);
 		// A detached draft already left the editor: give it back, images included.
 		if (runtime.draftDetached) {
-			restoreDetachedDraft(runtime.ctx.editor, parsed.text, runtime.input?.images, runtime.input?.imageLinks);
+			restoreDetachedDraft(runtime.ctx.composer, parsed.text, runtime.input?.images, runtime.input?.imageLinks);
 		} else {
 			clearSubmittedText(runtime);
 		}

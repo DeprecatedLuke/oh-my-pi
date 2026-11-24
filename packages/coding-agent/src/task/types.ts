@@ -1,17 +1,11 @@
-import type { AgentSource, SingleResult } from "@oh-my-pi/pi-tui/tools/task";
-export {
-	TASK_SUBAGENT_PROGRESS_CHANNEL,
-	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
-} from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
-export type {
-	SubagentProgressPayload,
-	SubagentLifecyclePayload,
-} from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
+import type { AgentSource, SingleResult } from "./task-details";
+export { TASK_SUBAGENT_PROGRESS_CHANNEL, TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "./session-observer-registry";
+export type { SubagentProgressPayload, SubagentLifecyclePayload } from "./session-observer-registry";
 import { type BaseType, type FluentType, type } from "@oh-my-pi/omptype";
 import { $env, isRecord } from "@oh-my-pi/pi-utils";
 
 import type { AgentSessionEvent } from "../session/agent-session";
-import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import type { ConfiguredThinkingLevel } from "../utils/render-utils";
 
 const parseNumber = (value: string | undefined, defaultValue: number): number => {
 	if (value) {
@@ -337,12 +331,6 @@ export interface TaskPatchSummary {
 	conflicts?: TaskPatchConflict[];
 	/** Set when this summary records edits captured from an aborted task (preserved, not applied). */
 	recovery?: boolean;
-}
-
-/** Patch and baseline metadata for an isolated nested repository. */
-export interface NestedRepoPatch {
-	relativePath: string;
-	patch: string;
 }
 
 /** Metadata attached to a task result by the native patch merge adapter. */

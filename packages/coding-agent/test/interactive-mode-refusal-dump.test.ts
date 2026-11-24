@@ -6,12 +6,13 @@ import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mo
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme } from "../src/ui/theme/service";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+import { createModeTerminal, type ModeTerminal } from "./helpers/mode-terminal";
 
 function classifierRefusalResponse(text: string): MockResponse {
 	return {
@@ -40,6 +41,7 @@ describe("InteractiveMode refusal transcript dumps", () => {
 	let settingsState: SettingsTestState | undefined;
 	let authStorage: AuthStorage | undefined;
 	let mode: InteractiveMode | undefined;
+	let term: ModeTerminal | undefined;
 	let session: AgentSession | undefined;
 	let tempDir: TempDir | undefined;
 	let agentDir = "";
@@ -65,14 +67,16 @@ describe("InteractiveMode refusal transcript dumps", () => {
 			settings: Settings.isolated({ "retry.enabled": false }),
 			modelRegistry,
 		});
-		mode = new InteractiveMode(session, "test");
+		term = createModeTerminal();
+		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, term.frame);
 		vi.spyOn(mode, "addMessageToChat").mockReturnValue([]);
-		vi.spyOn(mode, "ensureLoadingAnimation").mockImplementation(() => {});
-		mode.ui.requestRender = vi.fn();
 	});
 
 	afterEach(async () => {
 		mode?.stop();
+		await mode?.shell.stop();
+		term?.dispose();
+		term = undefined;
 		await session?.dispose();
 		authStorage?.close();
 		restoreSettingsTestState(settingsState);
