@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+	AGY_PROMPT_BYTES,
 	type Ledger,
 	inputBlocks,
 	lateToolResultPrompt,
@@ -246,5 +247,51 @@ describe("replayPrompt", () => {
 		expect(text).toContain("read a.txt");
 		expect(text).toContain('id="call-1"');
 		expect(blocks.at(-1)).toEqual({ type: "text", text: "what did it say?" });
+	});
+
+	it("fits agy's prompt limit by dropping the oldest history while keeping the reminder first and input whole and last", () => {
+		// 40 history messages of ~9 KB each: far beyond what agy keeps of one prompt.
+		const history: Message[] = Array.from({ length: 40 }, (_, index) => {
+			const text = `[h${index}] ${"x".repeat(9_000)}`;
+			return index % 2 === 0 ? user(text) : assistant(text);
+		});
+		const reminder = `SYSTEM RULES ${"r".repeat(20_000)}`;
+		const trailing = [user("first trailing request"), user(`newest request ${"y".repeat(30_000)}`)];
+
+		const blocks = replayPrompt([...history, ...trailing], reminder);
+
+		const texts = blocks.flatMap(block => (block.type === "text" ? [block.text] : []));
+		const bytes = texts.reduce((total, text) => total + Buffer.byteLength(text), 0);
+		expect(bytes).toBeLessThanOrEqual(AGY_PROMPT_BYTES);
+		expect(blocks[0]).toEqual({ type: "text", text: `<system-reminder>\n${reminder}\n</system-reminder>` });
+		expect(blocks.slice(-2)).toEqual(trailing.flatMap(message => inputBlocks(message)));
+		const kept = [...texts.join("\n").matchAll(/\[h(\d+)\]/g)].map(match => Number(match[1]));
+		const oldestKept = kept[0] ?? history.length;
+		// Survivors are exactly the newest history messages, in order.
+		expect(oldestKept).toBeGreaterThan(0);
+		expect(oldestKept).toBeLessThan(history.length - 1);
+		expect(kept).toEqual(Array.from({ length: history.length - oldestKept }, (_, index) => oldestKept + index));
+		expect(texts.join("\n")).toContain(`<omitted messages="${oldestKept}">`);
+	});
+
+	it("cuts an oversized replayed tool result in the middle instead of dropping it", () => {
+		// BEGIN/TAIL lengths put both cuts inside a 3-byte character.
+		const body = `BEGIN${"€".repeat(40_000)}TAIL`;
+		const blocks = replayPrompt([
+			user("read big.txt"),
+			assistant("reading", ["call-1"]),
+			toolResult("call-1", body),
+			user("summarize it"),
+		]);
+
+		const text = blocks.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n");
+		const clipped = blocks.find(block => block.type === "text" && block.text.startsWith("BEGIN"));
+		if (clipped?.type !== "text") throw new Error("Tool result was dropped from the replay");
+		expect(Buffer.byteLength(clipped.text)).toBeLessThanOrEqual(16 * 1024);
+		expect(clipped.text).toMatch(/€\n\[\.\.\. \d+ bytes omitted \.\.\.\]\n€/);
+		expect(clipped.text.endsWith("TAIL")).toBe(true);
+		expect(clipped.text).not.toContain("\uFFFD");
+		expect(text).not.toContain("<omitted");
+		expect(blocks.at(-1)).toEqual({ type: "text", text: "summarize it" });
 	});
 });

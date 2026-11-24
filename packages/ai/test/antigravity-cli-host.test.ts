@@ -16,27 +16,13 @@ import {
 	type AgyTransport,
 	type AgyTransportOptions,
 } from "@oh-my-pi/pi-ai/providers/antigravity-cli/host";
-import {
-	type McpToolOutput,
-	TOOL_UNAVAILABLE,
-} from "@oh-my-pi/pi-ai/providers/antigravity-cli/mcp-bridge";
+import { type McpToolOutput, TOOL_UNAVAILABLE } from "@oh-my-pi/pi-ai/providers/antigravity-cli/mcp-bridge";
 import { StepWriter } from "@oh-my-pi/pi-ai/providers/antigravity-cli/step-writer";
-import type {
-	AssistantMessage,
-	Context,
-	Message,
-	Tool,
-	ToolResultMessage,
-} from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage, Context, Message, Tool, ToolResultMessage } from "@oh-my-pi/pi-ai/types";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { extractProviderRetryHint } from "@oh-my-pi/pi-ai/utils/retry-after";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import type {
-	ContentBlock,
-	PromptRequest,
-	PromptResponse,
-	SessionConfigOption,
-} from "@oh-my-pi/pi-utils/acp";
+import type { ContentBlock, PromptRequest, PromptResponse, SessionConfigOption } from "@oh-my-pi/pi-utils/acp";
 
 const model = buildModel({
 	api: "antigravity-acp",
@@ -50,18 +36,8 @@ const model = buildModel({
 	contextWindow: 200_000,
 	reasoning: true,
 });
-const tools: Tool[] = [
-	{
-		name: "read",
-		description: "Read a file",
-		parameters: type({ path: "string" }),
-	},
-];
-const user = (text: string): Message => ({
-	role: "user",
-	content: text,
-	timestamp: 0,
-});
+const tools: Tool[] = [{ name: "read", description: "Read a file", parameters: type({ path: "string" }) }];
+const user = (text: string): Message => ({ role: "user", content: text, timestamp: 0 });
 
 class Queue<T> {
 	#items: T[] = [];
@@ -113,6 +89,8 @@ class FakeAgy implements AgyTransport {
 	readonly loads: string[] = [];
 	readonly created: string[] = [];
 	readonly configurations: string[] = [];
+	/** newSession/loadSession parameters, in call order. */
+	readonly setups: Parameters<AgyConnection["newSession"] | AgyConnection["loadSession"]>[0][] = [];
 	readonly abort = new AbortController();
 	readonly exit = Promise.withResolvers<number>();
 	readonly exited = this.exit.promise;
@@ -134,7 +112,7 @@ class FakeAgy implements AgyTransport {
 				name: "Model",
 				type: "select",
 				currentValue: roster[0],
-				options: roster.map((value) => ({ value, name: value })),
+				options: roster.map(value => ({ value, name: value })),
 			},
 		];
 		if (roster.includes(model.id)) {
@@ -152,12 +130,14 @@ class FakeAgy implements AgyTransport {
 		this.connection = {
 			signal: this.abort.signal,
 			initialize: async () => ({ protocolVersion: 1 }),
-			newSession: async () => {
+			newSession: async params => {
+				this.setups.push(params);
 				this.currentId = crypto.randomUUID();
 				this.created.push(this.currentId);
 				return { sessionId: this.currentId, configOptions };
 			},
-			loadSession: async (params) => {
+			loadSession: async params => {
+				this.setups.push(params);
 				if (this.failLoad) throw new Error("Store version is incompatible");
 				this.currentId = params.sessionId;
 				this.loads.push(params.sessionId);
@@ -165,25 +145,17 @@ class FakeAgy implements AgyTransport {
 				return { configOptions };
 			},
 			closeSession: async () => ({}),
-			setSessionConfigOption: async (params) => {
+			setSessionConfigOption: async params => {
 				await this.configureGate;
-				if (
-					params.configId === "model" &&
-					!roster.includes(String(params.value))
-				) {
+				if (params.configId === "model" && !roster.includes(String(params.value))) {
 					throw new Error(`Unknown model ID: ${params.value}`);
 				}
 				this.configurations.push(`${params.configId}:${params.value}`);
 				return { configOptions };
 			},
-			prompt: (request) => {
-				if (this.autoSteer)
-					for (const old of this.#pending)
-						old.response.resolve({ stopReason: "end_turn" });
-				const prompt = {
-					request,
-					response: Promise.withResolvers<PromptResponse>(),
-				};
+			prompt: request => {
+				if (this.autoSteer) for (const old of this.#pending) old.response.resolve({ stopReason: "end_turn" });
+				const prompt = { request, response: Promise.withResolvers<PromptResponse>() };
 				this.#pending.add(prompt);
 				this.promptHistory.push(prompt);
 				this.prompts.push(prompt);
@@ -195,40 +167,28 @@ class FakeAgy implements AgyTransport {
 			},
 			cancel: async () => {
 				this.cancellations.push(undefined);
-				if (this.cancelMode === "reject")
-					throw new Error("cancel write failed");
+				if (this.cancelMode === "reject") throw new Error("cancel write failed");
 				if (this.cancelMode === "ack") this.acknowledgeCancel();
 			},
 		};
 	}
 
 	acknowledgeCancel(): void {
-		for (const prompt of this.#pending)
-			prompt.response.resolve({ stopReason: "cancelled" });
+		for (const prompt of this.#pending) prompt.response.resolve({ stopReason: "cancelled" });
 	}
 	text(text: string): void {
 		this.options.onUpdate({
 			sessionId: this.currentId,
-			update: {
-				sessionUpdate: "agent_message_chunk",
-				content: { type: "text", text },
-			},
+			update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
 		});
 	}
 	thought(text: string): void {
 		this.options.onUpdate({
 			sessionId: this.currentId,
-			update: {
-				sessionUpdate: "agent_thought_chunk",
-				content: { type: "text", text },
-			},
+			update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text } },
 		});
 	}
-	call(
-		name = "read",
-		args: Record<string, unknown> = { path: "a.txt" },
-		id = this.currentId,
-	): Promise<McpToolOutput> {
+	call(name = "read", args: Record<string, unknown> = { path: "a.txt" }, id = this.currentId): Promise<McpToolOutput> {
 		this.options.onUpdate({
 			sessionId: id,
 			update: {
@@ -244,8 +204,7 @@ class FakeAgy implements AgyTransport {
 		if (this.closed) return;
 		this.closed = true;
 		this.abort.abort();
-		for (const prompt of this.#pending)
-			prompt.response.reject(new Error("connection closed"));
+		for (const prompt of this.#pending) prompt.response.reject(new Error("connection closed"));
 		this.exit.resolve(0);
 	}
 }
@@ -265,7 +224,7 @@ async function fixture(options: AgyHostOptions = {}, roster?: string[]) {
 		cancelTimeoutMs: 60,
 		announcementTimeoutMs: 30,
 		schedule: clock.schedule,
-		startTransport: async (input) => {
+		startTransport: async input => {
 			const fake = new FakeAgy(input, roster);
 			instances.push(fake);
 			started.push(fake);
@@ -289,23 +248,14 @@ function step(
 ) {
 	const stream = new AssistantMessageEventStream();
 	const writer = new StepWriter(model, stream);
-	const done = host.step(
-		model,
-		{ messages, tools, ...extra },
-		{ ...options, signal },
-		writer,
-	);
+	const done = host.step(model, { messages, tools, ...extra }, { ...options, signal }, writer);
 	done.catch(() => undefined);
 	return { writer, done, stream };
 }
 
-function result(
-	message: AssistantMessage,
-	text = "actual file body",
-): ToolResultMessage {
-	const call = message.content.find((block) => block.type === "toolCall");
-	if (!call || call.type !== "toolCall")
-		throw new Error("Expected a tool call");
+function result(message: AssistantMessage, text = "actual file body"): ToolResultMessage {
+	const call = message.content.find(block => block.type === "toolCall");
+	if (!call || call.type !== "toolCall") throw new Error("Expected a tool call");
 	return {
 		role: "toolResult",
 		toolCallId: call.id,
@@ -325,20 +275,11 @@ async function parked(options: AgyHostOptions = {}) {
 	fake.text("Reading now.");
 	const output = fake.call();
 	await first.done;
-	return {
-		...state,
-		fake,
-		prompt,
-		output,
-		messages: [...messages, first.writer.output],
-		first,
-	};
+	return { ...state, fake, prompt, output, messages: [...messages, first.writer.output], first };
 }
 
 function textOf(blocks: ContentBlock[]): string {
-	return blocks
-		.flatMap((block) => (block.type === "text" ? [block.text] : []))
-		.join("\n");
+	return blocks.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n");
 }
 
 describe("AgyHost stateful steps", () => {
@@ -360,9 +301,7 @@ describe("AgyHost stateful steps", () => {
 				messages = [...messages, user("hello")];
 				const run = step(state.host, messages, {}, undefined, { reasoning });
 				fake ??= await state.started.next();
-				const ended = run.done.then(() =>
-					Promise.reject(new Error("step ended without prompting")),
-				);
+				const ended = run.done.then(() => Promise.reject(new Error("step ended without prompting")));
 				const prompt = await Promise.race([fake.prompts.next(), ended]);
 				fake.text("Done.");
 				prompt.response.resolve({ stopReason: "end_turn" });
@@ -376,9 +315,7 @@ describe("AgyHost stateful steps", () => {
 			"thought_level:high",
 			"thought_level:medium",
 		]);
-		const suffixed = ["low", "medium", "high"].map(
-			(level) => `${model.id}-${level}`,
-		);
+		const suffixed = ["low", "medium", "high"].map(level => `${model.id}-${level}`);
 		// No effort, or one the roster lacks (`xhigh`), takes the model's default level.
 		expect(await turn(suffixed, ["high", "xhigh", "low", undefined])).toEqual([
 			`model:${model.id}-high`,
@@ -397,20 +334,10 @@ describe("AgyHost stateful steps", () => {
 				type: "object",
 				additionalProperties: false,
 				properties: {
-					type: {
-						anyOf: [
-							{ type: "string" },
-							{ type: "array", minItems: 1, items: { type: "string" } },
-						],
-					},
+					type: { anyOf: [{ type: "string" }, { type: "array", minItems: 1, items: { type: "string" } }] },
 					data: {
 						anyOf: [
-							{
-								type: "object",
-								properties: {
-									status: { enum: ["ok", "fail"], type: "string" },
-								},
-							},
+							{ type: "object", properties: { status: { enum: ["ok", "fail"], type: "string" } } },
 							{ enum: ["ok", "fail"], type: "string" },
 						],
 					},
@@ -424,9 +351,7 @@ describe("AgyHost stateful steps", () => {
 		const fake = await state.started.next();
 		const [published] = fake.options.tools;
 		const props = published.inputSchema.properties;
-		expect(
-			props && typeof props === "object" ? Object.keys(props) : [],
-		).toEqual(["type", "data", "error"]);
+		expect(props && typeof props === "object" ? Object.keys(props) : []).toEqual(["type", "data", "error"]);
 		expect(published.inputSchema).toMatchObject({
 			additionalProperties: false,
 			properties: { data: { anyOf: [{ type: "object" }, { type: "string" }] } },
@@ -441,14 +366,8 @@ describe("AgyHost stateful steps", () => {
 		await Promise.resolve();
 		expect(released).toBe(false);
 		expect(state.host.hasPendingTurn).toBe(true);
-		const second = step(state.host, [
-			...state.messages,
-			result(state.first.writer.output),
-		]);
-		expect(await state.output).toEqual({
-			content: [{ type: "text", text: "actual file body" }],
-			isError: false,
-		});
+		const second = step(state.host, [...state.messages, result(state.first.writer.output)]);
+		expect(await state.output).toEqual({ content: [{ type: "text", text: "actual file body" }], isError: false });
 		state.fake.text("Next file.");
 		const nextOutput = state.fake.call("read", { path: "b.txt" });
 		await second.done;
@@ -466,9 +385,7 @@ describe("AgyHost stateful steps", () => {
 		});
 		await third.done;
 		expect(state.fake.promptHistory).toHaveLength(1);
-		expect(third.writer.output.content).toEqual([
-			{ type: "text", text: "Finished." },
-		]);
+		expect(third.writer.output.content).toEqual([{ type: "text", text: "Finished." }]);
 		expect(state.host.hasPendingTurn).toBe(false);
 	});
 
@@ -479,11 +396,7 @@ describe("AgyHost stateful steps", () => {
 		void state.output.then(() => {
 			released = true;
 		});
-		const next = step(state.host, [
-			...state.messages,
-			result(state.first.writer.output),
-			user("also check b.txt"),
-		]);
+		const next = step(state.host, [...state.messages, result(state.first.writer.output), user("also check b.txt")]);
 		const steer = await state.fake.prompts.next();
 		expect(released).toBe(false);
 		expect(next.writer.done).toBe(false);
@@ -493,9 +406,7 @@ describe("AgyHost stateful steps", () => {
 		state.fake.text("Steered response.");
 		steer.response.resolve({ stopReason: "end_turn" });
 		await next.done;
-		expect(next.writer.output.content).toEqual([
-			{ type: "text", text: "Steered response." },
-		]);
+		expect(next.writer.output.content).toEqual([{ type: "text", text: "Steered response." }]);
 	});
 
 	it("steers parked MCP images and links mixed and image-only MCP replies to their prompt envelopes", async () => {
@@ -505,31 +416,18 @@ describe("AgyHost stateful steps", () => {
 		void state.output.then(() => {
 			released = true;
 		});
-		const firstImage = {
-			type: "image" as const,
-			data: "c21hbGw=",
-			mimeType: "image/jpeg",
-		};
-		const firstCall = state.first.writer.output.content.find(
-			(block) => block.type === "toolCall",
-		);
-		if (!firstCall || firstCall.type !== "toolCall")
-			throw new Error("Expected first tool call");
+		const firstImage = { type: "image" as const, data: "c21hbGw=", mimeType: "image/jpeg" };
+		const firstCall = state.first.writer.output.content.find(block => block.type === "toolCall");
+		if (!firstCall || firstCall.type !== "toolCall") throw new Error("Expected first tool call");
 		const firstResult: ToolResultMessage = {
 			...result(state.first.writer.output, "Read image file [image/jpeg]"),
-			content: [
-				{ type: "text", text: "Read image file [image/jpeg]" },
-				firstImage,
-			],
+			content: [{ type: "text", text: "Read image file [image/jpeg]" }, firstImage],
 		};
 		const second = step(state.host, [...state.messages, firstResult]);
 		const imageSteer = await state.fake.prompts.next();
 		expect(released).toBe(false);
 		expect(imageSteer.request.prompt).toEqual([
-			{
-				type: "text",
-				text: `<tool_result id=${JSON.stringify(firstCall.id)} name="read">`,
-			},
+			{ type: "text", text: `<tool_result id=${JSON.stringify(firstCall.id)} name="read">` },
 			firstImage,
 			{ type: "text", text: "</tool_result>" },
 		]);
@@ -539,9 +437,7 @@ describe("AgyHost stateful steps", () => {
 				{ type: "text", text: "Read image file [image/jpeg]" },
 				{
 					type: "text",
-					text: expect.stringContaining(
-						`<tool_result id=${JSON.stringify(firstCall.id)} name="read">`,
-					),
+					text: expect.stringContaining(`<tool_result id=${JSON.stringify(firstCall.id)} name="read">`),
 				},
 			],
 			isError: false,
@@ -550,16 +446,9 @@ describe("AgyHost stateful steps", () => {
 		const secondOutput = state.fake.call("read", { path: "b.png" });
 		await second.done;
 
-		const secondImage = {
-			type: "image" as const,
-			data: "c2Vjb25k",
-			mimeType: "image/png",
-		};
-		const secondCall = second.writer.output.content.find(
-			(block) => block.type === "toolCall",
-		);
-		if (!secondCall || secondCall.type !== "toolCall")
-			throw new Error("Expected second tool call");
+		const secondImage = { type: "image" as const, data: "c2Vjb25k", mimeType: "image/png" };
+		const secondCall = second.writer.output.content.find(block => block.type === "toolCall");
+		if (!secondCall || secondCall.type !== "toolCall") throw new Error("Expected second tool call");
 		const imageOnlyResult: ToolResultMessage = {
 			...result(second.writer.output),
 			content: [secondImage],
@@ -577,18 +466,13 @@ describe("AgyHost stateful steps", () => {
 			content: [
 				{
 					type: "text",
-					text: expect.stringContaining(
-						`<tool_result id=${JSON.stringify(secondCall.id)} name="read">`,
-					),
+					text: expect.stringContaining(`<tool_result id=${JSON.stringify(secondCall.id)} name="read">`),
 				},
 			],
 			isError: false,
 		});
 		expect(combinedSteer.request.prompt).toEqual([
-			{
-				type: "text",
-				text: `<tool_result id=${JSON.stringify(secondCall.id)} name="read">`,
-			},
+			{ type: "text", text: `<tool_result id=${JSON.stringify(secondCall.id)} name="read">` },
 			secondImage,
 			{ type: "text", text: "</tool_result>" },
 			{ type: "text", text: "compare both" },
@@ -596,9 +480,7 @@ describe("AgyHost stateful steps", () => {
 		state.fake.text("Both show benches.");
 		combinedSteer.response.resolve({ stopReason: "end_turn" });
 		await third.done;
-		expect(third.writer.output.content).toEqual([
-			{ type: "text", text: "Both show benches." },
-		]);
+		expect(third.writer.output.content).toEqual([{ type: "text", text: "Both show benches." }]);
 	});
 
 	it("waits for confirmed cancellation before releasing a deadline-held MCP call or sending its late result", async () => {
@@ -611,10 +493,7 @@ describe("AgyHost stateful steps", () => {
 		state.clock.fire(20);
 		await state.fake.cancellations.next();
 		expect(released).toBe(false);
-		const next = step(state.host, [
-			...state.messages,
-			result(state.first.writer.output, "late actual body"),
-		]);
+		const next = step(state.host, [...state.messages, result(state.first.writer.output, "late actual body")]);
 		await Promise.resolve();
 		expect(state.fake.promptHistory).toHaveLength(1);
 		state.fake.acknowledgeCancel();
@@ -635,10 +514,7 @@ describe("AgyHost stateful steps", () => {
 		await state.fake.exited;
 		expect(state.fake.closed).toBe(true);
 		expect((await state.output).isError).toBe(true);
-		const next = step(state.host, [
-			...state.messages,
-			result(state.first.writer.output, "result survives reseed"),
-		]);
+		const next = step(state.host, [...state.messages, result(state.first.writer.output, "result survives reseed")]);
 		const restarted = await state.started.next();
 		const prompt = await restarted.prompts.next();
 		expect(textOf(prompt.request.prompt)).toContain("result survives reseed");
@@ -662,7 +538,7 @@ describe("AgyHost stateful steps", () => {
 		const state = await parked();
 		const edited = {
 			...state.first.writer.output,
-			content: state.first.writer.output.content.map((block) =>
+			content: state.first.writer.output.content.map(block =>
 				block.type === "text" ? { ...block, text: "Edited text" } : block,
 			),
 		};
@@ -679,22 +555,11 @@ describe("AgyHost stateful steps", () => {
 
 	it("restarts on tool-set changes and carries the actual result and historical images into the reseed", async () => {
 		const state = await parked();
-		const image = {
-			type: "image" as const,
-			data: "aW1hZ2U=",
-			mimeType: "image/png",
-		};
+		const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
 		const toolResult = result(state.first.writer.output);
 		toolResult.content.push(image);
 		const next = step(state.host, [...state.messages, toolResult], {
-			tools: [
-				...tools,
-				{
-					name: "write",
-					description: "Write",
-					parameters: type({ text: "string" }),
-				},
-			],
+			tools: [...tools, { name: "write", description: "Write", parameters: type({ text: "string" }) }],
 		});
 		const restarted = await state.started.next();
 		const prompt = await restarted.prompts.next();
@@ -716,22 +581,111 @@ describe("AgyHost stateful steps", () => {
 		await first.done;
 		const id = state.host.conversationId;
 		if (!id) throw new Error("Completed turn lost its conversation");
-		const second = step(
-			state.host,
-			[user("hello"), first.writer.output, user("continue")],
-			{ tools: [] },
-		);
+		const second = step(state.host, [user("hello"), first.writer.output, user("continue")], { tools: [] });
 		const restarted = await state.started.next();
 		const continuation = await restarted.prompts.next();
 		expect(restarted.loads).toEqual([id]);
-		expect(continuation.request.prompt).toEqual([
-			{ type: "text", text: "continue" },
-		]);
+		expect(continuation.request.prompt).toEqual([{ type: "text", text: "continue" }]);
 		expect(second.writer.output.content).toEqual([]);
 		restarted.text("Continued.");
 		continuation.response.resolve({ stopReason: "end_turn" });
 		await second.done;
 	});
+
+	it("sends the system prompt only as the opening reminder of each new conversation", async () => {
+		const state = await fixture();
+		const system = { systemPrompt: ["Host rules.", "Project rules."] };
+		const reminder: ContentBlock = {
+			type: "text",
+			text: "<system-reminder>\nHost rules.\n\nProject rules.\n</system-reminder>",
+		};
+		const first = step(state.host, [user("hello")], system);
+		const fake = await state.started.next();
+		const opening = await fake.prompts.next();
+		expect(opening.request.prompt).toEqual([reminder, { type: "text", text: "hello" }]);
+		fake.text("Hello.");
+		opening.response.resolve({ stopReason: "end_turn" });
+		await first.done;
+		const history = [user("hello"), first.writer.output];
+
+		const resumed = step(state.host, [...history, user("next")], system);
+		const continuation = await fake.prompts.next();
+		expect(continuation.request.prompt).toEqual([{ type: "text", text: "next" }]);
+		fake.text("Next.");
+		continuation.response.resolve({ stopReason: "end_turn" });
+		await resumed.done;
+
+		// A changed tool set restarts agy and reloads the same conversation.
+		const reloaded = step(state.host, [...history, user("next"), resumed.writer.output, user("again")], {
+			...system,
+			tools: [],
+		});
+		const restarted = await state.started.next();
+		const reload = await restarted.prompts.next();
+		expect(restarted.loads).toHaveLength(1);
+		expect(reload.request.prompt).toEqual([{ type: "text", text: "again" }]);
+		restarted.text("Again.");
+		reload.response.resolve({ stopReason: "end_turn" });
+		await reloaded.done;
+
+		// Edited history reseeds a new conversation, which opens with the reminder again.
+		const reseeded = step(state.host, [user("hello, edited"), first.writer.output, user("continue")], {
+			...system,
+			tools: [],
+		});
+		const reseed = await restarted.prompts.next();
+		expect(restarted.created).toHaveLength(1);
+		expect(reseed.request.prompt[0]).toEqual(reminder);
+		expect(textOf(reseed.request.prompt)).toContain("hello, edited");
+		restarted.text("Reseeded.");
+		reseed.response.resolve({ stopReason: "end_turn" });
+		await reseeded.done;
+
+		const setups = [...fake.setups, ...restarted.setups];
+		expect(setups).toHaveLength(3);
+		expect(setups.filter(setup => setup._meta !== undefined)).toEqual([]);
+	});
+
+	for (const replayed of ["with", "without"] as const) {
+		it(`cancels a user-aborted turn but resumes its conversation with only the new input (${replayed} the aborted step)`, async () => {
+			const state = await fixture();
+			const abort = new AbortController();
+			const messages = [user("long task")];
+			const run = step(state.host, messages, {}, abort.signal);
+			const fake = await state.started.next();
+			const interrupted = await fake.prompts.next();
+			fake.text("Partial work.");
+			abort.abort();
+			const error: unknown = await run.done.then(
+				() => undefined,
+				cause => cause,
+			);
+			expect(String(error)).toContain("aborted");
+			expect(fake.closed).toBe(false);
+			await fake.cancellations.next();
+			expect(await interrupted.response.promise).toEqual({ stopReason: "cancelled" });
+			// The provider publishes the interrupted step the way omp stores it.
+			run.writer.fail(
+				await AIError.finalize(error, {
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					signal: abort.signal,
+				}),
+			);
+			expect(run.writer.output.stopReason).toBe("aborted");
+
+			const next = step(state.host, [...messages, ...(replayed === "with" ? [run.writer.output] : []), user("new")]);
+			const resumed = await fake.prompts.next();
+			expect(resumed.request).toEqual({ sessionId: fake.created[0], prompt: [{ type: "text", text: "new" }] });
+			expect(fake.created).toHaveLength(1);
+			expect(state.instances).toHaveLength(1);
+			fake.text("Resumed.");
+			resumed.response.resolve({ stopReason: "end_turn" });
+			await next.done;
+			expect(next.writer.output.content).toEqual([{ type: "text", text: "Resumed." }]);
+		});
+	}
 
 	it("ignores post-terminal updates while the next step is still being configured", async () => {
 		const state = await fixture();
@@ -741,20 +695,14 @@ describe("AgyHost stateful steps", () => {
 		fake.text("First answer.");
 		initial.response.resolve({ stopReason: "end_turn" });
 		await first.done;
-		const next = step(state.host, [
-			user("first"),
-			first.writer.output,
-			user("second"),
-		]);
+		const next = step(state.host, [user("first"), first.writer.output, user("second")]);
 		fake.text("late text from the old turn");
 		const prompt = await fake.prompts.next();
 		expect(next.writer.output.content).toEqual([]);
 		fake.text("Second answer.");
 		prompt.response.resolve({ stopReason: "end_turn" });
 		await next.done;
-		expect(first.writer.output.content).toEqual([
-			{ type: "text", text: "First answer." },
-		]);
+		expect(first.writer.output.content).toEqual([{ type: "text", text: "First answer." }]);
 	});
 	it("reseeds the supplied transcript when a native session load rejects", async () => {
 		const state = await fixture();
@@ -764,11 +712,7 @@ describe("AgyHost stateful steps", () => {
 		fake.text("Remembered.");
 		initial.response.resolve({ stopReason: "end_turn" });
 		await first.done;
-		const second = step(
-			state.host,
-			[user("remember image"), first.writer.output, user("continue")],
-			{ tools: [] },
-		);
+		const second = step(state.host, [user("remember image"), first.writer.output, user("continue")], { tools: [] });
 		const reloader = await state.started.next();
 		reloader.failLoad = true;
 		const reseeded = await state.started.next();
@@ -782,15 +726,9 @@ describe("AgyHost stateful steps", () => {
 	it("cancels a parked turn before restarting for a rotated credential version", async () => {
 		const state = await parked();
 		state.fake.cancelMode = "hold";
-		const next = step(
-			state.host,
-			[...state.messages, result(state.first.writer.output)],
-			{},
-			undefined,
-			{
-				credentialVersion: "new-version",
-			},
-		);
+		const next = step(state.host, [...state.messages, result(state.first.writer.output)], {}, undefined, {
+			credentialVersion: "new-version",
+		});
 		await state.fake.cancellations.next();
 		expect(state.instances).toHaveLength(1);
 		state.fake.acknowledgeCancel();
@@ -805,7 +743,9 @@ describe("AgyHost stateful steps", () => {
 
 	it("forks a matching completed checkpoint on rollback and leaves its source history intact", async () => {
 		const state = await fixture();
-		const first = step(state.host, [user("remember 41")]);
+		// Restored conversations already carry the system prompt, so the fork prompt must not repeat it.
+		const system = { systemPrompt: ["Host rules."] };
+		const first = step(state.host, [user("remember 41")], system);
 		const fake = await state.started.next();
 		const firstPrompt = await fake.prompts.next();
 		const sourceId = fake.currentId;
@@ -816,66 +756,38 @@ describe("AgyHost stateful steps", () => {
 			db.close();
 		});
 		db.run("PRAGMA journal_mode = WAL");
-		for (const table of [
-			"steps",
-			"gen_metadata",
-			"executor_metadata",
-			"parent_references",
-		]) {
+		for (const table of ["steps", "gen_metadata", "executor_metadata", "parent_references"]) {
 			db.run(`CREATE TABLE ${table} (idx INTEGER PRIMARY KEY, body TEXT)`);
 			db.run(`INSERT INTO ${table} VALUES (0, '41')`);
 		}
-		db.run(
-			"CREATE TABLE trajectory_meta (cascade_id TEXT, trajectory_id TEXT)",
-		);
-		db.run("INSERT INTO trajectory_meta VALUES (?, ?)", [
-			sourceId,
-			crypto.randomUUID(),
-		]);
+		db.run("CREATE TABLE trajectory_meta (cascade_id TEXT, trajectory_id TEXT)");
+		db.run("INSERT INTO trajectory_meta VALUES (?, ?)", [sourceId, crypto.randomUUID()]);
 		fake.text("Remembered 41.");
 		firstPrompt.response.resolve({ stopReason: "end_turn" });
 		await first.done;
 		expect(first.writer.output.providerPayload?.type).toBe("antigravityCli");
-		const second = step(state.host, [
-			user("remember 41"),
-			first.writer.output,
-			user("overwrite 77"),
-		]);
+		const second = step(state.host, [user("remember 41"), first.writer.output, user("overwrite 77")], system);
 		const secondPrompt = await fake.prompts.next();
-		for (const table of [
-			"steps",
-			"gen_metadata",
-			"executor_metadata",
-			"parent_references",
-		])
+		for (const table of ["steps", "gen_metadata", "executor_metadata", "parent_references"])
 			db.run(`INSERT INTO ${table} VALUES (1, '77')`);
 		fake.text("Remembered 77.");
 		secondPrompt.response.resolve({ stopReason: "end_turn" });
 		await second.done;
-		const branch = step(state.host, [
-			user("remember 41"),
-			first.writer.output,
-			user("what was the first number?"),
-		]);
+		const branch = step(
+			state.host,
+			[user("remember 41"), first.writer.output, user("what was the first number?")],
+			system,
+		);
 		const branchPrompt = await fake.prompts.next();
 		const forkId = state.host.conversationId!;
 		expect(forkId).not.toBe(sourceId);
 		expect(fake.loads).toEqual([forkId]);
 		expect(branch.writer.output.content).toEqual([]);
-		expect(branchPrompt.request.prompt).toEqual([
-			{ type: "text", text: "what was the first number?" },
-		]);
-		const fork = new Database(conversationStorePath(state.dir, forkId), {
-			readonly: true,
-		});
+		expect(branchPrompt.request.prompt).toEqual([{ type: "text", text: "what was the first number?" }]);
+		const fork = new Database(conversationStorePath(state.dir, forkId), { readonly: true });
 		try {
-			expect(fork.query("SELECT body FROM steps ORDER BY idx").all()).toEqual([
-				{ body: "41" },
-			]);
-			expect(db.query("SELECT body FROM steps ORDER BY idx").all()).toEqual([
-				{ body: "41" },
-				{ body: "77" },
-			]);
+			expect(fork.query("SELECT body FROM steps ORDER BY idx").all()).toEqual([{ body: "41" }]);
+			expect(db.query("SELECT body FROM steps ORDER BY idx").all()).toEqual([{ body: "41" }, { body: "77" }]);
 		} finally {
 			fork.close();
 		}
@@ -887,11 +799,7 @@ describe("AgyHost stateful steps", () => {
 	it("stops and settles pending tools when a steering prompt rejects", async () => {
 		const state = await parked();
 		state.fake.autoSteer = false;
-		const next = step(state.host, [
-			...state.messages,
-			result(state.first.writer.output),
-			user("steer"),
-		]);
+		const next = step(state.host, [...state.messages, result(state.first.writer.output), user("steer")]);
 		const steer = await state.fake.prompts.next();
 		steer.response.reject(new Error("prompt rejected"));
 		await expect(next.done).rejects.toThrow("prompt rejected");
@@ -932,10 +840,7 @@ describe("AgyHost stateful steps", () => {
 		state.fake.exit.resolve(23);
 		await state.output;
 		expect(state.fake.closed).toBe(true);
-		const next = step(state.host, [
-			...state.messages,
-			result(state.first.writer.output),
-		]);
+		const next = step(state.host, [...state.messages, result(state.first.writer.output)]);
 		const restarted = await state.started.next();
 		await restarted.prompts.next();
 		restarted.exit.resolve(24);
@@ -947,19 +852,10 @@ describe("AgyHost stateful steps", () => {
 		const run = step(state.host, [user("read")]);
 		const fake = await state.started.next();
 		await fake.prompts.next();
-		const output = await fake.call(
-			"view_file",
-			{ AbsolutePath: "/a" },
-			fake.currentId,
-		);
-		expect(output).toEqual({
-			content: [{ type: "text", text: TOOL_UNAVAILABLE }],
-			isError: true,
-		});
+		const output = await fake.call("view_file", { AbsolutePath: "/a" }, fake.currentId);
+		expect(output).toEqual({ content: [{ type: "text", text: TOOL_UNAVAILABLE }], isError: true });
 		expect(fake.closed).toBe(false);
-		expect(
-			run.writer.output.content.some((block) => block.type === "toolCall"),
-		).toBe(false);
+		expect(run.writer.output.content.some(block => block.type === "toolCall")).toBe(false);
 		state.host.close();
 		await expect(run.done).rejects.toThrow();
 	});
@@ -977,9 +873,7 @@ describe("AgyHost stateful steps", () => {
 			state.clock.fire(30);
 			expect((await call).isError).toBe(true);
 			await expect(run.done).rejects.toThrow();
-			expect(
-				run.writer.output.content.some((block) => block.type === "toolCall"),
-			).toBe(false);
+			expect(run.writer.output.content.some(block => block.type === "toolCall")).toBe(false);
 			expect(fake.closed).toBe(true);
 		}
 	});
@@ -990,13 +884,9 @@ describe("AgyHost stateful steps", () => {
 		const fake = await state.started.next();
 		await fake.prompts.next();
 		const output = await fake.call("read", { path: 2 }, fake.currentId);
-		const text = output.content
-			.flatMap((block) => (block.type === "text" ? [block.text] : []))
-			.join("\n");
+		const text = output.content.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n");
 		const [diagnostic, schema] = text.split("Expected schema: ");
-		const advertised = fake.options.tools.find(
-			(tool) => tool.name === "read",
-		)?.inputSchema;
+		const advertised = fake.options.tools.find(tool => tool.name === "read")?.inputSchema;
 		if (!advertised) throw new Error("Missing read tool schema");
 		expect(output.isError).toBe(true);
 		expect(diagnostic).toContain("read");
@@ -1027,17 +917,13 @@ describe("AgyHost stateful steps", () => {
 		await fake.prompts.next();
 		const output = await fake.call("read", { path: 2 }, fake.currentId);
 		const text = textOf(output.content);
-		const advertised = fake.options.tools.find(
-			(tool) => tool.name === "read",
-		)?.inputSchema;
+		const advertised = fake.options.tools.find(tool => tool.name === "read")?.inputSchema;
 		if (!advertised) throw new Error("Missing read tool schema");
 		expect(output.isError).toBe(true);
 		expect(text).toContain("file_path: is required");
 		expect(text).toContain("Expected schema: ");
 		expect(text).toContain(JSON.stringify(advertised));
-		expect(
-			run.writer.output.content.some((block) => block.type === "toolCall"),
-		).toBe(false);
+		expect(run.writer.output.content.some(block => block.type === "toolCall")).toBe(false);
 		expect(state.host.hasPendingTurn).toBe(true);
 		state.host.close();
 		await expect(run.done).rejects.toThrow("session closed");
@@ -1048,16 +934,14 @@ describe("AgyHost stateful steps", () => {
 		const wide: Tool = {
 			name: "wide",
 			description: "Wide schema",
-			parameters: type(Object.fromEntries(keys.map((key) => [key, "string"]))),
+			parameters: type(Object.fromEntries(keys.map(key => [key, "string"]))),
 		};
 		const state = await fixture();
 		const run = step(state.host, [user("wide")], { tools: [wide] });
 		const fake = await state.started.next();
 		await fake.prompts.next();
 		const output = await fake.call("wide", {}, fake.currentId);
-		const text = output.content
-			.flatMap((block) => (block.type === "text" ? [block.text] : []))
-			.join("\n");
+		const text = output.content.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n");
 		expect(text.length).toBeLessThanOrEqual(16_387);
 		expect(text).toContain("more");
 		expect(state.host.hasPendingTurn).toBe(true);
@@ -1097,7 +981,7 @@ describe("AgyHost stateful steps", () => {
 		let startup: AgyTransportOptions | undefined;
 		const started = Promise.withResolvers<void>();
 		const state = await fixture({
-			startTransport: (options) => {
+			startTransport: options => {
 				startup = options;
 				started.resolve();
 				return gate.promise;
@@ -1123,7 +1007,7 @@ describe("AgyHost stateful steps", () => {
 		fake.configureGate = gate.promise;
 		const configuring = Promise.withResolvers<void>();
 		const configure = fake.connection.setSessionConfigOption;
-		fake.connection.setSessionConfigOption = (params) => {
+		fake.connection.setSessionConfigOption = params => {
 			configuring.resolve();
 			return configure(params);
 		};
@@ -1155,23 +1039,14 @@ describe("AgyHost stateful steps", () => {
 		const writer = new StepWriter(model, stream);
 		writer.thinking("reasoning");
 		writer.text("answer");
-		writer.finish("stop", {
-			type: "antigravityCli",
-			conversationId: crypto.randomUUID(),
-			digest: "a".repeat(64),
-		});
+		writer.finish("stop", { type: "antigravityCli", conversationId: crypto.randomUUID(), digest: "a".repeat(64) });
 		const snapshot = JSON.stringify(writer.output);
 		writer.text("late");
 		writer.thinking("late");
 		writer.usage(999);
-		writer.fail({
-			stopReason: "error",
-			message: "late failure",
-			status: 500,
-			id: 500,
-		});
+		writer.fail({ stopReason: "error", message: "late failure", status: 500, id: 500 });
 		expect(JSON.stringify(writer.output)).toBe(snapshot);
-		expect(stream.queue.map((event) => event.type)).toEqual([
+		expect(stream.queue.map(event => event.type)).toEqual([
 			"start",
 			"thinking_start",
 			"thinking_delta",
@@ -1196,22 +1071,17 @@ describe("AgyHost stateful steps", () => {
 });
 
 describe("AgyHost quota retry notices", () => {
-	async function quotaFailure(
-		notify: (fake: FakeAgy, text: string) => void,
-		notice: string,
-	) {
+	async function quotaFailure(notify: (fake: FakeAgy, text: string) => void, notice: string) {
 		const state = await fixture();
 		const run = step(state.host, [user("hello")]);
 		const fake = await state.started.next();
 		await fake.prompts.next();
 		notify(fake, notice);
 		// agy keeps retrying until cancelled; later notices must not reach the transcript either.
-		fake.text(
-			"⚠ API error (attempt 2): RESOURCE_EXHAUSTED (code 429): Resource has been exhausted.",
-		);
+		fake.text("⚠ API error (attempt 2): RESOURCE_EXHAUSTED (code 429): Resource has been exhausted.");
 		const error: unknown = await run.done.then(
 			() => undefined,
-			(cause) => cause,
+			cause => cause,
 		);
 		return { fake, run, error };
 	}
@@ -1226,16 +1096,10 @@ describe("AgyHost quota retry notices", () => {
 				"⚠ API error (attempt 1): RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).",
 			);
 			await fake.cancellations.next();
-			const result = await AIError.finalize(error, {
-				api: model.api,
-				provider: model.provider,
-				model: model.id,
-			});
+			const result = await AIError.finalize(error, { api: model.api, provider: model.provider, model: model.id });
 			expect(result.status).toBe(429);
 			expect(result.message).toContain("RESOURCE_EXHAUSTED (code 429)");
-			expect(AIError.isUsageLimitOutcome(result.status, result.message)).toBe(
-				true,
-			);
+			expect(AIError.isUsageLimitOutcome(result.status, result.message)).toBe(true);
 			expect(run.writer.output.content).toEqual([]);
 			expect(fake.closed).toBe(true);
 		});
@@ -1245,11 +1109,7 @@ describe("AgyHost quota retry notices", () => {
 				for (const chunk of text.split("|")) notify(fake, chunk);
 			}, "⚠ API |error (attempt 1): |RESOURCE_|EXHAUSTED (code 429): Resource has been exhausted.");
 			await fake.cancellations.next();
-			const result = await AIError.finalize(error, {
-				api: model.api,
-				provider: model.provider,
-				model: model.id,
-			});
+			const result = await AIError.finalize(error, { api: model.api, provider: model.provider, model: model.id });
 			expect(result.status).toBe(429);
 			expect(result.message).toContain("RESOURCE_EXHAUSTED (code 429)");
 			expect(run.writer.output.content).toEqual([]);
@@ -1261,15 +1121,9 @@ describe("AgyHost quota retry notices", () => {
 			for (const chunk of text.split("|")) fake.text(chunk);
 		}, "Working on it.\n⚠ API error (attempt 1): |RESOURCE_EXHAUSTED (code 429): quota.");
 		await fake.cancellations.next();
-		const result = await AIError.finalize(error, {
-			api: model.api,
-			provider: model.provider,
-			model: model.id,
-		});
+		const result = await AIError.finalize(error, { api: model.api, provider: model.provider, model: model.id });
 		expect(result.status).toBe(429);
-		expect(run.writer.output.content).toEqual([
-			{ type: "text", text: "Working on it.\n" },
-		]);
+		expect(run.writer.output.content).toEqual([{ type: "text", text: "Working on it.\n" }]);
 	});
 
 	it("carries agy's reset window as a retry hint for the credential block", async () => {
@@ -1277,14 +1131,8 @@ describe("AgyHost quota retry notices", () => {
 			(fake, text) => fake.text(text),
 			"\n⚠ API error (attempt 1): RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 3h40m0s.",
 		);
-		const result = await AIError.finalize(error, {
-			api: model.api,
-			provider: model.provider,
-			model: model.id,
-		});
-		expect(extractProviderRetryHint(model.provider, result.message)).toBe(
-			(3 * 60 + 40) * 60_000,
-		);
+		const result = await AIError.finalize(error, { api: model.api, provider: model.provider, model: model.id });
+		expect(extractProviderRetryHint(model.provider, result.message)).toBe((3 * 60 + 40) * 60_000);
 	});
 
 	it("keeps prose about API errors and quota codes as visible text", async () => {
@@ -1303,9 +1151,7 @@ describe("AgyHost quota retry notices", () => {
 		for (const chunk of prose) fake.text(chunk);
 		prompt.response.resolve({ stopReason: "end_turn" });
 		await run.done;
-		expect(run.writer.output.content).toEqual([
-			{ type: "text", text: prose.join("") },
-		]);
+		expect(run.writer.output.content).toEqual([{ type: "text", text: prose.join("") }]);
 		expect(fake.closed).toBe(false);
 	});
 
@@ -1319,7 +1165,7 @@ describe("AgyHost quota retry notices", () => {
 		prompt.response.resolve({ stopReason: "end_turn" });
 		const error: unknown = await run.done.then(
 			() => undefined,
-			(cause) => cause,
+			cause => cause,
 		);
 		return { fake, run, error };
 	}
@@ -1343,18 +1189,10 @@ describe("AgyHost quota retry notices", () => {
 	] as const) {
 		it(`fails with a 429 and agy's reset window when the turn ends on a ${name} quota notice`, async () => {
 			const { error } = await finalNotice([...chunks]);
-			const result = await AIError.finalize(error, {
-				api: model.api,
-				provider: model.provider,
-				model: model.id,
-			});
+			const result = await AIError.finalize(error, { api: model.api, provider: model.provider, model: model.id });
 			expect(result.status).toBe(429);
-			expect(AIError.isUsageLimitOutcome(result.status, result.message)).toBe(
-				true,
-			);
-			expect(extractProviderRetryHint(model.provider, result.message)).toBe(
-				resetMs,
-			);
+			expect(AIError.isUsageLimitOutcome(result.status, result.message)).toBe(true);
+			expect(extractProviderRetryHint(model.provider, result.message)).toBe(resetMs);
 		});
 	}
 
@@ -1366,8 +1204,6 @@ describe("AgyHost quota retry notices", () => {
 		];
 		const { run, error } = await finalNotice(chunks);
 		expect(error).toBeUndefined();
-		expect(run.writer.output.content).toEqual([
-			{ type: "text", text: chunks.join("") },
-		]);
+		expect(run.writer.output.content).toEqual([{ type: "text", text: chunks.join("") }]);
 	});
 });

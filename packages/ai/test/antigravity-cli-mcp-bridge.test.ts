@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { connect, type Socket } from "node:net";
-import {
-	McpBridge,
-	type McpToolOutput,
-	TOOL_UNAVAILABLE,
-} from "@oh-my-pi/pi-ai/providers/antigravity-cli/mcp-bridge";
+import { McpBridge, type McpToolOutput, TOOL_UNAVAILABLE } from "@oh-my-pi/pi-ai/providers/antigravity-cli/mcp-bridge";
 
 interface Reply {
 	id: number;
@@ -43,17 +39,11 @@ async function client(port: number) {
 	return {
 		socket,
 		closed: closed.promise,
-		request(
-			method: string,
-			params?: unknown,
-			fragmented = false,
-		): Promise<Reply> {
+		request(method: string, params?: unknown, fragmented = false): Promise<Reply> {
 			const id = ++nextId;
 			const deferred = Promise.withResolvers<Reply>();
 			replies.set(id, deferred);
-			const frame = Buffer.from(
-				`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`,
-			);
+			const frame = Buffer.from(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
 			if (fragmented) {
 				const character = frame.indexOf(Buffer.from("雪"));
 				socket.write(frame.subarray(0, character + 1));
@@ -82,21 +72,12 @@ describe("McpBridge", () => {
 		const calls: { name: string; args: unknown }[] = [];
 		const bridge = new McpBridge(tools, async (name, args) => {
 			calls.push({ name, args });
-			return {
-				content: [{ type: "text", text: "host rejected" }],
-				isError: true,
-			};
+			return { content: [{ type: "text", text: "host rejected" }], isError: true };
 		});
 		cleanups.push(() => bridge.close());
 		const peer = await client(bridge.port);
-		const unknown = await peer.request("tools/call", {
-			name: "missing",
-			arguments: {},
-		});
-		expect(unknown.result).toEqual({
-			content: [{ type: "text", text: TOOL_UNAVAILABLE }],
-			isError: true,
-		});
+		const unknown = await peer.request("tools/call", { name: "missing", arguments: {} });
+		expect(unknown.result).toEqual({ content: [{ type: "text", text: TOOL_UNAVAILABLE }], isError: true });
 		expect(calls).toHaveLength(0);
 		const forwarded = [
 			{ name: "read", arguments: [] },
@@ -109,21 +90,12 @@ describe("McpBridge", () => {
 				isError: true,
 			});
 		}
-		expect(calls).toEqual(
-			forwarded.map((params) => ({
-				name: params.name,
-				args: params.arguments,
-			})),
-		);
+		expect(calls).toEqual(forwarded.map(params => ({ name: params.name, args: params.arguments })));
 		expect((await peer.request("tools/list")).result).toEqual({ tools });
 	});
 
 	it("decodes fragmented UTF-8 and parks the MCP response until its actual result arrives", async () => {
-		const arrived = Promise.withResolvers<{
-			name: string;
-			args: unknown;
-			id: string | undefined;
-		}>();
+		const arrived = Promise.withResolvers<{ name: string; args: unknown; id: string | undefined }>();
 		const result = Promise.withResolvers<McpToolOutput>();
 		const bridge = new McpBridge(tools, async (name, args, id) => {
 			arrived.resolve({ name, args, id });
@@ -145,11 +117,7 @@ describe("McpBridge", () => {
 		void reply.then(() => {
 			replied = true;
 		});
-		expect(await arrived.promise).toEqual({
-			name: "read",
-			args: { path: "雪.txt" },
-			id,
-		});
+		expect(await arrived.promise).toEqual({ name: "read", args: { path: "雪.txt" }, id });
 		expect(replied).toBe(false);
 		const content: McpToolOutput = {
 			content: [
@@ -164,11 +132,7 @@ describe("McpBridge", () => {
 
 	it("notifies the host when the active MCP connection disappears", async () => {
 		const disconnected = Promise.withResolvers<void>();
-		const bridge = new McpBridge(
-			tools,
-			async () => ({ content: [] }),
-			disconnected.resolve,
-		);
+		const bridge = new McpBridge(tools, async () => ({ content: [] }), disconnected.resolve);
 		cleanups.push(() => bridge.close());
 		const peer = await client(bridge.port);
 		await peer.request("ping");

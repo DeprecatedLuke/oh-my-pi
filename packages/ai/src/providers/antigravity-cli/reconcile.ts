@@ -43,7 +43,10 @@ export function planTurn(messages: readonly Message[], ledger: Ledger | undefine
 		messages.length > ledger.count &&
 		transcriptDigest(messages.slice(0, ledger.count)) === ledger.digest
 	) {
-		const tail = messages.slice(ledger.count);
+		// A user-interrupted step stays in agy's own trajectory; omp keeps only its partial text.
+		const tail = messages
+			.slice(ledger.count)
+			.filter(message => !(message.role === "assistant" && message.stopReason === "aborted"));
 		const first = tail[0];
 		const toolResult =
 			ledger.pendingToolCallId !== undefined &&
@@ -83,49 +86,113 @@ export function transcriptDigest(messages: readonly Message[]): string {
 	return hash.digest("hex");
 }
 
-/** Replay earlier turns as labelled text and image blocks, then send trailing input directly. */
-export function replayPrompt(replay: readonly Message[]): ContentBlock[] {
+/**
+ * Replay earlier turns as labelled text and image blocks, then send trailing input directly.
+ * agy keeps only the first {@link AGY_PROMPT_BYTES} of a prompt and silently drops the rest,
+ * so the trailing input and the optional first-message `reminder` are always kept whole and
+ * history is dropped oldest first (oversized text parts are cut in the middle) to fit.
+ */
+export function replayPrompt(replay: readonly Message[], reminder?: string): ContentBlock[] {
 	let split = replay.length;
 	while (split > 0 && isInputMessage(replay[split - 1]!)) split--;
-	const blocks: ContentBlock[] = [];
-	if (split > 0) {
-		blocks.push({ type: "text", text: prompt.render(transcriptTemplate, {}) });
-		for (const message of replay.slice(0, split)) {
-			const tag = message.role === "toolResult" ? "tool_result" : message.role;
-			const attrs =
-				message.role === "toolResult"
-					? ` id=${JSON.stringify(message.toolCallId)} name=${JSON.stringify(message.toolName)} error=${message.isError}`
-					: "";
-			blocks.push({ type: "text", text: `<${tag}${attrs}>` });
-			if (typeof message.content === "string") blocks.push({ type: "text", text: message.content });
-			else
-				for (const part of message.content) {
-					switch (part.type) {
-						case "text":
-							blocks.push({ type: "text", text: part.text });
-							break;
-						case "image":
-							blocks.push({ type: "image", data: part.data, mimeType: part.mimeType });
-							break;
-						case "thinking":
-							blocks.push({ type: "text", text: `<thinking>${part.thinking}</thinking>` });
-							break;
-						case "toolCall":
-							blocks.push({
-								type: "text",
-								text: `<tool_call id=${JSON.stringify(part.id)} name=${JSON.stringify(part.name)}>${stableStringifyJson(part.arguments)}</tool_call>`,
-							});
-							break;
-					}
-				}
-			blocks.push({ type: "text", text: `</${tag}>` });
+	const head: ContentBlock[] = reminder
+		? [{ type: "text", text: `<system-reminder>\n${reminder}\n</system-reminder>` }]
+		: [];
+	const input = replay.slice(split).flatMap(message => (isInputMessage(message) ? inputBlocks(message) : []));
+	if (split === 0) return [...head, ...input];
+	const open: ContentBlock = { type: "text", text: prompt.render(transcriptTemplate, {}) };
+	const close: ContentBlock = { type: "text", text: "</conversation-checkpoint>" };
+	let budget =
+		AGY_PROMPT_BYTES -
+		PROMPT_RESERVE_BYTES -
+		blockBytes(head) -
+		blockBytes(input) -
+		blockBytes([open, close]) -
+		OMISSION_NOTE_BYTES;
+	const kept: ContentBlock[][] = [];
+	for (let index = split - 1; index >= 0; index--) {
+		const blocks = historyBlocks(replay[index]!);
+		const size = blockBytes(blocks);
+		if (size > budget) break;
+		budget -= size;
+		kept.push(blocks);
+	}
+	kept.reverse();
+	const omitted = split - kept.length;
+	const note: ContentBlock[] =
+		omitted > 0
+			? [
+					{
+						type: "text",
+						text: `<omitted messages="${omitted}">The ${omitted} oldest messages were dropped to fit the input limit.</omitted>`,
+					},
+				]
+			: [];
+	return [...head, open, ...note, ...kept.flat(), close, ...input];
+}
+
+/** agy truncates one prompt's text at this many UTF-8 bytes, keeping the start. */
+export const AGY_PROMPT_BYTES = 192_000;
+// agy wraps the prompt in `<USER_REQUEST>` and appends request metadata inside the same limit.
+const PROMPT_RESERVE_BYTES = 4_096;
+const OMISSION_NOTE_BYTES = 160;
+// One replayed text part (usually a tool result) may take at most this much of the budget.
+const MAX_REPLAYED_PART_BYTES = 16_384;
+// Images travel as separate parts; this approximates their effect on the text budget.
+const IMAGE_BLOCK_BYTES = 1_024;
+
+function historyBlocks(message: Message): ContentBlock[] {
+	const tag = message.role === "toolResult" ? "tool_result" : message.role;
+	const attrs =
+		message.role === "toolResult"
+			? ` id=${JSON.stringify(message.toolCallId)} name=${JSON.stringify(message.toolName)} error=${message.isError}`
+			: "";
+	const blocks: ContentBlock[] = [{ type: "text", text: `<${tag}${attrs}>` }];
+	if (typeof message.content === "string") blocks.push({ type: "text", text: clip(message.content) });
+	else
+		for (const part of message.content) {
+			switch (part.type) {
+				case "text":
+					blocks.push({ type: "text", text: clip(part.text) });
+					break;
+				case "image":
+					blocks.push({ type: "image", data: part.data, mimeType: part.mimeType });
+					break;
+				case "thinking":
+					blocks.push({ type: "text", text: `<thinking>${clip(part.thinking)}</thinking>` });
+					break;
+				case "toolCall":
+					blocks.push({
+						type: "text",
+						text: `<tool_call id=${JSON.stringify(part.id)} name=${JSON.stringify(part.name)}>${clip(stableStringifyJson(part.arguments))}</tool_call>`,
+					});
+					break;
+			}
 		}
-		blocks.push({ type: "text", text: "</conversation-checkpoint>" });
-	}
-	for (const message of replay.slice(split)) {
-		if (isInputMessage(message)) blocks.push(...inputBlocks(message));
-	}
+	blocks.push({ type: "text", text: `</${tag}>` });
 	return blocks;
+}
+
+/** Keep the start and end of an oversized replayed text, marking the cut. */
+function clip(text: string): string {
+	const bytes = Buffer.from(text);
+	if (bytes.length <= MAX_REPLAYED_PART_BYTES) return text;
+	const keep = Math.floor((MAX_REPLAYED_PART_BYTES - 64) / 2);
+	const start = bytes
+		.subarray(0, keep)
+		.toString()
+		.replace(/\uFFFD+$/, "");
+	const end = bytes
+		.subarray(bytes.length - keep)
+		.toString()
+		.replace(/^\uFFFD+/, "");
+	return `${start}\n[... ${bytes.length - 2 * keep} bytes omitted ...]\n${end}`;
+}
+
+function blockBytes(blocks: readonly ContentBlock[]): number {
+	let total = 0;
+	for (const block of blocks) total += block.type === "text" ? Buffer.byteLength(block.text) : IMAGE_BLOCK_BYTES;
+	return total;
 }
 
 /** Supply the actual delayed result only after agy's old prompt has confirmed cancellation. */
