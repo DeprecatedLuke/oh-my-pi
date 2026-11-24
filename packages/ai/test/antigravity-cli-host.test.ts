@@ -534,23 +534,68 @@ describe("AgyHost stateful steps", () => {
 		expect((await state.output).isError).toBe(true);
 	});
 
-	it("cancels and reseeds an edited assistant prefix instead of silently reusing history", async () => {
+	it("cancels and reseeds an edited user prefix instead of silently reusing history", async () => {
 		const state = await parked();
-		const edited = {
-			...state.first.writer.output,
-			content: state.first.writer.output.content.map(block =>
-				block.type === "text" ? { ...block, text: "Edited text" } : block,
-			),
-		};
-		const next = step(state.host, [state.messages[0]!, edited, result(edited)]);
+		const next = step(state.host, [
+			user("read b.txt instead"),
+			state.first.writer.output,
+			result(state.first.writer.output),
+		]);
 		await state.fake.cancellations.next();
 		const prompt = await state.fake.prompts.next();
 		expect((await state.output).isError).toBe(true);
 		expect(state.fake.created).toHaveLength(2);
-		expect(textOf(prompt.request.prompt)).toContain("Edited text");
+		expect(textOf(prompt.request.prompt)).toContain("read b.txt instead");
 		state.fake.text("Edited history received.");
 		prompt.response.resolve({ stopReason: "end_turn" });
 		await next.done;
+	});
+
+	it("keeps the parked call when omp rewrites agy's own text and tool arguments", async () => {
+		const state = await parked();
+		const rewritten = {
+			...state.first.writer.output,
+			content: state.first.writer.output.content.map(block =>
+				block.type === "text"
+					? { ...block, text: "Pruned text" }
+					: block.type === "toolCall"
+						? { ...block, arguments: { path: "[REDACTED]" } }
+						: block,
+			),
+		};
+		const next = step(state.host, [state.messages[0]!, rewritten, result(rewritten)]);
+		expect(await state.output).toEqual({ content: [{ type: "text", text: "actual file body" }], isError: false });
+		state.fake.text("Read it.");
+		state.prompt.response.resolve({ stopReason: "end_turn" });
+		await next.done;
+		expect(next.writer.output.content).toEqual([{ type: "text", text: "Read it." }]);
+		expect(state.fake.promptHistory).toHaveLength(1);
+		expect(state.fake.created).toHaveLength(1);
+	});
+
+	it("continues a tool loop whose next request redacts an earlier tool result", async () => {
+		const state = await parked();
+		const firstResult = result(state.first.writer.output, "token=hunter2");
+		const second = step(state.host, [...state.messages, firstResult]);
+		expect(await state.output).toEqual({ content: [{ type: "text", text: "token=hunter2" }], isError: false });
+		state.fake.text("Next file.");
+		const nextOutput = state.fake.call("read", { path: "b.txt" });
+		await second.done;
+		// omp's redaction set grew with the second result, so it rewrites the first one in place.
+		const third = step(state.host, [
+			...state.messages,
+			{ ...firstResult, content: [{ type: "text", text: "token=[REDACTED]" }] },
+			second.writer.output,
+			result(second.writer.output, "second body"),
+		]);
+		expect(await nextOutput).toEqual({ content: [{ type: "text", text: "second body" }], isError: false });
+		state.fake.text("Finished.");
+		state.prompt.response.resolve({ stopReason: "end_turn" });
+		await third.done;
+		expect(third.writer.output.content).toEqual([{ type: "text", text: "Finished." }]);
+		expect(state.fake.promptHistory).toHaveLength(1);
+		expect(state.fake.created).toHaveLength(1);
+		expect(state.instances).toHaveLength(1);
 	});
 
 	it("restarts on tool-set changes and carries the actual result and historical images into the reseed", async () => {

@@ -76,7 +76,13 @@ export function planTurn(messages: readonly Message[], ledger: Ledger | undefine
 	return { kind: "fresh", replay: [...messages] };
 }
 
-/** Fingerprint model-visible ordered content, excluding timestamps, usage and presentation metadata. */
+/**
+ * Fingerprint the transcript's shape: user and developer content, tool call ids and names,
+ * and which call each tool result answers. agy keeps its own copy of tool results, tool
+ * arguments and its own steps, while omp rewrites those in place per request (secret
+ * redaction, imaging, pruning), so their bytes would break continuation of a live turn.
+ * Assistant messages from other providers keep their full content.
+ */
 export function transcriptDigest(messages: readonly Message[]): string {
 	const hash = createHash("sha256");
 	for (const message of messages) {
@@ -249,6 +255,19 @@ function contentBlocks(content: string | readonly (TextContent | ImageContent)[]
 }
 
 function messageContent(message: Message): unknown {
+	switch (message.role) {
+		case "toolResult":
+			return { role: message.role, toolCallId: message.toolCallId, toolName: message.toolName };
+		case "assistant":
+			if (message.api === "antigravity-acp")
+				return {
+					role: message.role,
+					toolCalls: message.content.flatMap(part =>
+						part.type === "toolCall" ? [{ id: part.id, name: part.name }] : [],
+					),
+				};
+			break;
+	}
 	const content =
 		typeof message.content === "string"
 			? [{ type: "text", text: message.content }]
@@ -267,13 +286,5 @@ function messageContent(message: Message): unknown {
 							return [];
 					}
 				});
-	return message.role === "toolResult"
-		? {
-				role: message.role,
-				toolCallId: message.toolCallId,
-				toolName: message.toolName,
-				isError: message.isError,
-				content,
-			}
-		: { role: message.role, content };
+	return { role: message.role, content };
 }

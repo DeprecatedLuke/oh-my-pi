@@ -265,7 +265,8 @@ export class AgyHost implements ProviderSessionState {
 			const tools = (context.tools ?? []).map(toMcpTool);
 			const toolsKey = stableStringifyJson(tools);
 			const system = (context.systemPrompt ?? []).join("\n\n");
-			let plan = planTurn(context.messages, this.#ledger);
+			const ledger = this.#ledger;
+			let plan = planTurn(context.messages, ledger);
 			const parkedTurnMoves =
 				this.#pending?.state !== "detached" &&
 				this.#pending !== undefined &&
@@ -280,6 +281,23 @@ export class AgyHost implements ProviderSessionState {
 			) {
 				plan = planTurn(context.messages, undefined);
 			}
+			if (plan.kind !== "resume" && this.#conversation)
+				logger.debug("Antigravity CLI is not continuing its live conversation", {
+					plan: plan.kind,
+					hasLedger: ledger !== undefined,
+					ledgerCount: ledger?.count,
+					messages: context.messages.length,
+					prefixMatches:
+						ledger !== undefined &&
+						context.messages.length > ledger.count &&
+						transcriptDigest(context.messages.slice(0, ledger.count)) === ledger.digest,
+					tailRoles: ledger ? context.messages.slice(ledger.count).map(message => message.role) : undefined,
+					pending: this.#pending?.state,
+					toolsChanged: this.#process?.toolsKey !== toolsKey,
+					credentialChanged: this.#process?.credentialVersion !== options.credentialVersion,
+					modelChanged: this.#conversation.model !== model.id,
+					effortChanged: this.#conversation.requestedEffort !== options.reasoning,
+				});
 			if (plan.kind !== "resume") await this.#setup(this.#abandonTurn());
 			if (
 				this.#process?.toolsKey !== toolsKey ||
@@ -880,6 +898,11 @@ export class AgyHost implements ProviderSessionState {
 	}
 
 	#fail(error: unknown): void {
+		if (this.#process || this.#ledger)
+			logger.debug("Antigravity CLI host stopped", {
+				error: error instanceof Error ? error.message : String(error),
+				duringStep: this.#step !== undefined,
+			});
 		this.#ledger = undefined;
 		const step = this.#step;
 		if (step) {

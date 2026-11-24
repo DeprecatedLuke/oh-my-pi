@@ -45,6 +45,11 @@ function assistant(text: string, toolCallIds: string[] = [], payload?: Antigravi
 	};
 }
 
+/** An assistant step from another provider; agy never saw it, so its content is part of the digest. */
+function foreignAssistant(text: string, toolCallIds: string[] = []): AssistantMessage {
+	return { ...assistant(text, toolCallIds), provider: "anthropic", api: "anthropic-messages" };
+}
+
 function toolResult(toolCallId: string, text: string): ToolResultMessage {
 	return {
 		role: "toolResult",
@@ -84,14 +89,31 @@ describe("planTurn", () => {
 		expect(plan).toEqual({ kind: "resume", toolResult: result, input: [steer] });
 	});
 
-	it("reseeds when assistant or tool-result text was edited", () => {
-		const seen = [user("read a.txt"), assistant("reading", ["call-1"]), toolResult("call-1", "long output")];
-		const ledger = ledgerFor([...seen, assistant("summary")]);
-		const pruned = [user("read a.txt"), assistant("", ["call-1"]), toolResult("call-1", "[pruned]"), assistant("")];
+	it("resumes when omp rewrote earlier tool results, tool arguments or agy's own text and thinking", () => {
+		const reading = assistant("reading", ["call-1"]);
+		reading.content.unshift({ type: "thinking", thinking: "look at a.txt" });
+		const seen = [user("read a.txt"), reading, toolResult("call-1", "token=hunter2"), assistant("summary")];
+		const pruned = assistant("", ["call-1"]);
+		const call = pruned.content[1];
+		if (call?.type !== "toolCall") throw new Error("Missing test tool call");
+		call.arguments = { path: "[REDACTED]" };
+		const rewritten = [
+			user("read a.txt"),
+			pruned,
+			{ ...toolResult("call-1", "token=[REDACTED]"), isError: true },
+			assistant(""),
+		];
 
-		const plan = planTurn([...pruned, user("next")], ledger);
+		const plan = planTurn([...rewritten, user("next")], ledgerFor(seen));
 
-		expect(plan.kind).toBe("fresh");
+		expect(plan).toEqual({ kind: "resume", toolResult: undefined, input: [user("next")] });
+	});
+
+	it("reseeds when an earlier user message was edited", () => {
+		const seen = [user("read a.txt"), assistant("reading", ["call-1"]), toolResult("call-1", "body")];
+		const edited = [user("read b.txt"), seen[1]!, seen[2]!];
+
+		expect(planTurn([...edited, user("next")], ledgerFor(seen)).kind).toBe("fresh");
 	});
 
 	it("rewinds to the newest recorded turn end when an earlier message was edited", () => {
@@ -130,28 +152,50 @@ describe("planTurn", () => {
 });
 
 describe("transcriptDigest", () => {
-	it("includes assistant text, tool names, arguments, ordered ids and actual result content", () => {
-		const original = [user("read"), assistant("reading", ["a", "b"]), toolResult("a", "original")];
+	it("covers user content, ordered tool call ids and names, result pairing and foreign assistant content", () => {
+		const foreign = foreignAssistant("hello");
+		const original = [user("read"), assistant("reading", ["a", "b"]), toolResult("a", "original"), foreign];
 		const digest = transcriptDigest(original);
-		const variants: Message[][] = [
-			[user("edited"), original[1]!, original[2]!],
-			[original[0]!, assistant("edited", ["a", "b"]), original[2]!],
-			[original[0]!, assistant("reading", ["b", "a"]), original[2]!],
-			[original[0]!, original[1]!, toolResult("a", "edited")],
-			[original[0]!, original[1]!, { ...toolResult("a", "original"), isError: true }],
-			[original[0]!, original[1]!, { ...toolResult("a", "original"), toolName: "write" }],
-		];
-		const changedCall = assistant("reading", ["a", "b"]);
-		const call = changedCall.content[1];
+		const [ask, reading, body] = original;
+		const renamed = assistant("reading", ["a", "b"]);
+		const renamedCall = renamed.content[1];
+		if (renamedCall?.type !== "toolCall") throw new Error("Missing test tool call");
+		renamedCall.name = "write";
+		const foreignCall = foreignAssistant("hello", ["x"]);
+		const foreignArgs = foreignAssistant("hello", ["x"]);
+		const call = foreignArgs.content[1];
 		if (call?.type !== "toolCall") throw new Error("Missing test tool call");
 		call.arguments = { path: "different" };
-		variants.push([original[0]!, changedCall, original[2]!]);
-		for (const variant of variants) expect(transcriptDigest(variant)).not.toBe(digest);
+		const variants: [string, Message[]][] = [
+			["user text", [user("edited"), reading!, body!, foreign]],
+			["call order", [ask!, assistant("reading", ["b", "a"]), body!, foreign]],
+			["call name", [ask!, renamed, body!, foreign]],
+			["answered call", [ask!, reading!, toolResult("b", "original"), foreign]],
+			["result tool name", [ask!, reading!, { ...toolResult("a", "original"), toolName: "write" }, foreign]],
+			["foreign text", [ask!, reading!, body!, { ...foreign, content: [{ type: "text", text: "edited" }] }]],
+		];
+		for (const [name, variant] of variants) expect([name, transcriptDigest(variant)]).not.toEqual([name, digest]);
+		expect(transcriptDigest([foreignCall])).not.toBe(transcriptDigest([foreignArgs]));
+	});
+
+	it("ignores content agy keeps its own copy of: result bodies, tool arguments and its own text and thinking", () => {
+		const original = [user("read"), assistant("reading", ["a"]), toolResult("a", "token=hunter2")];
+		const rewritten = assistant("", ["a"]);
+		rewritten.content.push({ type: "thinking", thinking: "added" });
+		const call = rewritten.content[1];
+		if (call?.type !== "toolCall") throw new Error("Missing test tool call");
+		call.arguments = { path: "[REDACTED]" };
+		const redacted: ToolResultMessage = {
+			...toolResult("a", "token=[REDACTED]"),
+			isError: true,
+			content: [{ type: "image", data: "YQ==", mimeType: "image/png" }],
+		};
+		expect(transcriptDigest([original[0]!, rewritten, redacted])).toBe(transcriptDigest(original));
 	});
 
 	it("ignores presentation metadata and object key insertion order", () => {
-		const first = assistant("reading", ["a"]);
-		const reordered = assistant("reading", ["a"]);
+		const first = foreignAssistant("reading", ["a"]);
+		const reordered = foreignAssistant("reading", ["a"]);
 		const a = first.content[1];
 		const b = reordered.content[1];
 		if (a?.type !== "toolCall" || b?.type !== "toolCall") throw new Error("Missing test tool call");
@@ -164,6 +208,8 @@ describe("transcriptDigest", () => {
 		expect(transcriptDigest([first, body])).toBe(
 			transcriptDigest([reordered, { ...body, details: { preview: "display" }, prunedAt: 123 }]),
 		);
+		b.arguments = { options: { second: 3, first: 1 }, path: "x" };
+		expect(transcriptDigest([first, body])).not.toBe(transcriptDigest([reordered, body]));
 	});
 
 	it("includes image bytes and MIME types but not presentation URLs", () => {
