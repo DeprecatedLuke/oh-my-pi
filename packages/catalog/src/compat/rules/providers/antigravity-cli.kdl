@@ -10,6 +10,7 @@ provider "antigravity-cli" {
 	preserves-max-output-tokens #false
 	// agy executes its control tools internally alongside the IDE MCP tools.
 	requires-native-tools #true
+	prompt-perturbation #true
 
 	// The roster `agy acp` 1.5.12 advertises in `session/new` config options
 	// (orchestrators omitted: they drive agy's own subagents, which this

@@ -14,7 +14,9 @@ export interface McpToolDefinition {
 }
 
 /** MCP result content; image bytes are preserved. */
-export type McpContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
+export type McpContent =
+	| { type: "text"; text: string }
+	| { type: "image"; data: string; mimeType: string };
 
 /** A completed or explicitly rejected MCP call. */
 export interface McpToolOutput {
@@ -39,6 +41,8 @@ interface Connection {
 
 const PROTOCOL_VERSION = "2025-06-18";
 const MAX_FRAME_BYTES = 32 * 1024 * 1024;
+/** Result for any tool the host does not provide, including agy built-ins. */
+export const TOOL_UNAVAILABLE = "This tool is unavailable.";
 
 /** Fixed-tool TCP server scoped to one agy process; close also terminates connected sockets. */
 export class McpBridge {
@@ -48,14 +52,19 @@ export class McpBridge {
 	#closed = false;
 
 	/** Start listening immediately on an ephemeral IPv4 loopback port. */
-	constructor(tools: readonly McpToolDefinition[], onCall: McpCallHandler, onDisconnect?: () => void) {
-		const byName = new Map(tools.map(tool => [tool.name, tool]));
-		if (byName.size !== tools.length) throw new Error("Duplicate Antigravity CLI tool name");
+	constructor(
+		tools: readonly McpToolDefinition[],
+		onCall: McpCallHandler,
+		onDisconnect?: () => void,
+	) {
+		const byName = new Map(tools.map((tool) => [tool.name, tool]));
+		if (byName.size !== tools.length)
+			throw new Error("Duplicate Antigravity CLI tool name");
 		this.#server = Bun.listen<Connection>({
 			hostname: "127.0.0.1",
 			port: 0,
 			socket: {
-				open: socket => {
+				open: (socket) => {
 					socket.data = {
 						buffer: "",
 						decoder: new TextDecoder(),
@@ -71,7 +80,9 @@ export class McpBridge {
 				},
 				data: (socket, chunk) => {
 					if (socket.data.closed) return;
-					socket.data.buffer += socket.data.decoder.decode(chunk, { stream: true });
+					socket.data.buffer += socket.data.decoder.decode(chunk, {
+						stream: true,
+					});
 					if (socket.data.buffer.length > MAX_FRAME_BYTES) {
 						socket.terminate();
 						return;
@@ -86,13 +97,13 @@ export class McpBridge {
 						if (line) handleLine(socket, line, tools, byName, onCall);
 					}
 				},
-				close: socket => {
+				close: (socket) => {
 					socket.data.closed = true;
 					socket.data.ended.resolve();
 					const owned = this.#sockets.delete(socket);
 					if (owned && !this.#closed) onDisconnect?.();
 				},
-				error: socket => {
+				error: (socket) => {
 					socket.terminate();
 				},
 			},
@@ -129,8 +140,14 @@ function handleLine(
 	}
 	if (!isRecord(request) || request.jsonrpc !== "2.0") return;
 	const id = request.id;
-	if (typeof id !== "string" && !(typeof id === "number" && Number.isSafeInteger(id))) return;
-	const reply = (body: { result: unknown } | { error: { code: number; message: string } }) => {
+	if (
+		typeof id !== "string" &&
+		!(typeof id === "number" && Number.isSafeInteger(id))
+	)
+		return;
+	const reply = (
+		body: { result: unknown } | { error: { code: number; message: string } },
+	) => {
 		if (socket.data.closed) return;
 		try {
 			socket.write(`${JSON.stringify({ jsonrpc: "2.0", id, ...body })}\n`);
@@ -143,7 +160,10 @@ function handleLine(
 		case "initialize":
 			reply({
 				result: {
-					protocolVersion: typeof params.protocolVersion === "string" ? params.protocolVersion : PROTOCOL_VERSION,
+					protocolVersion:
+						typeof params.protocolVersion === "string"
+							? params.protocolVersion
+							: PROTOCOL_VERSION,
 					capabilities: { tools: {} },
 					serverInfo: { name: "tools", version: "1.0.0" },
 				},
@@ -160,7 +180,10 @@ function handleLine(
 			const tool = name ? byName.get(name) : undefined;
 			if (!tool) {
 				reply({
-					error: { code: -32602, message: name ? `Unknown tool: ${name.slice(0, 128)}` : "Unknown tool" },
+					result: {
+						content: [{ type: "text", text: TOOL_UNAVAILABLE }],
+						isError: true,
+					},
 				});
 				return;
 			}
@@ -181,10 +204,16 @@ function handleLine(
 				socket.data.ended.promise.then(() => undefined),
 			])
 				.then(
-					output => {
+					(output) => {
 						if (output) reply({ result: output });
 					},
-					() => reply({ result: { content: [{ type: "text", text: "Tool transport failed" }], isError: true } }),
+					() =>
+						reply({
+							result: {
+								content: [{ type: "text", text: "Tool transport failed" }],
+								isError: true,
+							},
+						}),
 				)
 				.finally(() => socket.data.requests.delete(id));
 			return;

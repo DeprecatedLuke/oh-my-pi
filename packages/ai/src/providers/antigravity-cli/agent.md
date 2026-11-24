@@ -1,9 +1,8 @@
 ---
-name: bridge
-description: Host-provided system prompt and tools.
+name: t3code
+description: AGY support for t3 code
 mainAgent: true
 subagent: false
 tools: []
 inheritCustomizations: false
-excludeDefaultComponents: true
 ---
