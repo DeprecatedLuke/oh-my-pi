@@ -38,15 +38,19 @@ export interface FindRefusalDeps {
 	settings: Settings;
 	signal?: AbortSignal;
 	ui: FindRefusalUi;
+	/** Substring the judge should search around first (`/find-refusal <substring>`). */
+	hint?: string;
+	/** Keep every pattern collected across rounds instead of minimizing (`/find-refusal-stacking`). */
+	stacking?: boolean;
 }
 
 /**
- * The uncensored model pattern for /find-refusal: the configured `uncensored`
- * model role, or undefined when it is not set. /find-refusal takes no model
+ * The judge model pattern for /find-refusal: the configured `cyber` model
+ * role, or undefined when it is not set. /find-refusal takes no model
  * argument and has no dedicated setting — the role is the single source.
  */
 export function resolveRefusalModelPattern(settings: Settings): string | undefined {
-	return settings.getModelRole("uncensored")?.trim() || undefined;
+	return settings.getModelRole("cyber")?.trim() || undefined;
 }
 
 /**
@@ -75,7 +79,7 @@ export function formatPatternsYaml(entries: readonly SecretEntry[]): string {
  * disk, no session state changes, and the prompt is not re-sent.
  */
 export async function executeFindRefusal(deps: FindRefusalDeps): Promise<void> {
-	const { session, settings, signal, ui } = deps;
+	const { session, settings, signal, ui, hint, stacking } = deps;
 	const registry = session.modelRegistry;
 
 	const mainModel = session.model;
@@ -93,7 +97,7 @@ export async function executeFindRefusal(deps: FindRefusalDeps): Promise<void> {
 	const pattern = resolveRefusalModelPattern(settings);
 	if (!pattern) {
 		ui.step(
-			"No uncensored model configured for /find-refusal. Set the `uncensored` model role via the model-role selector.",
+			"No cyber model configured for /find-refusal. Set the `cyber` model role via the model-role selector.",
 		);
 		return;
 	}
@@ -167,6 +171,8 @@ export async function executeFindRefusal(deps: FindRefusalDeps): Promise<void> {
 			onStep: line => ui.step(line),
 			onWorking: message => ui.working(message),
 			initialEntries,
+			hint,
+			minimize: !stacking,
 			onProgress: entries =>
 				saveFindRefusalState(agentDir, {
 					sessionId: session.sessionId,
@@ -189,7 +195,7 @@ export async function executeFindRefusal(deps: FindRefusalDeps): Promise<void> {
 	}
 	if (result.entries.length === 0) {
 		ui.step(
-			`${formatModelString(uncensoredModel)} judged the last response a normal answer, not a refusal — nothing to mask. If it was a refusal, set a different model for the \`uncensored\` role and retry.`,
+			`${formatModelString(uncensoredModel)} judged the last response a normal answer, not a refusal — nothing to mask. If it was a refusal, set a different model for the \`cyber\` role and retry.`,
 		);
 		await clearFindRefusalState(agentDir);
 		return;

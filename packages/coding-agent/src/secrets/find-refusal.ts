@@ -1,6 +1,6 @@
 import { scheduler } from "node:timers/promises";
 import type { AssistantMessage, Context, Message, Model, Tool, ToolChoice } from "@oh-my-pi/pi-ai";
-import { parseRateLimitReason } from "@oh-my-pi/pi-ai";
+import { parseRateLimitReason, validateToolCall } from "@oh-my-pi/pi-ai";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { z } from "zod/v4";
 import { extractTextContent, extractToolCall } from "../commit/utils";
@@ -128,6 +128,10 @@ export interface FindRefusalOptions {
 	maxTransientRetries?: number;
 	/** Sleep between transient retries; injectable for deterministic tests. Default scheduler.wait. */
 	sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+	/** User-supplied substring marking where the trigger lives; steers the judge toward that text. */
+	hint?: string;
+	/** Shrink the cleared set to its load-bearing minimum (default true). False keeps every stacked pattern. */
+	minimize?: boolean;
 }
 
 export interface FindRefusalResult {
@@ -294,6 +298,7 @@ export async function runFindRefusal(options: FindRefusalOptions): Promise<FindR
 			transcript: serializeTranscript(maskMessages(entries)),
 			latestResponse,
 			patterns: entries.map(entry => ({ regex: entry.content, flags: entry.flags ?? "" })),
+			hint: options.hint,
 		});
 		const response = await completeWithRetry({
 			model: uncensoredModel,
@@ -435,11 +440,16 @@ export async function runFindRefusal(options: FindRefusalOptions): Promise<FindR
 
 		working(`Re-testing with the main model (round ${iterations + 1})…`);
 		const { text: reprobed } = await reprobeMain(entries);
-		// At temperature 0, a byte-identical response means the new masks did not
-		// touch what the model is reacting to — the trigger is conceptual (the whole
-		// request, not a maskable span), so more rounds just pile on futile patterns.
-		// Stop instead of grinding to maxIterations.
-		if (reprobed === lastReprobe) {
+		// At temperature 0, a byte-identical MODEL-AUTHORED refusal means the new
+		// masks did not touch what the model is reacting to — the trigger is
+		// conceptual (the whole request, not a maskable span), so more rounds just
+		// pile on futile patterns. A fixed filter message (Gemini's "This request
+		// was blocked by Gemini's filters…", a classifier error) is identical on
+		// every block by construction and carries no progress signal: it is the
+		// text the session already refused with, so keep masking until it clears
+		// or maxIterations runs out.
+		const cannedBlock = reprobed === options.refusalText;
+		if (!cannedBlock && reprobed === lastReprobe) {
 			step("Masking did not change the refusal — the trigger is conceptual, not a maskable span. Stopping.");
 			latest = reprobed;
 			break;
@@ -468,7 +478,7 @@ export async function runFindRefusal(options: FindRefusalOptions): Promise<FindR
 
 	try {
 		// ── Shrink: drop patterns that are not load-bearing ───────────────────────
-		if (entries.length > 1) {
+		if (entries.length > 1 && options.minimize !== false) {
 			working(`Minimizing ${plural(entries.length, "pattern")}…`);
 
 			// 1) Free pre-pass (no model calls): drop patterns that mask nothing UNIQUE on the re-probe
@@ -661,40 +671,48 @@ function preview(text: string, max: number): string {
 	return flat.length <= max ? flat : `${flat.slice(0, max - 1)}\u2026`;
 }
 
-function parseSubmitPatterns(response: AssistantMessage): SubmitPatternsPayload {
-	const call = extractToolCall(response, SUBMIT_PATTERNS_TOOL);
+/**
+ * Read a forced tool call's payload. Arguments go through pi-ai's tool-argument
+ * repair first, so models that JSON-encode arrays or booleans (DeepSeek sends
+ * `"patterns": "[…]"`, `"resolved": "true"`) still parse. A bare JSON text reply
+ * is accepted for providers that ignore the forced tool choice.
+ */
+function parseToolPayload<T>(response: AssistantMessage, tool: Tool, schema: z.ZodType<T>): T | undefined {
+	const call = extractToolCall(response, tool.name);
 	if (call) {
-		const parsed = submitPatternsSchema.safeParse(call.arguments);
+		let args: unknown;
+		try {
+			args = validateToolCall([tool], call);
+		} catch {
+			args = call.arguments;
+		}
+		const parsed = schema.safeParse(args);
 		if (parsed.success) return parsed.data;
 	}
 	const text = extractTextContent(response);
 	if (text) {
 		try {
-			const parsed = submitPatternsSchema.safeParse(JSON.parse(text));
+			const parsed = schema.safeParse(JSON.parse(text));
 			if (parsed.success) return parsed.data;
 		} catch {
 			// fall through
 		}
 	}
-	return { resolved: false, patterns: [] };
+	return undefined;
 }
 
+/** A judge reply that cannot be read is an error, never an implicit "still refusing, no patterns" verdict. */
+function parseSubmitPatterns(response: AssistantMessage): SubmitPatternsPayload {
+	const payload = parseToolPayload(response, submitPatternsTool, submitPatternsSchema);
+	if (payload) return payload;
+	const call = extractToolCall(response, SUBMIT_PATTERNS_TOOL);
+	const got = call ? JSON.stringify(call.arguments) : extractTextContent(response) || "(no output)";
+	throw new Error(`refusal model returned an unreadable ${SUBMIT_PATTERNS_TOOL} reply: ${preview(got, 200)}`);
+}
+
+/** An unreadable selection means "remove nothing": every removal is verified anyway, so keeping all masks is safe. */
 function parseSelectRemovable(response: AssistantMessage): number[] {
-	const call = extractToolCall(response, SELECT_REMOVABLE_TOOL);
-	if (call) {
-		const parsed = selectRemovableSchema.safeParse(call.arguments);
-		if (parsed.success) return parsed.data.remove;
-	}
-	const text = extractTextContent(response);
-	if (text) {
-		try {
-			const parsed = selectRemovableSchema.safeParse(JSON.parse(text));
-			if (parsed.success) return parsed.data.remove;
-		} catch {
-			// fall through
-		}
-	}
-	return [];
+	return parseToolPayload(response, selectRemovableTool, selectRemovableSchema)?.remove ?? [];
 }
 
 function assertCompleted(response: AssistantMessage, label: string): void {

@@ -231,6 +231,67 @@ describe("runFindRefusal", () => {
 		expect(steps).toContain("Minimized to 1 pattern.");
 	});
 
+	it("minimize: false returns every collected pattern without running the shrink phase", async () => {
+		// Same scenario as above: the default run minimizes to SecretCorp alone.
+		const terms = ["SecretCorp", "Alpha", "Beta", "Gamma", "Delta", "Epsilon"];
+		const probe: Message[] = [
+			{ role: "user", content: [{ type: "text", text: `Tell me about ${terms.join(", ")}.` }], timestamp: 0 },
+		];
+		const driver = makeDriver({ flaggable: terms, refusalCauses: ["SecretCorp"] });
+		let selectCalls = 0;
+		const complete: FindRefusalComplete = async args => {
+			if (args.model === UNCENSORED && userText(args.context).includes("select_removable")) selectCalls++;
+			return driver.complete(args);
+		};
+		const steps: string[] = [];
+		const result = await runFindRefusal({
+			mainModel: MAIN,
+			uncensoredModel: UNCENSORED,
+			systemPrompt: [],
+			probeMessages: probe,
+			refusalText: REFUSAL,
+			complete,
+			minimize: false,
+			onStep: line => steps.push(line),
+		});
+		expect(result.resolved).toBe(true);
+		expect(result.entries.map(entry => entry.content).sort()).toEqual([...terms].sort());
+		expect(selectCalls).toBe(0);
+		expect(steps.filter(line => /^(Minimized|Dropped redundant)/.test(line))).toEqual([]);
+	});
+
+	it("renders the user hint into the judge's diagnose prompt only when given", async () => {
+		const diagnosePrompts = async (hint: string | undefined): Promise<string[]> => {
+			const driver = makeDriver({ flaggable: ["Bob"], refusalCauses: ["Bob"] });
+			const prompts: string[] = [];
+			const complete: FindRefusalComplete = async args => {
+				if (args.model === UNCENSORED) {
+					const text = userText(args.context);
+					if (!text.includes("select_removable") && !text.includes("friendlyName")) prompts.push(text);
+				}
+				return driver.complete(args);
+			};
+			await runFindRefusal({
+				mainModel: MAIN,
+				uncensoredModel: UNCENSORED,
+				systemPrompt: [],
+				probeMessages: [
+					{ role: "user", content: [{ type: "text", text: "Tell me about Bob." }], timestamp: 0 },
+				],
+				refusalText: REFUSAL,
+				complete,
+				hint,
+			});
+			return prompts;
+		};
+		const hinted = await diagnosePrompts("SecretCorp");
+		expect(hinted.length).toBeGreaterThan(0);
+		expect(hinted[0]).toContain("SecretCorp");
+		const plain = await diagnosePrompts(undefined);
+		expect(plain.length).toBeGreaterThan(0);
+		expect(plain.some(text => text.includes("SecretCorp"))).toBe(false);
+	});
+
 	it("keeps one of two interacting patterns when masking either alone clears", async () => {
 		const probe: Message[] = [
 			{ role: "user", content: [{ type: "text", text: "Tell me about Alpha and Beta." }], timestamp: 0 },
@@ -488,10 +549,11 @@ describe("runFindRefusal re-probe resilience", () => {
 	});
 
 	it("stops early when masking does not change the refusal (conceptual trigger, no progress)", async () => {
-		// Main model returns a BYTE-IDENTICAL refusal every round despite new masks —
-		// the trigger is the whole concept, not a maskable span. The loop must detect
-		// zero progress and stop, NOT grind to maxIterations piling on futile patterns.
-		const CONSTANT_REFUSAL = "Refusal (cyber): This request triggered restrictions on violative cyber content";
+		// Main model returns a BYTE-IDENTICAL re-probe refusal every round despite new
+		// masks, and it differs from the original session refusal — model-authored,
+		// the trigger is the whole concept. The loop must detect zero progress and
+		// stop, NOT grind to maxIterations piling on futile patterns.
+		const CONSTANT_REFUSAL = "I can't assist with that.";
 		let mainCalls = 0;
 		let round = 0;
 		const steps: string[] = [];
@@ -509,7 +571,7 @@ describe("runFindRefusal re-probe resilience", () => {
 			uncensoredModel: UNCENSORED,
 			systemPrompt: [],
 			probeMessages: PROBE,
-			refusalText: CONSTANT_REFUSAL,
+			refusalText: "I won't help with that fault demonstration.",
 			complete,
 			maxIterations: 6,
 			onStep: line => steps.push(line),
@@ -519,6 +581,46 @@ describe("runFindRefusal re-probe resilience", () => {
 		// Stopped at the 2nd identical reprobe, NOT after all 6 rounds.
 		expect(mainCalls).toBe(2);
 		expect(steps.some(line => /conceptual/i.test(line))).toBe(true);
+	});
+
+	it("keeps masking when every re-probe repeats the original canned filter block", async () => {
+		// Regression: antigravity-cli surfaces Gemini's block as fixed plain text identical
+		// on every block. Repetition of the ORIGINAL refusal is not evidence of a conceptual
+		// trigger; the loop must keep masking until the block clears.
+		const CANNED =
+			"This request was blocked by Gemini's filters. They can occasionally trigger by mistake on safe coding, security, or biology-related queries.";
+		const words = ["SecretCorp", "Bob", "Tell", "about"];
+		let mainCalls = 0;
+		let round = 0;
+		const steps: string[] = [];
+		const complete: FindRefusalComplete = async ({ model, context }) => {
+			const text = userText(context);
+			if (model === UNCENSORED) {
+				if (text.includes("friendlyName")) return toolResponse({ resolved: true, patterns: [] });
+				if (!section("target-response", text).includes("blocked by Gemini")) {
+					return toolResponse({ resolved: true, patterns: [] });
+				}
+				const word = words[round++ % words.length];
+				return toolResponse({ resolved: false, patterns: [{ regex: `\\b${word}\\b` }] });
+			}
+			mainCalls++;
+			return textResponse(mainCalls >= 4 ? "Sure, here is the answer." : CANNED);
+		};
+
+		const result = await runFindRefusal({
+			mainModel: MAIN,
+			uncensoredModel: UNCENSORED,
+			systemPrompt: [],
+			probeMessages: PROBE,
+			refusalText: CANNED,
+			complete,
+			maxIterations: 6,
+			onStep: line => steps.push(line),
+		});
+
+		expect(result.resolved).toBe(true);
+		expect(mainCalls).toBeGreaterThanOrEqual(4);
+		expect(steps.some(line => /conceptual/i.test(line))).toBe(false);
 	});
 
 	it("rethrows a non-refusal error from the main model (does not swallow real failures)", async () => {
@@ -537,6 +639,60 @@ describe("runFindRefusal re-probe resilience", () => {
 				maxIterations: 2,
 			}),
 		).rejects.toThrow(/400 invalid request/);
+	});
+});
+
+describe("runFindRefusal judge reply parsing", () => {
+	it("repairs JSON-stringified submit_patterns fields instead of dropping the proposed patterns", async () => {
+		// Regression: some judges (deepseek-v4.1-flash) encode `resolved` and `patterns` as JSON strings.
+		// Unrepaired, zod rejected the reply and the loop stopped with "no patterns proposed".
+		const complete: FindRefusalComplete = async ({ model, context }) => {
+			const text = userText(context);
+			if (model === UNCENSORED) {
+				if (text.includes("friendlyName")) return toolResponse({ resolved: true, patterns: [] });
+				if (!section("target-response", text).includes("REFUSAL")) {
+					return toolResponse({ resolved: true, patterns: [] });
+				}
+				return toolResponse({
+					resolved: "false",
+					patterns: JSON.stringify([{ regex: "\\bSecretCorp\\b", reason: "company name" }]),
+				});
+			}
+			const refused = JSON.stringify(context.messages).includes("SecretCorp");
+			return textResponse(refused ? REFUSAL : "OK, here is the answer about the company.");
+		};
+
+		const result = await runFindRefusal({
+			mainModel: MAIN,
+			uncensoredModel: UNCENSORED,
+			systemPrompt: [],
+			probeMessages: PROBE,
+			refusalText: REFUSAL,
+			complete,
+			maxIterations: 4,
+		});
+
+		expect(result.reason ?? "").not.toMatch(/no patterns proposed/);
+		expect(result.resolved).toBe(true);
+		expect(result.entries.map(entry => entry.content)).toEqual(["\\bSecretCorp\\b"]);
+	});
+
+	it("rejects an unrepairable submit_patterns reply instead of treating it as a refusal verdict", async () => {
+		const complete: FindRefusalComplete = async ({ model }) => {
+			if (model === UNCENSORED) return toolResponse({ patterns: 42 });
+			return textResponse(REFUSAL);
+		};
+		await expect(
+			runFindRefusal({
+				mainModel: MAIN,
+				uncensoredModel: UNCENSORED,
+				systemPrompt: [],
+				probeMessages: PROBE,
+				refusalText: REFUSAL,
+				complete,
+				maxIterations: 2,
+			}),
+		).rejects.toThrow(/unreadable submit_patterns reply/);
 	});
 });
 
@@ -785,13 +941,13 @@ describe("runFindRefusal visibility + resilience", () => {
 });
 
 describe("resolveRefusalModelPattern", () => {
-	it("returns the configured uncensored model role", () => {
+	it("returns the configured cyber model role", () => {
 		const settings = Settings.isolated({});
-		settings.setModelRole("uncensored", "anthropic/uncensored-model");
+		settings.setModelRole("cyber", "anthropic/uncensored-model");
 		expect(resolveRefusalModelPattern(settings)).toBe("anthropic/uncensored-model");
 	});
 
-	it("returns undefined when the uncensored role is not configured", () => {
+	it("returns undefined when the cyber role is not configured", () => {
 		const settings = Settings.isolated({});
 		expect(resolveRefusalModelPattern(settings)).toBeUndefined();
 	});

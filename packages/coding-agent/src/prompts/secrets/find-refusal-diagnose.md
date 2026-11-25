@@ -13,6 +13,10 @@ Redaction patterns already applied:
 No redaction patterns are applied yet.
 {{/if}}
 
+{{#if hint}}
+The user located the trigger: it is in or right around the transcript text containing `{{hint}}`. Search there first and propose patterns for the sensitive terms in that region before looking anywhere else.
+
+{{/if}}
 The target's most recent response to this transcript was:
 
 <target-response>

@@ -42,43 +42,51 @@ export interface TuiBuiltinSlashCommand extends BuiltinSlashCommand {
 	getAutocompleteDescription?: () => string | undefined;
 }
 
-const FIND_REFUSAL_SLASH_COMMAND: SlashCommandSpec = {
-	name: "find-refusal",
-	description: "Find whatever made the model refuse and list the redaction patterns (list only)",
-	handleTui: async (_command, runtime) => {
-		const ctx = runtime.ctx;
-		clearSubmittedText(runtime);
-		const ui = createTuiFindRefusalUi(ctx);
-		const signal = ctx.beginFindRefusal?.();
-		try {
-			await executeFindRefusal({
-				session: ctx.session,
-				settings: ctx.settings,
-				signal,
-				ui,
-			});
-		} catch (err) {
-			ui.step(`Failed: ${errorMessage(err)}`);
-		} finally {
-			ui.done();
-			ctx.endFindRefusal?.();
-		}
-		return commandConsumed();
-	},
-	handle: async (_command, runtime) => {
-		try {
-			await executeFindRefusal({
-				session: runtime.session,
-				settings: runtime.settings,
-				signal: runtime.signal,
-				ui: { step: line => void runtime.output(line), working: () => {} },
-			});
+function findRefusalSlashCommand(name: string, description: string, stacking: boolean): SlashCommandSpec {
+	return {
+		name,
+		description,
+		allowArgs: true,
+		inlineHint: "[substring near the trigger]",
+		handleTui: async (command, runtime) => {
+			const ctx = runtime.ctx;
+			clearSubmittedText(runtime);
+			const ui = createTuiFindRefusalUi(ctx);
+			const signal = ctx.beginFindRefusal?.();
+			try {
+				await executeFindRefusal({
+					session: ctx.session,
+					settings: ctx.settings,
+					signal,
+					ui,
+					hint: command.args.trim() || undefined,
+					stacking,
+				});
+			} catch (err) {
+				ui.step(`Failed: ${errorMessage(err)}`);
+			} finally {
+				ui.done();
+				ctx.endFindRefusal?.();
+			}
 			return commandConsumed();
-		} catch (err) {
-			return usage(`Failed: ${errorMessage(err)}`, runtime);
-		}
-	},
-};
+		},
+		handle: async (command, runtime) => {
+			try {
+				await executeFindRefusal({
+					session: runtime.session,
+					settings: runtime.settings,
+					signal: runtime.signal,
+					ui: { step: line => void runtime.output(line), working: () => {} },
+					hint: command.args.trim() || undefined,
+					stacking,
+				});
+				return commandConsumed();
+			} catch (err) {
+				return usage(`Failed: ${errorMessage(err)}`, runtime);
+			}
+		},
+	};
+}
 
 const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	...BUILTIN_MODE_SLASH_COMMANDS,
@@ -89,7 +97,16 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	...BUILTIN_MARKETPLACE_SLASH_COMMANDS,
 	...BUILTIN_SKILLS_SLASH_COMMANDS,
 	...BUILTIN_CONTROL_SLASH_COMMANDS,
-	FIND_REFUSAL_SLASH_COMMAND,
+	findRefusalSlashCommand(
+		"find-refusal",
+		"Find whatever made the model refuse and list the minimal redaction patterns (list only)",
+		false,
+	),
+	findRefusalSlashCommand(
+		"find-refusal-stacking",
+		"Find whatever made the model refuse and list every pattern collected, without minimizing (list only)",
+		true,
+	),
 ];
 
 const BUILTIN_SLASH_COMMAND_LOOKUP = new Map<string, SlashCommandSpec>();

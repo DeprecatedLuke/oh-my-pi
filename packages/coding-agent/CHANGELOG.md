@@ -6,10 +6,13 @@
 
 - `retry.cyberFallbackModels` maps a model glob (`*opus-*`, `anthropic/claude-opus-5-5`, or `*` for everything) to the model or models that replace it when a provider's classifier refuses the turn — including Codex `cyber_policy` denials and OpenAI `content_filter` blocks; a mapped refusal switches at once with no same-model retry (a mapped `cyber_policy` denial skips credential rotation entirely), the map is walked per model (`*sonnet*: openai-codex/gpt-6-astra`, `*astra*: "@cyber"`) including past entries whose context window is too small, the switch survives session resume, subagent revival and prewalk handoffs to a mapped model, advisors consult it before their own chain, and the refused turn no longer replays on the switch
 - `secrets.modelFiles` maps a model glob to the secrets file(s) used for that model instead of the global `secrets.yml`/`secrets-managed.yml` (e.g. `{"*opus-*": "~/.omp/agent/secrets-anthropic.yml", "openai-codex/*": []}`); each request is redacted with the set of the model it goes to, and placeholders from every set still restore after a model switch or resume
+- `/find-refusal <substring>` points the refusal model at the part of the conversation containing that text, so it looks for the trigger there first
+- Added `/find-refusal-stacking`, which lists every pattern collected across rounds instead of shrinking them to the minimal set
 
 ### Breaking Changes
 
 - `/fix-refusal` is now `/find-refusal` and only lists what it finds: it prints the trigger patterns as ready-to-paste `secrets.yml` YAML instead of writing `secrets-managed.yml`, swapping the session's redaction, or re-sending the prompt (existing `secrets-managed.yml` files still load)
+- `/find-refusal` now uses the `cyber` model role instead of `uncensored`
 
 ### Removed
 
@@ -17,6 +20,8 @@
 
 ### Fixed
 
+- Fixed `/find-refusal` stopping with "no patterns proposed" when the refusal model sends its patterns as JSON-encoded strings (e.g. DeepSeek); an unreadable reply now reports an error instead of counting as a refusal with no patterns
+- Fixed `/find-refusal` giving up after one round on filter blocks that always return the same message (e.g. Gemini's "This request was blocked by Gemini's filters"); it now keeps masking until the block clears or the round limit is reached
 - Fixed 15–25s UI freezes after each history prune in long sessions with an advisor and secret redaction: pruning or shaking messages the advisor already reviewed no longer replays the whole transcript to it, and per-turn advisor updates no longer re-redact its entire history
 - Fixed 0.5–5s UI freezes on the two requests after a tool result introduced a new secret-like value: redaction now reuses its cached results for every text the new value does not occur in, instead of re-redacting the whole context
 - Fixed multi-second UI freezes before every model request in long sessions with secret redaction enabled; unchanged history is no longer re-scanned and re-redacted on each turn ([#18664](https://github.com/can1357/oh-my-pi/pull/18664) by [@DeprecatedLuke](https://github.com/DeprecatedLuke))
