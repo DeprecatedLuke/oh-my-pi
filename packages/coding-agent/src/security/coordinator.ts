@@ -13,7 +13,6 @@ import securityCoordinatorPrompt from "../prompts/security/scan-coordinator.md" 
 import securityRequestPrompt from "../prompts/security/scan-request.md" with { type: "text" };
 import securityPublishDescription from "../prompts/tools/security-publish.md" with { type: "text" };
 import { AgentRegistry } from "../registry/agent-registry";
-import { createAgentSession } from "../sdk";
 import { buildSecretObfuscator } from "../secrets";
 import { cfgSecretsEnabled } from "../secrets/settings";
 import type { AgentSession } from "../session/agent-session";
@@ -264,6 +263,7 @@ async function createDefaultSecuritySession(input: SecurityScanSessionFactoryInp
 		(cfgSecretsEnabled.get(input.host.settings)
 			? await buildSecretObfuscator(input.plan.repositoryRoot, input.host.settings.getAgentDir())
 			: undefined);
+	const { createAgentSession } = await import("../sdk");
 	const { session } = await createAgentSession({
 		cwd: input.executionRoot,
 		obfuscator,

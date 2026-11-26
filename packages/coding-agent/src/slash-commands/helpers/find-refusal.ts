@@ -96,9 +96,7 @@ export async function executeFindRefusal(deps: FindRefusalDeps): Promise<void> {
 
 	const pattern = resolveRefusalModelPattern(settings);
 	if (!pattern) {
-		ui.step(
-			"No cyber model configured for /find-refusal. Set the `cyber` model role via the model-role selector.",
-		);
+		ui.step("No cyber model configured for /find-refusal. Set the `cyber` model role via the model-role selector.");
 		return;
 	}
 

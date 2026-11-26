@@ -103,7 +103,7 @@ import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" wit
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
 import type { AgentHubRegistry } from "../registry/agent-hub-types";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
-import { registerPersistedSubagents } from "../registry/persisted-agents";
+import { isSessionTreeRef, registerPersistedSubagents } from "../registry/persisted-agents";
 import type { AgentCostSnapshot } from "./view-model/overlays/agent-hub-projection";
 import { sumSubagentTreeCost } from "./agent-hub-runtime";
 import {
@@ -282,7 +282,9 @@ import type {
 } from "./types";
 import type { TodoItem, TodoPhase } from "../tools/details/todo";
 import type { ConversationPosition } from "./utils/conversation-position";
+import { DEFAULT_FIGURE_CELL, type FigureCell, figureMaxRows } from "../ui/transcript/figures/svg";
 import { setImageBlobWriter } from "../ui/transcript/image-links";
+import { followInlineImageLimits } from "../ui/transcript/messages/image";
 import { imageLinksForMessage, UiHelpers } from "./utils/ui-helpers";
 
 import {
@@ -388,6 +390,7 @@ import {
 	type JSXNode,
 	jsx,
 	type KeyEvent,
+	nativeRendering,
 	type PresentedFrame,
 	type Signal,
 	signal,
@@ -395,7 +398,8 @@ import {
 } from "@oh-my-pi/pi-tui";
 
 import { insideMultiplexer } from "@oh-my-pi/pi-tui/driver/mux/detect";
-import { setLinkSchemes, setMarkdownLook } from "@oh-my-pi/pi-tui/term/painters/md";
+import { setLinkSchemes } from "@oh-my-pi/pi-tui/term/painters/md";
+import { setMarkdownLook } from "@oh-my-pi/pi-tui/text/markdown/look";
 import { KeybindingsManager } from "../config/keybindings/keybindings";
 import { appInterruptKeys } from "../config/keybindings/matchers";
 import { setExtensionLinkClicksProvider } from "../extensibility/extensions/link-clicks";
@@ -417,7 +421,7 @@ import { PLAN_SAVE_SHEET, PlanSave } from "../ui/overlays/panels/plan-save";
 import { SESSION_INFO_SHEET, SessionInfo } from "../ui/overlays/panels/session-info";
 import { JOBS_SHEET, JobsPanel } from "../ui/overlays/pickers/jobs-panel";
 import { hasExtensionLinks, LinkBrowser, type LinkReply } from "../ui/overlays/pickers/link-browser";
-import { sheetScreen, showSheet } from "../ui/overlays/sheet";
+import { showSheet } from "../ui/overlays/sheet";
 import {
 	type BlockOptions,
 	type InputInterceptor,
@@ -690,6 +694,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		proseOnlyThinking: signal(true),
 		expandThinkingBlocks: signal(false),
 		showImages: signal(true),
+		renderSvg: signal(true),
+		renderEmbeds: signal(true),
+		figureCell: signal<FigureCell | undefined>(undefined),
+		// Set with the terminal's rows (see `init`): a signal, so a resize that keeps the share redraws nothing.
+		figureRows: signal<number | undefined>(undefined),
 		tableCharts: () => this.tableChartsVisible,
 		shellVisualization: signal(true),
 		mcpMarkdown: signal(false),
@@ -889,7 +898,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		pills.jobsRunning.set(background.size);
 		pills.jobWidgets.set(this.session.getRunningJobWidgets().filter(entry => background.has(entry.id)));
-		this.statusLine.refresh();
+		this.statusLine.refreshJobs();
 	}
 	/** The job widget registry this mode follows, and how to stop listening to it. */
 	#jobWidgetsListener: { registry: JobWidgetRegistry; unsubscribe: () => void } | undefined;
@@ -1035,12 +1044,13 @@ export class InteractiveMode implements InteractiveModeContext {
 	onInputCallback?: (input: SubmittedUserInput) => void;
 	optimisticUserMessageSignature: string | undefined = undefined;
 	locallySubmittedUserSignatures: Set<string> = new Set();
-	#pendingSubmittedInput: SubmittedUserInput | undefined;
+	#pendingSubmittedInput: (SubmittedUserInput & { submittedAt: number }) | undefined;
 	#pendingSubmissionDispose: (() => void) | undefined;
 	#findRefusalAbort?: AbortController;
 	#pendingSubmissionPreservesDraft = false;
 	/** Unregisters this mode's transcript-image blob writer (a later mode's registration survives). */
 	#disposeImageBlobWriter: (() => void) | undefined;
+	#disposeInlineImageLimits: (() => void) | undefined;
 	#optimisticUserMessageBlocks: TranscriptBlock[] = [];
 	#optimisticSkillMessageBlocks: TranscriptBlock[] = [];
 	/** True while an optimistically-rendered `/skill:` row awaits its canonical
@@ -1427,6 +1437,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				vim: cfgTuiVimMode.get(settings),
 				autocompleteMaxVisible: cfgAutocompleteMaxVisible.get(settings),
 				hardwareCursor: cfgShowHardwareCursor.get(settings),
+				imeSafeCursor: cfgTuiImeSafeCursor.get(settings),
 			});
 		this.keybindings = KeybindingsManager.inMemory();
 		this.agent = session.agent;
@@ -1546,19 +1557,25 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#disposeImageBlobWriter = setImageBlobWriter((data, options) =>
 			this.viewSession.sessionManager.putBlobSync(data, options),
 		);
+		this.#disposeInlineImageLimits = followInlineImageLimits(() => this.shell.size().rows);
 		this.#tray = new TrayFeed(
 			{
-				input: () =>
-					collectTrayInput({
+				input: () => {
+					// A collab guest's registry mirrors the host's session: every agent in it is the session's.
+					const root = this.collabGuest ? undefined : this.sessionManager.getSessionFile();
+					return collectTrayInput({
 						observers: this.#observerRegistry,
-						refs: getRunningSubagentBadgeRegistry(this.collabGuest, AgentRegistry.global()).list(),
+						refs: getRunningSubagentBadgeRegistry(this.collabGuest, AgentRegistry.global())
+							.list()
+							.filter(ref => isSessionTreeRef(ref, root)),
 						manager: this.session.asyncJobManager,
 						snapshot: () => this.session.getAsyncJobSnapshot({ recentLimit: Number.POSITIVE_INFINITY }),
 						irc: IrcBus.existing(),
 						showAgents: cfgDisplayPinnedAgents.get(settings) !== "off",
 						canFocus: this.collabGuest === undefined,
 						reviving: this.#trayReviving,
-					}),
+					});
+				},
 				main: () => this.#trayMain.state(id => runsInlineAgent(this.#observerRegistry.getSessions(), id)),
 				focusAgent: id => {
 					this.focusAgentSession(id).catch((error: unknown) =>
@@ -1600,7 +1617,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#effect(() => {
 			const { rows } = this.shell.size();
 			this.shell.native();
+			// Tern lays figures out itself: its rasters keep their full size.
+			const figureRows = nativeRendering() ? undefined : figureMaxRows(rows);
 			untrack(() => {
+				this.#display.figureRows.set(figureRows);
 				this.#syncEditorMaxHeight();
 				// A short terminal folds the plan into the status row.
 				this.hud.todo.compact.set(rows < TODO_COMPACT_ROWS);
@@ -1650,9 +1670,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		// The composer hint follows the ask above, running agents and the conversation's start.
 		this.#effect(() => this.composer.setPlaceholder(this.#composerHint()));
 		this.#effect(() => this.composer.setNativePlaceholder(this.#nativeComposerPlaceholder()));
-		// A `/btw` note taking or giving back the composer changes its role and chip.
+		// A `/btw` note taking or giving back the composer changes its role and chip; so does a draft
+		// that starts or stops skipping the ask waiting above (read only while one waits).
 		this.#effect(() => {
 			this.#btwController.isFocused();
+			this.#extensionUiController.composerAsk();
 			untrack(() => this.#syncComposerState());
 		});
 		// Idle, the terminal's status row keeps the working row's trailer (band title with its pin,
@@ -1698,13 +1720,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				"thinking.set": value => this.#inputController.setThinkingFromComposer(value),
 				"dictation.toggle": () => void this.#toggleComposerDictation(),
 			},
-			rate: () => {
-				if (!showRate()) return undefined;
-				// Session events refresh the facts; the rate meter itself is not reactive.
-				this.statusLine.facts();
-				const rate = this.tokenRate.rate();
-				return rate === null ? undefined : Math.round(rate * 10) / 10;
-			},
+			rate: () => (showRate() ? this.statusLine.composerRate() : undefined),
 		});
 	}
 
@@ -1774,6 +1790,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		};
 		const host = this.shell.host;
 		if (!host) return;
+		const updateFigureCell = (): void => {
+			const caps = host.driver.capabilities;
+			const next = caps.images ? (caps.cell ?? DEFAULT_FIGURE_CELL) : undefined;
+			const current = this.#display.figureCell.peek();
+			if (current?.w !== next?.w || current?.h !== next?.h) this.#display.figureCell.set(next);
+		};
+		updateFigureCell();
 		// A confirmed Glyph Protocol handshake means omp's own icons render without a Nerd Font, so
 		// the unconfigured `unicode` preset is upgraded to `nerd` for this session. The setting is
 		// left alone (it travels to terminals where the upgrade would show tofu); an explicit
@@ -1790,6 +1813,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		upgradeGlyphs();
 		this.#eventBusUnsubscribers.push(
 			host.driver.onCapabilities(upgradeGlyphs),
+			host.driver.onCapabilities(updateFigureCell),
 			followTerminal(host.driver),
 			host.onFrame(frame => (this.#lastFrame = frame)),
 		);
@@ -1808,6 +1832,11 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.#syncExtensionLinkClicks();
 				this.#syncTrayHost();
 			});
+		});
+		// Tern reads and shows this session's checkout itself: nothing to read here while it does.
+		this.#effect(() => {
+			const homed = this.shell.native() && this.shell.host?.checkoutShown() === true;
+			untrack(() => this.statusLine.setCheckoutHomed(homed));
 		});
 		this.#probeProgramStatus();
 	}
@@ -1877,17 +1906,15 @@ export class InteractiveMode implements InteractiveModeContext {
 						this.showWarning(`Copy failed: ${error instanceof Error ? error.message : String(error)}`),
 				);
 				return;
-			case "rewind":
-				this.showUserMessageSelector();
-				return;
 			case "edit-turn":
 			case "retry-turn":
 			case "rewind-turn":
 			case "fork-turn":
-				void this.#selectorController.runTurnAction(act.slice(0, -"-turn".length) as TurnAct, {
-					role: "user",
-					at: timestamp,
-				});
+				void this.#selectorController.runTurnAction(
+					act.slice(0, -"-turn".length) as TurnAct,
+					{ role: "user", at: timestamp },
+					this.#pendingSubmittedInput,
+				);
 		}
 	}
 
@@ -2126,7 +2153,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#inputController.enableEnhancedPaste();
 		}
 		this.#bindShellHost();
-		if (!options.suppressWelcomeIntro) this.playWelcomeIntro();
 		pushTerminalTitle();
 		// Claim the terminal title before any session update: this is the one path
 		// that releases the teardown latch, so a late async `setSessionTerminalTitle`
@@ -2134,7 +2160,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		initTerminalTitleState();
 		setTerminalTitleStateEnabled(cfgTuiTitleState.get(this.settings));
 		setTerminalTitleSpinnerStyle(cfgTuiTitleSpinner.get(this.settings));
-		setTerminalTitleSpinnerInterval(cfgMotionResolved.get(this.settings).spinnerInterval);
+		setTerminalTitleSpinnerInterval(cfgMotionResolved.get(this.settings).titleSpinnerInterval);
 		initProgramStatus({ startupRun: options.startupRun });
 		setProgramStatusEnabled(cfgTerminalProgramStatus.get(this.settings));
 		this.#probeProgramStatus();
@@ -2386,7 +2412,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		// other's turn instead of dying.
 		this.composer.setDisableSubmit(false);
 		this.#idleMaintenanceActivity.ready = true;
+		if (!options.suppressWelcomeIntro) this.playWelcomeIntro();
 		this.syncIdleMaintenanceView();
+		// The first alt+p then opens as fast as a reopen.
+		this.#selectorController
+			.warmModelPicker(this.#dialogLifetime.signal)
+			.catch(error => logger.warn("Model picker prewarm failed", { error: String(error) }));
 	}
 
 	/**
@@ -2854,6 +2885,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				timeoutMs: cfgLoopConditionTimeoutMs.get(settings),
 				signal: controller.signal,
 				sessionId,
+				sessionFile: this.sessionManager.getSessionFile(),
 				isSessionCurrent: () => this.sessionManager.getSessionId() === sessionId,
 			});
 		} finally {
@@ -3326,7 +3358,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		},
 		options?: { preserveDraft?: boolean; clearEditor?: boolean },
 	): SubmittedUserInput {
-		const submission: SubmittedUserInput = {
+		const submission = {
+			submittedAt: Date.now(),
 			text: input.text,
 			images: input.images,
 			imageLinks: input.imageLinks,
@@ -3352,15 +3385,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			const imageCount = submission.images?.length ?? 0;
 			this.optimisticUserMessageSignature = `${submission.text}\u0000${imageCount}`;
 			this.#pendingSubmissionDispose = this.recordLocalSubmission(submission.text, imageCount);
-			this.#optimisticUserMessageBlocks = this.addMessageToChat(
-				{
-					role: "user",
-					content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
-					attribution: "user",
-					timestamp: Date.now(),
-				},
-				input.imageLinks ? { imageLinks: input.imageLinks } : {},
-			);
+			this.#replayOptimisticUserMessage();
 		} else {
 			this.clearOptimisticUserMessage();
 		}
@@ -3382,7 +3407,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.clearOptimisticUserMessage();
 		this.#working.setMessage(undefined);
 		if (submission.customType === "goal-continuation") this.#releaseGoalContinuationTurn();
-		this.#working.clear("turn");
+		this.clearWorking("turn");
 		if (!submission.customType && !preserveDraft) {
 			// Enter clears the submitted draft before this cancellation can run.
 			// Keep anything typed or attached since then, after the recovered input.
@@ -3470,9 +3495,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			pendingSubmissionDispose?.();
 			this.#optimisticUserMessageBlocks = [];
 			this.#working.setMessage(undefined);
-			// A run paused on outside work keeps its working row, which names the
-			// wait; the next loop or the run's `agent_end` tears it down.
-			if (!this.#eventController.isAwaitingAsyncWork()) this.clearWorking("turn");
+			this.clearWorking("turn");
 		}
 	}
 
@@ -3511,6 +3534,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#syncTranscriptDisplaySettings(): void {
 		const display = this.#display;
 		display.showImages.set(cfgTerminalShowImages.get(this.settings));
+		display.renderSvg.set(cfgTuiRenderSvg.get(this.settings));
+		display.renderEmbeds.set(cfgTuiRenderEmbeds.get(this.settings));
 		display.shellVisualization.set(cfgDisplayShellVisualization.get(this.settings));
 		display.mcpMarkdown.set(cfgMcpRenderMarkdownResults.get(this.settings));
 		display.readPreview.set(cfgReadToolResultPreview.get(this.settings));
@@ -3532,6 +3557,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		if (any("showHardwareCursor"))
 			this.composer.setCaret(cfgShowHardwareCursor.get(this.settings) ? "terminal" : "drawn");
+		if (any("tui.imeSafeCursor")) this.#frame.setImeSafeCursor(cfgTuiImeSafeCursor.get(this.settings));
 		if (any("autocompleteMaxVisible"))
 			this.composer.setAutocompleteMaxVisible(cfgAutocompleteMaxVisible.get(this.settings));
 		if (any("composer.shape")) this.syncComposerShape();
@@ -3600,7 +3626,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		) {
 			rebuildChat = true;
 		}
-		if (any("tui.colorfulMarkdown", "tui.renderMermaid")) {
+		if (any("tui.colorfulMarkdown", "tui.renderMermaid", "tui.renderSvg", "tui.renderEmbeds")) {
 			this.#syncTranscriptDisplaySettings();
 			resetDisplay = true;
 		}
@@ -3623,7 +3649,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (any("tui.titleState")) setTerminalTitleStateEnabled(cfgTuiTitleState.get(this.settings));
 		if (any("tui.titleSpinner")) setTerminalTitleSpinnerStyle(cfgTuiTitleSpinner.get(this.settings));
 		if (any("terminal.programStatus")) setProgramStatusEnabled(cfgTerminalProgramStatus.get(this.settings));
-		if (any("motion")) setTerminalTitleSpinnerInterval(next.motion.spinnerInterval);
+		if (any("motion")) setTerminalTitleSpinnerInterval(next.motion.titleSpinnerInterval);
 
 		if (
 			any(
@@ -3850,10 +3876,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncComposerState();
 	}
 
-	/** The composer's mode: a turn runs (Stop for Send), the draft is a shell command or a `/btw` question. */
+	/**
+	 * The composer's mode: a turn runs (Stop for Send), the draft is a shell command or a `/btw`
+	 * question, the view is a subagent's (its viewing header), sending the draft skips the ask above.
+	 */
 	#syncComposerState(): void {
 		this.#composerHintRevision.set(this.#composerHintRevision.peek() + 1);
 		const draft = untrack(this.composer.text).trimStart();
+		const viewing = this.#viewingLineage();
 		this.composer.setState({
 			running: this.#working.kind !== undefined || this.session.isStreaming,
 			...(this.isBashMode
@@ -3864,7 +3894,25 @@ export class InteractiveMode implements InteractiveModeContext {
 						? { shell: { kind: "btw", excluded: false } }
 						: {}),
 			...(untrack(() => this.isBtwFocused) ? { btw: true } : {}),
+			...(viewing ? { viewing } : {}),
+			...(untrack(() => this.#extensionUiController.composerAsk()) === "skip" ? { skipsAsk: true } : {}),
 		});
+	}
+
+	/** The focused subagent and its live ancestors below main, outermost first; undefined on the main session. */
+	#viewingLineage(): string[] | undefined {
+		const id = this.focusedAgentId;
+		if (!id) return undefined;
+		const registry = AgentRegistry.global();
+		const lineage = [id];
+		for (
+			let parent = registry.get(id)?.parentId;
+			parent && parent !== MAIN_AGENT_ID && !lineage.includes(parent) && registry.get(parent);
+			parent = registry.get(parent)?.parentId
+		) {
+			lineage.unshift(parent);
+		}
+		return lineage;
 	}
 
 	/**
@@ -4040,7 +4088,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				role: "user",
 				content: [{ type: "text", text: submission.text }, ...(submission.images ?? [])],
 				attribution: "user",
-				timestamp: Date.now(),
+				timestamp: submission.submittedAt,
 			},
 			submission.imageLinks ? { imageLinks: submission.imageLinks } : {},
 		);
@@ -4558,6 +4606,11 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.sessionManager.appendModeChange("none");
 				return;
 			}
+			// A --no-tools session cannot run the goal; leave it journaled for a session that can.
+			if (this.session.restrictToolNames) {
+				this.session.goalRuntime.clearAccounting();
+				return;
+			}
 			this.session.setGoalModeState({
 				enabled: sessionContext.mode === "goal",
 				mode: "active",
@@ -4656,6 +4709,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.vibeModeEnabled) {
 			this.showWarning("Exit vibe mode first.");
+			return;
+		}
+		// Plan mode ends by `propose`, which a --no-tools session does not register.
+		if (this.session.restrictToolNames) {
+			this.showWarning("Plan mode is unavailable in a --no-tools session.");
 			return;
 		}
 
@@ -4797,9 +4855,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		// A mid-turn exit must interrupt the currently streaming turn.
 		// The plan-mode prompt instructs the model to keep planning until it
 		// submits the plan with `propose`, so the live turn must be aborted inside
-		// `runModeExitTeardown` to avoid restarting on the stale toolset.
+		// `withQueueDrainPaused` to avoid restarting on the stale toolset.
 		if (options?.interruptActiveTurn && this.session.isStreaming) {
-			await this.session.runModeExitTeardown(async () => {
+			await this.session.withQueueDrainPaused(async () => {
 				await this.session.abort({ reason: USER_INTERRUPT_LABEL });
 				await this.#tearDownPlanMode(options);
 			});
@@ -4924,6 +4982,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.vibeModeEnabled) {
 			this.showWarning("Exit vibe mode first.");
+			return;
+		}
+		// Goal mode runs through the `goal` tool, which a --no-tools session does not register.
+		if (this.session.restrictToolNames) {
+			this.showWarning("Goal mode is unavailable in a --no-tools session.");
 			return;
 		}
 		const enabledTools = this.session.getEnabledToolNames();
@@ -5378,26 +5441,21 @@ export class InteractiveMode implements InteractiveModeContext {
 						handle.close();
 					},
 				}),
-			{ onClose: () => resolve(result) },
+			{
+				focus: root => root.children().find(node => node.kind === "input") ?? root,
+				onClose: () => resolve(result),
+			},
 		);
 		return (await promise)?.path;
 	}
 
 	/**
-	 * The plan review's Save: write `planContent` to `presetPath`, or to a path the
-	 * operator picks (prefilled), and report it. The review stays open: its focus
-	 * comes back after the path prompt.
+	 * Export the plan to a chosen or preset path without resolving the review.
+	 * The review owns focus again when the path sheet closes.
 	 */
 	async #savePlan(planContent: string, title: string, presetPath?: string): Promise<void> {
-		let selectedPath = presetPath;
-		if (selectedPath === undefined) {
-			try {
-				selectedPath = await this.#promptPlanSavePath(planContent, title);
-			} finally {
-				const review = this.#planReviewOverlayHandle;
-				if (review && !review.closed) this.shell.focus(sheetScreen(this.shell, review));
-			}
-		}
+		const review = presetPath === undefined ? this.#planReview : undefined;
+		const selectedPath = presetPath ?? (await this.#promptPlanSavePath(planContent, title));
 		if (!selectedPath) return;
 
 		let destination: string;
@@ -5415,7 +5473,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 			return;
 		}
-		this.showStatus(`Saved plan to ${shortenPath(destination)}`);
+		const message = `Saved plan to ${shortenPath(destination)}`;
+		if (review && this.#planReview === review && !this.shell.native()) review.setSaveNotice(message);
+		this.showStatus(message);
 	}
 
 	async #openPlanInExternalEditor(planFilePath: string): Promise<void> {
@@ -5978,7 +6038,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// turn would otherwise let a queued user steer/follow-up restart on the
 		// still-live Vibe tools before this teardown removes them (issue #8326).
 		let killed = 0;
-		await this.session.runModeExitTeardown(async () => {
+		await this.session.withQueueDrainPaused(async () => {
 			if (this.session.isStreaming) {
 				await this.session.abort();
 			}
@@ -6892,6 +6952,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		setCfgApprovalHost(null);
 		this.#disposeImageBlobWriter?.();
 		this.#disposeImageBlobWriter = undefined;
+		this.#disposeInlineImageLimits?.();
+		this.#disposeInlineImageLimits = undefined;
 		this.#hideSessionInfo();
 		if (this.#ownsStartedUi) {
 			void this.shell.stop();
@@ -7025,6 +7087,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * {@link restartArgv}), restoring this session (`--restore`) when it exists on
 	 * disk: subagents the teardown cut off mid-turn go on in the new process.
 	 *
+	 * Refuses to close the session if its working directory has been removed.
+	 *
 	 * On POSIX the relaunch is a true `execvp(3)` image replacement: same PID,
 	 * same terminal, no lingering parent. Postmortem cleanups and stdout are
 	 * flushed first because nothing in this process runs after a successful
@@ -7032,6 +7096,17 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * spawning the replacement and lingering only to forward its exit code.
 	 */
 	async restart(): Promise<void> {
+		if (this.#isShuttingDown) return;
+		try {
+			// Bun can return a cached process.cwd() after the directory is unlinked.
+			await fs.realpath(".");
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+			if (!this.#isShuttingDown) {
+				this.showError("Could not restart: the working directory no longer exists. Run /move <dir> first.");
+			}
+			return;
+		}
 		if (this.#isShuttingDown) return;
 		this.#beginClose();
 		try {
@@ -7214,10 +7289,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#toolUiContextSetter(uiContext, hasUI);
 	}
 
-	initializeHookRunner(uiContext: ExtensionUIContext, hasUI: boolean): void {
-		this.#extensionUiController.initializeHookRunner(uiContext, hasUI);
-	}
-
 	// UI helpers
 	present(factory: () => JSXNode, options?: PresentOptions): TranscriptBlock {
 		const transcript = this.shell.transcript;
@@ -7282,6 +7353,9 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	clearWorking(kind?: WorkingKind): boolean {
 		const cleared = this.#working.clear(kind);
+		// Whatever took the row down (the turn's own submission, an error, a maintenance step), a run
+		// that yielded and still waits on outside work gets its row back naming the wait.
+		if (cleared) this.#eventController.restoreAsyncWait();
 		// Synced even when another path took the row down first: the composer's Stop also follows
 		// `session.isStreaming`, which a stopped turn clears only after its submission returned.
 		this.#syncComposerState();

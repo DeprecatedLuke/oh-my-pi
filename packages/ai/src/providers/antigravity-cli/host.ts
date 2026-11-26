@@ -265,14 +265,15 @@ export class AgyHost implements ProviderSessionState {
 			const tools = (context.tools ?? []).map(toMcpTool);
 			const toolsKey = stableStringifyJson(tools);
 			const system = (context.systemPrompt ?? []).join("\n\n");
+			const agy = this.#process;
+			const processMoves = !agy || agy.toolsKey !== toolsKey || agy.cwd !== cwd;
+			const credentialChanged = agy?.credentialVersion !== options.credentialVersion;
 			const ledger = this.#ledger;
 			let plan = planTurn(context.messages, ledger);
 			const parkedTurnMoves =
 				this.#pending?.state !== "detached" &&
 				this.#pending !== undefined &&
-				(this.#process?.toolsKey !== toolsKey ||
-					this.#process.cwd !== cwd ||
-					this.#process.credentialVersion !== options.credentialVersion ||
+				(processMoves ||
 					this.#conversation?.model !== model.id ||
 					this.#conversation.requestedEffort !== options.reasoning);
 			if (
@@ -299,11 +300,13 @@ export class AgyHost implements ProviderSessionState {
 					effortChanged: this.#conversation.requestedEffort !== options.reasoning,
 				});
 			if (plan.kind !== "resume") await this.#setup(this.#abandonTurn());
-			if (
-				this.#process?.toolsKey !== toolsKey ||
-				this.#process.cwd !== cwd ||
-				this.#process.credentialVersion !== options.credentialVersion
-			) {
+			if (!this.#process || processMoves || credentialChanged) {
+				// A credential-only restart can load the same native conversation once its prompt settles.
+				const pending = this.#pending;
+				if (pending) {
+					this.#detach(pending);
+					if (pending.drain) await this.#setup(pending.drain);
+				}
 				await this.#startProcess(tools, toolsKey, cwd, step, options.credentialVersion);
 			}
 			let loadId: string | undefined;
@@ -639,6 +642,7 @@ export class AgyHost implements ProviderSessionState {
 
 	#detach(pending: PendingCall): void {
 		if (this.#pending !== pending || pending.state !== "parked") return;
+		pending.expiry.cancel();
 		pending.state = "cancelling";
 		pending.drain = this.#cancelTurn().then(() => {
 			if (this.#pending !== pending)

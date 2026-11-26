@@ -8,7 +8,14 @@
  * `--gemini_dir` (as inference does) and parses agy's output.
  */
 import * as path from "node:path";
-import type { UsageFetchContext, UsageFetchParams, UsageLimit, UsageProvider, UsageReport, UsageWindow } from "../usage";
+import type {
+	UsageFetchContext,
+	UsageFetchParams,
+	UsageLimit,
+	UsageProvider,
+	UsageReport,
+	UsageWindow,
+} from "../usage";
 import { agyGeminiDir, resolveAgyBinary } from "../providers/antigravity-cli/binary";
 import { agyCredentialEnv, agyCredentialKey, stageAgyCredentials } from "../providers/antigravity-cli/credentials";
 import { buildUsageAmount, DAY_MS, HOUR_MS, parseIsoTimestamp, usageStatus, WEEK_MS } from "./shared";
@@ -52,7 +59,13 @@ export function parseAgyUsageRows(output: string): UsageLimit[] {
 			label: group,
 			scope: { provider: PROVIDER, tier: group, windowId: window.id, shared: true },
 			window,
-			amount: buildUsageAmount({ used: undefined, limit: undefined, remaining: undefined, usedFraction, unit: "percent" }),
+			amount: buildUsageAmount({
+				used: undefined,
+				limit: undefined,
+				remaining: undefined,
+				usedFraction,
+				unit: "percent",
+			}),
 			status: usageStatus(usedFraction),
 		});
 	}

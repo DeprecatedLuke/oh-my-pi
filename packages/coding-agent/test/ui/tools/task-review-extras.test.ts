@@ -13,7 +13,7 @@ registerSubprocessToolView<{ title: string }>("issue_tracker_case", {
 	final: all => all.map(data => `issue ${data.title}`).join("\n"),
 });
 
-const cx: RowContext = { glyph: key => key, expanded: false, nowMs: 0, frozen: false };
+const cx: RowContext = { glyph: key => key, expandKey: () => "ctrl+o", expanded: false, nowMs: 0, frozen: false };
 
 const verdict = { overall_correctness: "correct", explanation: "Nothing blocking", confidence: 0.9 };
 

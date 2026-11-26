@@ -47,12 +47,14 @@ export interface DiscoverSharedInfraOptions {
 	editVariant?: string;
 	editFuzzy?: boolean | "auto";
 	editFuzzyThreshold?: number | "auto";
+	/** Extra Settings overrides keyed by setting id; the edit options above win over these. */
+	settings?: Readonly<Record<string, unknown>>;
 }
 
 /** Discover shared infrastructure once for the entire benchmark run. */
 export async function discoverSharedInfra(options: DiscoverSharedInfraOptions = {}): Promise<SharedInfra> {
 	// Initialize global Settings singleton (required by code paths that use the global `settings` proxy)
-	const overrides: Record<string, unknown> = { "advisor.enabled": false };
+	const overrides: Record<string, unknown> = { "advisor.enabled": false, ...options.settings };
 	if (options.editVariant && options.editVariant !== "auto") {
 		overrides["edit.mode"] = options.editVariant;
 	}

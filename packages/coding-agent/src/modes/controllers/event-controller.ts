@@ -51,6 +51,7 @@ import { cfgSpeechEnabled, cfgSpeechMode } from "../../tts/settings";
 import { SpeechEnhancer } from "../../tts/speech-enhancer";
 import { vocalizer } from "../../tts/vocalizer";
 import type { TranscriptBlock } from "../../ui/shell";
+import { toolEditMode } from "../../ui/tools/edit";
 import { PREVIEW_LIMITS, previewLine, TRUNCATE_LENGTHS } from "../../utils/render-utils";
 import { type RunFlowStatus, setRunStatus } from "../../utils/run-status";
 import {
@@ -219,13 +220,6 @@ function formatAsyncWaitLabel(sources: WakeSources | undefined): string {
 function renderArgsWithIntent(args: unknown, intent: string | undefined): unknown {
 	if (intent === undefined || !isRecord(args) || INTENT_FIELD in args) return args;
 	return { ...args, [INTENT_FIELD]: intent };
-}
-
-/** Edit-like calls whose card computes a diff preview the approval dialog waits for. */
-function hasEditPreview(toolName: string, tool: unknown): boolean {
-	if (toolName === "apply_patch") return true;
-	if (toolName !== "edit") return false;
-	return isRecord(tool) && tool.mode !== undefined;
 }
 
 /** Identity of a reply across retries: when it was sent, by which model, how it ended. */
@@ -757,7 +751,7 @@ export class EventController {
 
 	/** A new card for `toolCallId`: an edit-like call's approval waits for its diff preview. */
 	#trackPreview(toolCallId: string, toolName: string, tool: unknown): void {
-		if (hasEditPreview(toolName, tool) && !this.#previewPending.has(toolCallId)) {
+		if (toolEditMode(toolName, tool) && !this.#previewPending.has(toolCallId)) {
 			this.#previewPending.set(toolCallId, Promise.withResolvers<void>());
 		}
 	}
@@ -968,11 +962,7 @@ export class EventController {
 			}));
 		const mediaPath = readMediaPath(result.details);
 		if (images.length === 0 && !mediaPath) return false;
-		if (images.length > 0) {
-			const next = new Map(assistant.toolResultImages.peek());
-			next.set(toolCallId, images);
-			assistant.toolResultImages.set(next);
-		}
+		assistant.setToolResultMedia(toolCallId, { images, mediaPath });
 		// A media-only result (a model, a PDF) still settles through the read group.
 		return images.length > 0 && cfgTerminalShowImages.get(settings);
 	}
@@ -2524,9 +2514,10 @@ export class EventController {
 	 * When the main session's run is paused waiting only on outside sources, the
 	 * working row says so and names the jobs and child agents, instead of
 	 * repeating the last tool call's intent. The label is live, so a job
-	 * cancelled without a wake (`/jobs kill`) leaves the row at once. A user
-	 * prompt's own completion may have torn its loader down, so mount one for
-	 * the wait; the next loop or the run's `agent_end` takes it over.
+	 * cancelled without a wake (`/jobs kill`) leaves the row at once. Shown
+	 * when the run yields into the wait (its `agent_pause`, a focus return), and
+	 * again by {@link restoreAsyncWait}; the next loop or the run's `agent_end`
+	 * takes it over.
 	 */
 	showAsyncWait(): void {
 		const session = this.ctx.session;
@@ -2534,6 +2525,15 @@ export class EventController {
 		this.#showingAsyncWait = true;
 		this.ctx.ensureWorkingRow();
 		this.ctx.setWorkingMessage(() => formatAsyncWaitLabel(session.wakeSources));
+	}
+
+	/**
+	 * Put the wait row back after another row (an error, a maintenance step, the
+	 * prompt's own settle) came down while a yielded run still waits. A gap the
+	 * run did not yield in (a continuation between its loops) gets no wait label.
+	 */
+	restoreAsyncWait(): void {
+		if (this.#showingAsyncWait) this.showAsyncWait();
 	}
 
 	/** The main run is paused waiting only on outside sources, and the interrupt key would end that wait. */

@@ -20,6 +20,7 @@
  * resolve through the last frame's hit regions.
  */
 import type { FramePlan, InputEvent, MouseEvent, TerminalCapabilities, TerminalDriver } from "../driver/contract";
+import { dropCutImages } from "../driver/images/anchor";
 import { DEFAULT_CELL } from "../driver/images/fit";
 import { bubbleEvent, bubbleKey, bubblePaste, keypathOf, pathTo } from "../dispatch";
 import type { KeyEvent } from "../events";
@@ -51,10 +52,10 @@ import {
 import { type WidgetContext, widgetContext, widgetFor } from "./widgets";
 import "./painters";
 
-/** Options of a {@link TermBackend}. */
-/** Tick of a block drawing smooth motion (a shimmer sweep), ms: 30 Hz. */
-const SMOOTH_TICK_MS = 1000 / 30;
+/** Tick of a block drawing smooth motion (a shimmer sweep), ms. */
+const SMOOTH_TICK_MS = 1000 / 20;
 
+/** Options of a {@link TermBackend}. */
 export interface TermBackendOptions {
 	readonly surface: Surface;
 	readonly driver: TerminalDriver;
@@ -127,7 +128,8 @@ interface Emitted {
 /**
  * The inline viewport's place on screen at a size, as far as the backend can tell: `below` history
  * rows were written since the screen was last cleared or resized, and once those plus the viewport
- * reached the screen's height the viewport sits at its bottom (`bottom`), holding `rows` rows.
+ * reached the screen's height the viewport sits at its bottom (`bottom`), holding `rows` rows and
+ * spanning `span` from its top (more when it shrank with no dock to pad it down).
  */
 interface Pin {
 	readonly width: number;
@@ -135,6 +137,7 @@ interface Pin {
 	readonly below: number;
 	readonly bottom: boolean;
 	readonly rows: number;
+	readonly span: number;
 }
 
 interface Placed {
@@ -294,21 +297,18 @@ export class TermBackend {
 	readonly #driver: TerminalDriver;
 	readonly #options: TermBackendOptions;
 	readonly #env: PaintEnvironment;
-	readonly #clock: Signal<number> = signal(Date.now());
+	// A content frame can absorb a tick in the same millisecond as the last sample. Clock readers
+	// still have to run to renew their request for ticks, even if the wall time hasn't changed.
+	readonly #clock: Signal<number> = signal(Date.now(), { equals: false });
 	readonly #reduceMotion: Signal<boolean> = signal(false);
 	/** The hit under the pointer, from the last mouse report. */
 	readonly #hover: Signal<PointerHover | null> = signal<PointerHover | null>(null);
 	readonly #hyperlinks: Signal<boolean>;
 	readonly #textSizing: Signal<boolean>;
-	/**
-	 * A painter read the clock since the last frame. Cleared after each frame, not before: a
-	 * cached block repaints the moment what it read changes, which may be between frames (an
-	 * intro starting), and the frame after must still keep the clock ticking.
-	 */
-	#animated = false;
-	/** A block drawn this frame asked for smooth motion: the next tick comes at 30 Hz. */
-	#smooth = false;
 	#tick: Timer | undefined;
+	#tickDelay = 0;
+	#inTick = false;
+	#frameRequested = false;
 	#frame: Timer | undefined;
 	#lastFrame = 0;
 	/** Main nodes whose rows are in terminal history: always a prefix of `main` (the commit frontier). */
@@ -366,8 +366,7 @@ export class TermBackend {
 		this.#env = {
 			theme: options.theme,
 			clock: smooth => {
-				this.#animated = true;
-				if (smooth) this.#smooth = true;
+				this.#scheduleTick(smooth === true);
 				return (options.clock ?? this.#clock)();
 			},
 			focus: options.surface.focused,
@@ -383,6 +382,7 @@ export class TermBackend {
 	start(): void {
 		if (this.#running) return;
 		this.#running = true;
+		this.#clock.set(Date.now());
 		// Restarted (after a suspend): what the terminal holds is unknown, history is written again.
 		if (this.#committed.size > 0 || this.#emitted.size > 0) this.#requestReplay();
 		this.#unsubscribe.push(
@@ -413,6 +413,7 @@ export class TermBackend {
 		clearTimeout(this.#tick);
 		this.#frame = undefined;
 		this.#tick = undefined;
+		this.#frameRequested = false;
 		for (const off of this.#unsubscribe.splice(0)) off();
 		this.#disposeWatch?.();
 		this.#disposeWatch = undefined;
@@ -446,18 +447,31 @@ export class TermBackend {
 
 	/** Schedule a frame (coalesced, at most one per frame interval). */
 	requestRender(): void {
-		if (!this.#running || this.#frame) return;
+		if (!this.#running || this.#frameRequested) return;
+		this.#frameRequested = true;
+		if (this.#inTick) return;
 		const interval = untrack(() => read(this.#options.frameInterval ?? 16));
 		const wait = Math.max(0, this.#lastFrame + interval - performance.now());
-		this.#frame = setTimeout(() => {
-			this.#frame = undefined;
-			this.renderNow();
-		}, wait);
+		this.#frame = setTimeout(() => this.renderNow(), wait);
 	}
 
 	/** Paint and present a frame now. */
 	renderNow(): void {
 		if (!this.#running) return;
+		if (this.#tick !== undefined) {
+			// This frame carries the animation too. Drop the old watcher before updating the clock:
+			// only the *new* visible blocks should repaint and ask for the next tick.
+			clearTimeout(this.#tick);
+			this.#tick = undefined;
+			this.#disposeWatch?.();
+			this.#disposeWatch = undefined;
+			this.#clock.set(Date.now());
+		}
+		this.#present();
+	}
+
+	#present(): void {
+		this.#frameRequested = false;
 		clearTimeout(this.#frame);
 		this.#frame = undefined;
 		this.#lastFrame = performance.now();
@@ -489,9 +503,6 @@ export class TermBackend {
 			// What became eligible while the batch waited retires in the next frame.
 			this.requestRender();
 		}
-		if (this.#animated) this.#scheduleTick(this.#smooth);
-		this.#animated = false;
-		this.#smooth = false;
 	}
 
 	/**
@@ -513,16 +524,27 @@ export class TermBackend {
 	}
 
 	#scheduleTick(smooth: boolean): void {
-		if (this.#tick || this.#options.clock) return;
-		this.#tick = setTimeout(
-			() => {
-				this.#tick = undefined;
-				this.#clock.set(Date.now());
-				this.renderNow();
-			},
-			smooth ? SMOOTH_TICK_MS : (this.#options.tickInterval ?? 80),
-		);
+		if (!this.#running || this.#options.clock) return;
+		const delay = smooth ? SMOOTH_TICK_MS : (this.#options.tickInterval ?? 80);
+		if (this.#tick !== undefined) {
+			if (this.#tickDelay <= delay) return;
+			clearTimeout(this.#tick);
+		}
+		this.#tickDelay = delay;
+		this.#tick = setTimeout(this.#onTick, delay);
 	}
+
+	readonly #onTick = (): void => {
+		this.#tick = undefined;
+		this.#inTick = true;
+		try {
+			// A clock read renews the tick even when equal output keeps the frame watcher clean.
+			this.#clock.set(Date.now());
+		} finally {
+			this.#inTick = false;
+		}
+		if (this.#frameRequested) this.#present();
+	};
 
 	#paint(node: UiNode, width: number, height?: number): Block {
 		return paintNode(this.#env, node, width, height);
@@ -897,6 +919,8 @@ export class TermBackend {
 			}
 		}
 		const viewport: string[] = [];
+		/** Viewport rows of a block whose head is in history right above the viewport: its images may reach up there. */
+		let joinedEnd = 0;
 		if (summary > 0) {
 			const theme = this.#options.theme();
 			viewport.push(truncate(theme.fg("dim", `⋯ ${summary} more running`), width, ""));
@@ -916,8 +940,13 @@ export class TermBackend {
 				from = Math.max(0, block.rows.length - rows);
 			} else from = block.rows.length - rows;
 			for (; lead > 0; lead--) viewport.push("");
-			const top = viewport.length - from;
+			const start = viewport.length;
+			const top = start - from;
 			for (let row = from; row < block.rows.length; row++) viewport.push(block.rows[row]!);
+			// Block rows above `from` sit right above it only when they are in history and the block opens the
+			// viewport; how many are still on screen is known once the viewport is placed (below).
+			if (start === 0 && from === skipAt(i)) joinedEnd = viewport.length;
+			else dropCutImages(viewport, start);
 			if (block.cursor && block.cursor.row >= from && this.#surface.focused())
 				cursor = { row: top + block.cursor.row, col: block.cursor.col };
 			for (const hit of block.hits ?? []) if (hit.row >= from) hits.push({ hit, top, left: 0 });
@@ -925,6 +954,8 @@ export class TermBackend {
 		const clipped = Math.max(0, viewport.length - capacity);
 		if (clipped > 0) {
 			viewport.splice(0, clipped);
+			dropCutImages(viewport, 0);
+			joinedEnd = 0;
 			if (cursor) cursor = cursor.row >= clipped ? { row: cursor.row - clipped, col: cursor.col } : null;
 			for (const entry of hits) (entry as { top: number }).top -= clipped;
 		}
@@ -944,14 +975,14 @@ export class TermBackend {
 			const hold = !fresh && pin.bottom ? Math.min(height, pin.rows - written) : 0;
 			if (bottom && dockRows > 0) while (viewport.length + dockRows < hold) viewport.push("");
 			if (!bottom) free = Math.max(0, height - (below + written) - (viewport.length + dockRows));
-			this.#nextPin = {
-				width,
-				height,
-				below: below + written,
-				bottom,
-				rows: viewport.length + dockRows,
-			};
-		}
+			// The rows from the viewport's top down: a shrunk viewport keeps its top (only a dock pads it down).
+			const held = !fresh && pin.bottom ? Math.min(height, pin.span - written) : 0;
+			const span = Math.max(viewport.length + dockRows, held);
+			this.#nextPin = { width, height, below: below + written, bottom, rows: viewport.length + dockRows, span };
+			// The screen rows above the viewport: everything written so far, or (at the bottom) what it leaves.
+			const above = bottom ? Math.max(0, height - span) : below + written;
+			if (joinedEnd > 0) dropCutImages(viewport, 0, joinedEnd, above);
+		} else if (joinedEnd > 0) dropCutImages(viewport, 0, joinedEnd);
 		const dockTop = viewport.length;
 		for (const placed of dock) {
 			viewport.push(...placed.block.rows);
@@ -963,6 +994,7 @@ export class TermBackend {
 		const hidden = covering > 0 ? Math.min(dockTop, viewport.length - height) : 0;
 		if (hidden > 0) {
 			viewport.splice(0, hidden);
+			dropCutImages(viewport, 0, dockTop - hidden);
 			if (cursor) cursor = cursor.row >= hidden ? { row: cursor.row - hidden, col: cursor.col } : null;
 			for (const entry of hits) (entry as { top: number }).top -= hidden;
 		}

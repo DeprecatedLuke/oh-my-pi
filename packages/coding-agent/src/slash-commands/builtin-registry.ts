@@ -1,3 +1,4 @@
+import { errorMessage } from "@oh-my-pi/pi-utils";
 import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
 import type { AutocompleteItem } from "../autocomplete/autocomplete";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
@@ -21,7 +22,7 @@ import { BUILTIN_MODE_SLASH_COMMANDS } from "./builtin-modes";
 import { BUILTIN_SESSION_SLASH_COMMANDS } from "./builtin-session";
 import { BUILTIN_SKILLS_SLASH_COMMANDS } from "./builtin-skills";
 import { createTuiFindRefusalUi, executeFindRefusal } from "./helpers/find-refusal";
-import { commandConsumed, errorMessage, parseSlashCommand, usage } from "./helpers/parse";
+import { commandConsumed, parseSlashCommand, usage } from "./helpers/parse";
 import type {
 	BuiltinSlashCommand,
 	ParsedSlashCommand,

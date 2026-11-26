@@ -275,9 +275,7 @@ describe("runFindRefusal", () => {
 				mainModel: MAIN,
 				uncensoredModel: UNCENSORED,
 				systemPrompt: [],
-				probeMessages: [
-					{ role: "user", content: [{ type: "text", text: "Tell me about Bob." }], timestamp: 0 },
-				],
+				probeMessages: [{ role: "user", content: [{ type: "text", text: "Tell me about Bob." }], timestamp: 0 }],
 				refusalText: REFUSAL,
 				complete,
 				hint,
