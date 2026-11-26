@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- Fixed local browser relay discovery failing inside Linux PID namespaces (e.g. `bwrap --unshare-pid` with shared network) when `process.kill(pid, 0)` returns `ESRCH`; discovery now verifies `127.0.0.1` `TCP_LISTEN` ownership in `/proc/net/tcp` as a fallback
 - Fixed `/find-refusal` stopping with "no patterns proposed" when the refusal model sends its patterns as JSON-encoded strings (e.g. DeepSeek); an unreadable reply now reports an error instead of counting as a refusal with no patterns
 - Fixed `/find-refusal` giving up after one round on filter blocks that always return the same message (e.g. Gemini's "This request was blocked by Gemini's filters"); it now keeps masking until the block clears or the round limit is reached
 - Fixed 15–25s UI freezes after each history prune in long sessions with an advisor and secret redaction: pruning or shaking messages the advisor already reviewed no longer replays the whole transcript to it, and per-turn advisor updates no longer re-redact its entire history
