@@ -2115,6 +2115,21 @@ describe("AgentSession retry delay cap", () => {
 		expect(requestedModels).toEqual([primarySelector, primarySelector]);
 		expect(fallbackEvents).toEqual([]);
 	});
+
+	it("retries the same model on an auth-gateway 5xx outage instead of walking a ready fallback chain", async () => {
+		// The auth gateway in front of every provider is down: no chain entry is reachable
+		// through it, so switching models just burns the session's model choice.
+		const ready = "openai/gpt-5.5";
+		const { requestedModels, fallbackEvents, primarySelector } = await runCoolingFallbackScenario({
+			chain: [ready],
+			cooling: [],
+			failure: { throw: "auth-gateway 503: Service Unavailable" },
+		});
+
+		expect(requestedModels).toEqual([primarySelector, primarySelector]);
+		expect(fallbackEvents).toEqual([]);
+		expect(session?.model ? `${session.model.provider}/${session.model.id}` : undefined).toBe(primarySelector);
+	});
 	it("waits for a short OpenCode Go sibling credential before model fallback", async () => {
 		const exhaustedModel = getBundledModel("opencode-go", "deepseek-v4-flash");
 		const fallbackModel = getBundledModel("openai", "gpt-5.5");

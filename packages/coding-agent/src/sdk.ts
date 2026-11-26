@@ -5120,6 +5120,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			const kimiApiFormat = cfgProvidersKimiApiFormat.get(settings);
 			return settingsAwareStreamFn(streamModel, context, {
 				...streamOptions,
+				// Only subagents take `retry.cyberFallbackModels`; the main agent never
+				// switches models on a cyber refusal, so Codex `cyber_policy` keeps
+				// rotating through sibling accounts (e.g. Daybreak-eligible ones).
+				...(agentKind !== "sub" && streamOptions?.cyberPolicyRotatesCredentials === undefined
+					? { cyberPolicyRotatesCredentials: true }
+					: {}),
 				thinkingBudgets: streamOptions?.thinkingBudgets ?? cfgThinkingBudgets.get(settings),
 				kimiApiFormat: streamOptions?.kimiApiFormat ?? (kimiApiFormat === "auto" ? undefined : kimiApiFormat),
 			});

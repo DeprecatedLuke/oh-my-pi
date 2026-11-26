@@ -2336,6 +2336,7 @@ export class SessionAdvisors {
 				: Promise.resolve(false);
 		if (!retrySettings.enabled || !retrySettings.modelFallback) return waitOrDecline();
 		if (!retryFallbackAdmits(retrySettings.fallbackOn, usageLimit)) return waitOrDecline();
+		if (AIError.isAuthGatewayOutage(message)) return waitOrDecline();
 
 		// A refusal by the advisor's primary judges this context, not the model's health:
 		// skip its cooldown and pin the switch. A refusing fallback gets the usual cooldown.

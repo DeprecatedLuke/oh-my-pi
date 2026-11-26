@@ -1019,7 +1019,7 @@ export const cfgRetryCyberFallbackModels = register({
 		group: "Retry & Fallback",
 		label: "Cyber Refusal Fallbacks",
 		description:
-			'JSON object mapping a model glob to the model(s) that replace it when a provider classifier refuses the turn, e.g. {"*opus-*":"openai-codex/gpt-6-astra","*astra*":"@cyber"}. Keys match the refused model id, or "provider/model-id" when the key contains "/"; "*" is the only wildcard and matches any run, so "*" is a catch-all. An exact key wins over a glob, and among globs the longest literal part wins. Values accept one selector or a list, with the same syntax as retry.fallbackChains entries (thinking suffixes and @role references included). A refusal first retries the same model 3 times, then walks the matched entries in order, re-matching each model it lands on; when nothing is left untried it falls through to retry.fallbackChains.',
+			'JSON object mapping a model glob to the model(s) that replace it when a provider classifier refuses a subagent or advisor turn, e.g. {"*opus-*":"openai-codex/gpt-6-astra","*astra*":"@cyber"}. Keys match the refused model id, or "provider/model-id" when the key contains "/"; "*" is the only wildcard and matches any run, so "*" is a catch-all. An exact key wins over a glob, and among globs the longest literal part wins. Values accept one selector or a list, with the same syntax as retry.fallbackChains entries (thinking suffixes and @role references included). Applies to subagents and advisors only (the main agent never switches models on a cyber refusal). A mapped refusal switches immediately, walking the matched entries in order and re-matching each model it lands on; when nothing is left untried it falls through to retry.fallbackChains.',
 	},
 });
 

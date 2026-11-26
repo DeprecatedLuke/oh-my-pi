@@ -94,7 +94,7 @@ Flow (`#handleRetryableError`):
 
 ### Cyber fallbacks
 
-A refusal of the request's content is not a provider failure: the model answered and declined. Three shapes count, and `retry.cyberFallbackModels` maps the refused model to the model(s) that take over, keyed by a glob over the model:
+A refusal of the request's content is not a provider failure: the model answered and declined. Three shapes count, and `retry.cyberFallbackModels` maps the refused model to the model(s) that take over for subagents (and advisors), keyed by a glob over the model:
 
 - a classifier refusal (`stopDetails.type` `"refusal"` or `"sensitive"`),
 - Codex's `cyber_policy` denial (the only account-scoped denial that also blocks content),
@@ -119,8 +119,9 @@ retry:
 - A hop that lands on a model which refuses too re-matches the map for that model, so `*opus* -> gpt-6-astra -> @cyber` chains through its own keys. Each model is visited at most once per turn, so a map whose entries point back at each other terminates.
 - An entry that cannot take the turn — its context window cannot hold the session, no credential, cooling down — hands it to that model's own map entry the same way: with `*opus*: gpt-6-astra` and `*astra*: "@cyber"`, an opus session grown past astra's window lands on `@cyber`.
 - When the map yields nothing untried, the refusal falls through to the `retry.fallbackChains` refusal walk; a mapped refusal with no model left ends the turn instead of retrying in place. Each skipped map entry is logged with its reason (`Cyber fallback found no usable model`).
-- The hop is pinned: no cooldown restore, and it is recorded as a `cyber-fallback` model change, so a resumed session and a revived (woken) subagent start on the replacement instead of the refusing model. A prewalk handoff whose target the map covers stays on the replacement too, since the refused context would be refused again. Choosing a model explicitly ends it.
-- Gated by `retry.modelFallback` and `retry.fallbackOn`, like the chain walk. A refusal no key matches keeps the immediate chain walk.
+- Cyber refusal model fallbacks (`retry.cyberFallbackModels` and refusal walks of `retry.fallbackChains`) apply to subagents only: the main agent never switches models on a cyber refusal (non-account-policy refusals still retry the same model within `retry.maxRetries`, and Codex `cyber_policy` still rotates sibling credentials on the same model).
+- The hop is pinned: no cooldown restore, and it is recorded as a `cyber-fallback` model change, so a revived (woken) subagent starts on the replacement instead of the refusing model. A prewalk handoff whose target the map covers stays on the replacement too, since the refused context would be refused again. Choosing a model explicitly ends it.
+- Gated by `retry.modelFallback` and `retry.fallbackOn`, like the chain walk. A subagent refusal no key matches keeps the immediate chain walk.
 - The refused turn is never preserved: its assistant message and the synthetic results paired with its unexecuted calls leave active context before every retry and hop, so the refused partial turn is not replayed.
 - Advisor reviews use the same map with the same immediate switch and once-per-run walk, consulted before the advisor's own chain; the advisor's refused turn is rolled back before the switch ([advisor watchdog](./advisor-watchdog.md)).
 

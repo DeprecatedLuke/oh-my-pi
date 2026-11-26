@@ -311,6 +311,8 @@ export interface TurnRecoveryHost {
 	thinkingLevelCeiling(): Effort | undefined;
 	/** The session never switches to a retry fallback model (a per-call `model` subagent). */
 	modelFallbackDisabled?(): boolean;
+	/** Whether the owning session is the top-level main session or a spawned subagent (`"main"` when omitted). */
+	agentKind?(): "main" | "sub";
 	isDisposed(): boolean;
 	isStreaming(): boolean;
 	isCompacting(): boolean;
@@ -1971,7 +1973,6 @@ export class TurnRecovery {
 	isCyberRefusal(message: AssistantMessage): boolean {
 		return AIError.isCyberRefusal(message, this.#classifyRetryMessage(message));
 	}
-
 	/** A `stopDetails` classifier refusal, without the content-policy shapes. */
 	#isStopDetailsRefusal(message: AssistantMessage): boolean {
 		if (message.stopReason !== "error") return false;
@@ -2823,9 +2824,11 @@ export class TurnRecovery {
 		const retrySettings = cfgRetry.get(this.#host.settings);
 		if (!retrySettings.enabled || !retrySettings.modelFallback) return false;
 		if (this.#isStopDetailsRefusal(message)) return false;
+		if (this.isCyberRefusal(message) && this.#host.agentKind?.() !== "sub") return false;
 		const id = this.#classifyRetryMessage(message);
 		if (AIError.is(id, AIError.Flag.Abort) || AIError.is(id, AIError.Flag.UserInterrupt)) return false;
 		if (!retryFallbackAdmits(retrySettings.fallbackOn, AIError.is(id, AIError.Flag.UsageLimit))) return false;
+		if (AIError.isAuthGatewayOutage(message.errorMessage)) return false;
 		// Text-ambiguous overflows waive the veto; usage-backed do not — see AIError.isTextAmbiguousContextOverflow (#9235).
 		const contextWindow = model.contextWindow ?? 0;
 		const textAmbiguousOverflow = AIError.isTextAmbiguousContextOverflow(id, message, contextWindow);
@@ -3232,15 +3235,19 @@ export class TurnRecovery {
 			switchedCredential = false;
 			delayMs = calculateRetryBackoffDelayMs(retrySettings.baseDelayMs, this.#retryAttempt);
 		}
-		const allowModelFallback = options?.allowModelFallback !== false && !this.#host.modelFallbackDisabled?.();
+		const allowCyberModelFallback = this.#host.agentKind?.() === "sub";
+		const allowModelFallback =
+			options?.allowModelFallback !== false &&
+			!this.#host.modelFallbackDisabled?.() &&
+			(!cyberRefusal || allowCyberModelFallback);
 		const currentSelector = currentModel
 			? formatRetryFallbackSelector(currentModel, this.#host.thinkingLevel())
 			: undefined;
-		// `retry.cyberFallbackModels` is a model-glob map. A refusal on a model one
-		// of its keys matches switches straight to the matched replacements. A
-		// refusal no key matches keeps its immediate chain walk below.
+		// `retry.cyberFallbackModels` (and refusal fallback-chain walks) apply to
+		// subagents only: the main agent never switches models on a cyber refusal.
 		const cyberFallbackEligible =
 			cyberRefusal &&
+			allowCyberModelFallback &&
 			allowModelFallback &&
 			retrySettings.modelFallback &&
 			retryFallbackAdmits(retrySettings.fallbackOn, AIError.is(id, AIError.Flag.UsageLimit));
@@ -3248,13 +3255,17 @@ export class TurnRecovery {
 			cyberFallbackEligible && currentModel
 				? matchRetryCyberFallbackModels(cfgRetryCyberFallbackModels.get(this.#host.settings), currentModel)
 				: undefined;
-		if (cyberRefusal && !cyberFallbackMatch) {
+		if (cyberRefusal && allowCyberModelFallback && !cyberFallbackMatch) {
 			logger.warn("Cyber refusal not covered by retry.cyberFallbackModels", {
 				model: currentModel ? `${currentModel.provider}/${currentModel.id}` : undefined,
 				allowModelFallback,
 				modelFallback: retrySettings.modelFallback,
 				fallbackOn: retrySettings.fallbackOn,
 				map: cfgRetryCyberFallbackModels.get(this.#host.settings),
+			});
+		} else if (cyberRefusal && !allowCyberModelFallback) {
+			logger.debug("Skipping cyber refusal model fallback for main agent", {
+				model: currentModel ? `${currentModel.provider}/${currentModel.id}` : undefined,
 			});
 		}
 		// A mapped `cyber_policy` denial is a content refusal the map owns: no sibling
@@ -3436,6 +3447,7 @@ export class TurnRecovery {
 				allowModelFallback &&
 				retrySettings.modelFallback &&
 				retryFallbackAdmits(retrySettings.fallbackOn, AIError.is(id, AIError.Flag.UsageLimit)) &&
+				!AIError.isAuthGatewayOutage(errorMessage) &&
 				!staleUsageLimit &&
 				!thinkingLoop &&
 				!sameModelSteerReplay &&

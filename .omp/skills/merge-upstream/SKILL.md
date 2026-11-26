@@ -7,6 +7,13 @@ description: Restart and complete an upstream merge in an isolated worktree: fet
 
 Merge upstream with a clean restart. Preserve local divergence only where upstream behavior cannot replace it.
 
+## Out of scope: tests
+
+- Validation is `bun install`, `bun run build:native`, `bun check`, and the import-resolution bundle (Flow step 10) — nothing else gates the merge.
+- NEVER run test suites, build failure baselines (base/upstream checkouts), or diff failure lists.
+- NEVER fix or adapt failing tests unless a validation step fails on them; upstream ships with failing and environment-dependent tests.
+- A merge stalled only on tests is done: land and push.
+
 ## Preconditions
 
 - Run from `.ditto/<id>` isolated merge worktree; this cwd is an independent clone with its own `.git`.
@@ -30,7 +37,9 @@ Merge upstream with a clean restart. Preserve local divergence only where upstre
 7. Run `bun install` from repository root.
 8. Run `bun run build:native` from repository root.
 9. Run `bun check`; NEVER invoke `tsc` directly.
-10. Stop on any failed command; fix the merge, then rerun its failed validation.
+10. Bundle the CLI to catch unresolved package subpath imports (`bun check` misses `@oh-my-pi/<pkg>/<subpath>` imports of moved or deleted modules):
+    `bun build packages/coding-agent/src/cli.ts --target=bun --external omp-legacy-pi-modules --outdir="$(mktemp -d)"`
+11. Stop on any failed command; fix the merge, then rerun its failed validation.
 
 ## Apply Verified Cwd
 
@@ -49,7 +58,7 @@ git -C ../.. merge --ff-only "$sandbox_sha"
 
 - Verify `git -C ../.. rev-parse HEAD` equals `$sandbox_sha`.
 - Verify destination status is clean before running destination checks.
-- Run `bun install`, `bun run build:native`, and `bun check` in `../..`.
+- Run `bun install`, `bun run build:native`, and `bun check` in `../..` (the bundle check is tree-identical; skip it there).
 - Failure? Reset destination to its recorded pre-landing SHA; NEVER push.
 
 ## Push
@@ -70,4 +79,5 @@ git -C ../.. merge --ff-only "$sandbox_sha"
 - Verify source, destination, and `origin/main` SHAs before yielding.
 - Push `main` to `origin` only; NEVER push to `upstream`.
 - NEVER push before destination validation passes.
+- NEVER spend time on test suites or test baselines; `bun check` is the only gate.
 </critical>

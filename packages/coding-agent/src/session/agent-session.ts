@@ -2526,6 +2526,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			setThinkingLevel: level => this.#models.setThinkingLevel(level),
 			thinkingLevelCeiling: () => this.#models.thinkingLevelCeiling,
 			modelFallbackDisabled: () => this.#disableModelFallback,
+			agentKind: () => this.#agentKind,
 			isDisposed: () => this.#isDisposed,
 			isStreaming: () => this.isStreaming,
 			isCompacting: () => this.isCompacting,

@@ -219,6 +219,19 @@ export function isCodexSteerRejection(message: { api?: Api; errorMessage?: strin
 	);
 }
 
+/** An auth-gateway 5xx without the gateway's JSON error body: the gateway, or a proxy in front of it, failed. */
+const AUTH_GATEWAY_OUTAGE_PATTERN = /^auth-gateway 5\d{2}(?=[:\s]|$)/;
+
+/**
+ * A failure of the auth-gateway itself rather than of the model behind it. Every model the
+ * gateway serves fails the same way, so it says nothing about model health: retry the same
+ * model instead of walking a fallback chain. Upstream provider errors arrive in the gateway's
+ * JSON body with their own message and never match.
+ */
+export function isAuthGatewayOutage(errorMessage: string | undefined): boolean {
+	return errorMessage !== undefined && AUTH_GATEWAY_OUTAGE_PATTERN.test(errorMessage);
+}
+
 /**
  * Transport-failure wording that marks an error transient. Covers
  * diagnostics forwarded verbatim by gateways/proxies in other runtimes, e.g.
